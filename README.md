@@ -19,9 +19,7 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 
 **Fahrlehrer (Admin)**
 - Freie Termine anlegen: Datum, Uhrzeit, Dauer. Die Standarddauer von 90 Minuten ist vorausgefüllt.
-- **1 Fahrstunde = 45 Minuten.** Ein Termin von 90 Minuten (voreingestellt) sind 2 Fahrstunden. Das steht überall direkt dabei, z. B. „= 2 Fahrstunden (à 45 Min.)“.
-- Die Dauer lässt sich im **5-Minuten-Takt** ändern (−5/+5, −15/+15) oder per Schnellwahl auf 45 (1 FS), 90 (2 FS) oder 135 Min. (3 FS) setzen. **Auf die Zahl tippen**, um beliebige Minuten selbst einzugeben, z. B. 83.
-- Übersichten und Exporte rechnen in **Fahrstunden à 45 Min.** (z. B. 270 Min. = 6 Fahrstunden) und zeigen zusätzlich die Anzahl der Termine.
+- Die Dauer (Standard **90 Minuten**) lässt sich im **5-Minuten-Takt** ändern (−5/+5, −15/+15) oder per Schnellwahl auf 45, 90 oder 135 Min. setzen. **Auf die Zahl tippen**, um beliebige Minuten selbst einzugeben, z. B. 83.
 - **Einzelner Termin:** Datum und Uhrzeit wählen, fertig.
 - **🔁 Wiederholen (Haken):** Erst mit dem Haken erscheinen die **Wochentage** zum Antippen (vorausgewählt ist der Wochentag des gewählten Datums; dazu Mo–Fr, Mo–Sa, jeden Tag) und **„Wiederholen bis“** mit Schnellwahl 2, 4, 8 oder 12 Wochen.
 - **Uhrzeiten** festlegen, z. B. 3 Fahrstunden hintereinander mit 15 Min. Pause, dazu einzelne Uhrzeiten. Die Vorschau zeigt vorher, wie viele Termine entstehen.
@@ -44,7 +42,7 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - **Sonderfahrten:** Beim Abhaken die Art wählen (Übungsfahrt, 🌳 Überland, 🛣️ Autobahn, 🌙 Nacht). Die Zahlen erscheinen pro Schüler in der Übersicht.
 - **Schülerdaten bearbeiten** (Name, Klasse, Sehhilfe, Umschreiber, Handynummer).
 - **Export** der Fahrstunden eines Schülers als Excel-Datei (CSV) oder zum Drucken bzw. als PDF.
-- **Höchstzahl offener Fahrstunden** pro Schüler festlegen (Einstellungen, Standard 3, 0 = unbegrenzt).
+- **Höchstzahl Termine** pro Schüler festlegen (Einstellungen, z. B. 2 oder 3; 0 = unbegrenzt). Gezählt werden **Termine**, nicht Fahrstunden.
 - **WhatsApp-Benachrichtigung:** Nach Anbieten, Bestätigen, Ablehnen, Absagen oder Eintragen erscheint ein Knopf mit fertigem Nachrichtentext und Link zur App. Ein Tippen öffnet WhatsApp, dann nur noch auf Senden drücken. (Vollautomatischer Versand wäre nur über die kostenpflichtige WhatsApp Business Platform möglich.)
 - Rote Zahlen an den Tabs zeigen offene Anfragen, neue Anmeldungen und neue Absagen.
 

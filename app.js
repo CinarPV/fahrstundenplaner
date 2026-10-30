@@ -203,10 +203,10 @@ function lessonRows(rows) {
     }));
 }
 function exportCsv(p, rows) {
-  const head = ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "Fahrstunden (à 45 Min.)", "Status", "Fehlstunde", "Grund"];
+  const head = ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "Status", "Fehlstunde", "Grund"];
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
   const lines = [head.map(esc).join(";")].concat(lessonRows(rows).map((r, i) =>
-    [i + 1, r.date, r.time, r.type, r.minutes, r.minutes === "" ? "" : fsCount(r.minutes), r.status, r.late, r.reason].map(esc).join(";")));
+    [i + 1, r.date, r.time, r.type, r.minutes, r.status, r.late, r.reason].map(esc).join(";")));
   downloadFile(csvBlob(lines), `Fahrstunden_${fullName(p).replace(/\s+/g, "_")}.csv`);
 }
 const csvBlob = (lines) => new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
@@ -229,13 +229,13 @@ function exportPrint(p, rows) {
   const total = done.reduce((s, x) => s + (+x.minutes || 0), 0);
   const tag = (t, txt, cls) => { const e = d.createElement(t); if (txt !== undefined) e.textContent = txt; if (cls) e.className = cls; return e; };
   const table = tag("table");
-  const hr = tag("tr"); ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "FS", "Status", "Fehlstunde", "Grund"].forEach((h) => hr.append(tag("th", h)));
+  const hr = tag("tr"); ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "Status", "Fehlstunde", "Grund"].forEach((h) => hr.append(tag("th", h)));
   table.append(hr);
-  r.forEach((x, i) => { const tr = tag("tr"); [i + 1, x.date, x.time, x.type, x.minutes, x.minutes === "" ? "" : fsCount(x.minutes), x.status, x.late, x.reason].forEach((v, j) => tr.append(tag("td", v, j === 4 || j === 5 ? "r" : ""))); table.append(tr); });
+  r.forEach((x, i) => { const tr = tag("tr"); [i + 1, x.date, x.time, x.type, x.minutes, x.status, x.late, x.reason].forEach((v, j) => tr.append(tag("td", v, j === 4 ? "r" : ""))); table.append(tr); });
   const counts = SPECIAL_TYPES.map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
   d.body.append(tag("h1", "Fahrstunden – " + fullName(p)),
     tag("div", [p.license_class ? "Klasse " + p.license_class : "", `Stand: ${new Date().toLocaleDateString("de-DE")}`].filter(Boolean).join(" · ")),
-    tag("p", `Gefahren: ${done.length} Termine, ${total} Min. = ${fsLabel(total)} (à 45 Min.) · ${counts}`),
+    tag("p", `Gefahren: ${done.length} Termine, ${total} Min. (${fmtMinutes(total)}) · ${counts}`),
     table);
   setTimeout(() => w.print(), 300);
 }
@@ -253,22 +253,12 @@ function specialSummary(rows) {
   }).join(" · ");
 }
 
-// 1 Fahrstunde = 45 Minuten. Umrechnung für Anzeigen ("90 Min. = 2 Fahrstunden")
-const LESSON_MIN = 45;
-function fsCount(min) {
-  const n = Math.round(((Number(min) || 0) / LESSON_MIN) * 10) / 10;
-  return n.toLocaleString("de-DE", { maximumFractionDigits: 1 });
-}
-const fsLabel = (min) => `${fsCount(min)} Fahrstunde${fsCount(min) === "1" ? "" : "n"}`;
-
-// Minuten-Auswahl: Wert vorbelegt, mit −/+ im 5-Minuten-Takt änderbar.
+// Minuten-Auswahl: Wert vorbelegt (Standard 90), mit −/+ im 5-Minuten-Takt änderbar.
 // Auf die Zahl tippen → beliebige Minuten selbst eingeben (auch „krumme“ Werte).
 // opts.fine = true: ohne Schnellwahl (für tatsächlich gefahrene Minuten)
 function durationControl(initial, opts = {}) {
   const clamp = (v) => Math.min(600, Math.max(5, Math.round(Number(v) || 0)));
   const input = el("input", { type: "number", inputmode: "numeric", min: 5, max: 600, step: 1, value: clamp(initial), "aria-label": "Minuten" });
-  const hint = el("span", { class: "dur-hint" });
-  const showHint = () => (hint.textContent = `= ${fsLabel(clamp(input.value))} (à 45 Min.)`);
   const set = (v) => { input.value = clamp(v); input.dispatchEvent(new Event("input")); };
   const b = (label, fn) => el("button", { type: "button", class: "btn small ghost", onclick: fn }, label);
   const node = el("div", { class: "dur" },
@@ -279,13 +269,10 @@ function durationControl(initial, opts = {}) {
       b("+5", () => set(+input.value + 5)),
       b("+15", () => set(+input.value + 15)),
     ),
-    hint,
-    opts.fine ? null : el("div", { class: "chips" }, [[45, "1 FS"], [90, "2 FS"], [135, "3 FS"]].map(([m, t]) => b(`${m} Min. (${t})`, () => set(m)))),
+    opts.fine ? null : el("div", { class: "chips" }, [45, 90, 135].map((m) => b(`${m} Min.`, () => set(m)))),
   );
   input.addEventListener("focus", () => input.select());           // Antippen markiert die Zahl → direkt überschreiben
-  input.addEventListener("input", showHint);
-  input.addEventListener("change", () => { input.value = clamp(input.value); showHint(); });
-  showHint();
+  input.addEventListener("change", () => (input.value = clamp(input.value)));
   return { node, input, get value() { return clamp(input.value); } };
 }
 
@@ -898,7 +885,7 @@ function newSlotForm() {
     el("label", {}, "Datum"), date,
     el("label", { class: "check repeat-toggle" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
     repeatBox,
-    el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min. = ${fsLabel(state.settings.default_duration)})`), dur.node,
+    el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,
     el("label", {}, "Uhrzeiten pro Tag"),
     el("div", { class: "row" },
       el("div", {}, el("label", {}, "Erster Termin um"), first),
@@ -1323,12 +1310,12 @@ async function adminStudents() {
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Termine"), el("th", { class: "num" }, "Fahrstunden"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"))),
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Termine"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"))),
     el("tbody", {}, list.map((st) => {
       const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
         el("td", {}, fullName(st), st.needs_glasses ? " 👓" : "", st.is_conversion ? el("div", { class: "small muted" }, "Umschreiber") : null),
-        el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num", title: s.minutes + " Min." }, fsCount(s.minutes)),
+        el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
         el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
         el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late),
         el("td", { onclick: (e) => e.stopPropagation() }, moreToggle(st)));
@@ -1392,7 +1379,7 @@ function moreToggle(st) {
   return el("label", { class: "check", style: "margin:0;align-items:center" }, box, hint);
 }
 
-// Höchstzahl offener Fahrstunden: null = Standard, 0 = unbegrenzt, sonst Zahl
+// Höchstzahl offener TERMINE (nicht Fahrstunden): null = Standard, 0 = unbegrenzt, sonst Zahl
 const limitLabel = (v) => (v === null || v === undefined ? `Standard (${state.settings.max_open || "∞"})` : v === 0 ? "∞ unbegrenzt" : String(v));
 function limitControl(st) {
   const name = "limit-" + st.id;
@@ -1411,11 +1398,11 @@ function limitControl(st) {
     if (error) throw error;
     st.max_open = v;
     state.renderOnClose = true;
-    toast(`${fullName(st)}: ${limitLabel(v)} offene Fahrstunden.`);
+    toast(`${fullName(st)}: ${limitLabel(v)} offene Termine.`);
   });
   return el("div", {},
-    el("h3", {}, "Wie viele Fahrstunden darf dieser Schüler gleichzeitig anfragen?"),
-    el("p", { class: "muted small" }, "Zählt offene Anfragen + anstehende bestätigte Fahrstunden. Von dir eingetragene Fahrstunden sind nie begrenzt."),
+    el("h3", {}, "Wie viele Termine darf dieser Schüler gleichzeitig haben?"),
+    el("p", { class: "muted small" }, "Gezählt werden Termine – egal wie lang: offene Anfragen + anstehende bestätigte Termine. Was du selbst einträgst, ist nie begrenzt."),
     std.node, own.node, inf.node, el("div", { class: "actions" }, save));
 }
 
@@ -1698,13 +1685,13 @@ async function exportAllLessons() {
   const student = Object.fromEntries(d.students.map((x) => [x.id, x]));
   const slot = Object.fromEntries(d.slots.map((x) => [x.id, x]));
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const head = ["Schüler", "Klasse", "Datum", "Uhrzeit", "Geplant (Min.)", "Gefahren (Min.)", "Fahrstunden (à 45 Min.)", "Art", "Status", "Fehlstunde", "Grund", "Notiz Schüler", "Hinweis Fahrlehrer"];
+  const head = ["Schüler", "Klasse", "Datum", "Uhrzeit", "Geplant (Min.)", "Gefahren (Min.)", "Art", "Status", "Fehlstunde", "Grund", "Notiz Schüler", "Hinweis Fahrlehrer"];
   const rows = d.bookings.filter((b) => slot[b.slot_id] && b.status !== "cancelled")
     .sort((a, b) => slot[a.slot_id].starts_at.localeCompare(slot[b.slot_id].starts_at))
     .map((b) => {
       const s = slot[b.slot_id], p = student[b.student_id];
       return [p ? fullName(p) : "?", p && p.license_class, new Date(s.starts_at).toLocaleDateString("de-DE"), fmtRange(s.starts_at, s.duration_min),
-        s.duration_min, b.actual_minutes ?? "", b.actual_minutes !== null ? fsCount(b.actual_minutes) : "", b.actual_minutes !== null ? LESSON_TYPES[b.lesson_type || "normal"] : "",
+        s.duration_min, b.actual_minutes ?? "", b.actual_minutes !== null ? LESSON_TYPES[b.lesson_type || "normal"] : "",
         b.status === "confirmed" && b.actual_minutes !== null ? "Gefahren" : STATUS_TEXT[b.status],
         b.late_cancel ? "ja" : "", b.cancel_reason, b.student_note, b.admin_reply].map(esc).join(";");
     });
@@ -1810,11 +1797,11 @@ function adminSettings() {
       (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
       "). ", legalLink("impressum", "Impressum ansehen")) : null,
     el("div", { class: "card" },
-      el("h3", {}, "Standarddauer für neue Termine (1 Fahrstunde = 45 Min.)"),
+      el("h3", {}, "Standarddauer für neue Termine"),
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
       dur.node,
-      el("h3", { style: "margin-top:18px" }, "Höchstzahl offener Fahrstunden pro Schüler"),
-      el("p", { class: "muted small" }, "So viele Anfragen + anstehende Fahrstunden darf ein Schüler gleichzeitig haben. 0 = unbegrenzt."),
+      el("h3", { style: "margin-top:18px" }, "Höchstzahl Termine pro Schüler"),
+      el("p", { class: "muted small" }, "So viele Termine (offene Anfragen + anstehende) darf ein Schüler gleichzeitig haben, z. B. 2 oder 3. 0 = unbegrenzt. Einzelne Schüler (z. B. vor der Prüfung) per Häkchen „Mehr erlauben“ in der Schülerliste komplett freigeben."),
       maxOpen,
       el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler"),
       el("p", { class: "muted small" }, "So erscheinst du bei der Registrierung und in Nachrichten, z. B. „Kürsat“."),
@@ -1879,7 +1866,7 @@ function openBooking(s) {
     render();
   });
   openModal("Fahrstunde anfragen",
-    el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min. = ${fsLabel(s.duration_min)})`),
+    el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
     el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note, counter,
     el("div", { class: "notice" },
       el("b", {}, "Wichtig: "), "Nach der Bestätigung durch deinen Fahrlehrer ist die Fahrstunde verbindlich. ",
@@ -1945,7 +1932,7 @@ function doneList(rows, total) {
         el("td", {}, typeLabel(b.lesson_type)),
         el("td", { class: "num" }, b.actual_minutes)))),
       el("tfoot", {}, el("tr", {},
-        el("th", { colspan: 4 }, `Gesamt: ${done.length} Termin${done.length === 1 ? "" : "e"} = ${fsLabel(total)} (à 45 Min.)`),
+        el("th", { colspan: 4 }, `Gesamt: ${done.length} Termin${done.length === 1 ? "" : "e"}`),
         el("th", { class: "num" }, `${total} Min. (${fmtMinutes(total)})`))))));
 }
 
@@ -2057,7 +2044,7 @@ async function studentMine() {
   if (wa) wa.className = "btn small ghost";
   return el("div", {},
     el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 12px" },
-      el("span", {}, el("b", {}, fsLabel(total)), ` gefahren (${doneCount} Termin${doneCount === 1 ? "" : "e"}, ${total} Min.)`,
+      el("span", {}, el("b", {}, `${doneCount} Termin${doneCount === 1 ? "" : "e"}`), ` gefahren · ${total} Min. (${fmtMinutes(total)})`,
         lateCount ? el("span", { class: "badge late", style: "margin-left:6px" }, `${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}`) : null),
       wa),
     !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin-bottom:12px" },

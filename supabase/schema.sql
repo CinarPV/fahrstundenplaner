@@ -37,7 +37,7 @@ create table if not exists public.settings (
   teacher_id        uuid primary key references public.profiles(id) on delete cascade,
   display_name      text not null default 'Fahrlehrer' check (char_length(display_name) <= 60),
   default_duration  int not null default 90 check (default_duration between 5 and 600),
-  max_open          int not null default 3 check (max_open between 0 and 50),  -- 0 = unbegrenzt
+  max_open          int not null default 3 check (max_open between 0 and 50),  -- max. Termine pro Schüler, 0 = unbegrenzt
   admin_phone       text check (char_length(admin_phone) <= 30)
 );
 
@@ -463,7 +463,7 @@ begin
     where b.student_id = auth.uid() and s.starts_at > now()
       and (b.status = 'requested' or (b.status = 'confirmed' and b.actual_minutes is null));
     if v_open >= v_max then
-      raise exception 'Du hast schon % offene bzw. anstehende Fahrstunden – mehr sind gerade nicht möglich.', v_open;
+      raise exception 'Du hast schon % offene bzw. anstehende Termine – mehr sind gerade nicht möglich.', v_open;
     end if;
   end if;
   begin
