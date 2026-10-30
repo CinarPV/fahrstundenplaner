@@ -393,12 +393,12 @@ function renderWaiting() {
   const blocked = p.status !== "pending";
   const noTeacher = p.role === "student" && !p.teacher_id;
   app.replaceChildren(el("div", { class: "card narrow" },
-    el("h2", {}, noTeacher ? "Kein Fahrlehrer zugeordnet" : blocked ? "Zugang nicht aktiv" : "Fast geschafft – warte auf Freischaltung"),
+    el("h2", {}, noTeacher ? "Kein Fahrlehrer zugeordnet" : blocked ? (p.role === "teacher" ? "Zugang nicht aktiv" : "🎓 Ausbildung abgeschlossen") : "Fast geschafft – warte auf Freischaltung"),
     el("p", {}, noTeacher
       ? "Dein Konto ist keinem Fahrlehrer zugeordnet. Bitte registriere dich über den Link, den dir dein Fahrlehrer geschickt hat, oder sprich ihn direkt an."
       : blocked
       ? (p.role === "teacher" ? "Dein Fahrlehrer-Zugang ist gesperrt. Bitte wende dich an den Betreiber der App."
-        : "Dein Zugang zum Fahrstundenplaner ist nicht mehr aktiv. Bei Fragen wende dich bitte direkt an deinen Fahrlehrer.")
+        : "Deine Ausbildung ist abgeschlossen – herzlichen Glückwunsch und allzeit gute Fahrt! Bei Fragen wende dich bitte direkt an deinen Fahrlehrer.")
       : `Hallo ${p.first_name || ""}! Deine Anmeldung ist angekommen. Dein Fahrlehrer muss dich noch freischalten – danach siehst du hier den Kalender und kannst Fahrstunden anfragen.`),
     blocked ? null : el("div", { class: "actions" },
       el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen")),
@@ -1303,8 +1303,7 @@ async function adminStudents() {
 
   return el("div", {},
     pending.length ? el("div", { class: "card" },
-      el("h2", {}, "Neue Anmeldungen"),
-      el("p", { class: "muted small" }, "Diese Personen haben sich registriert und warten auf deine Freischaltung. Erst danach sehen sie den Kalender."),
+      el("h2", {}, "Neu angemeldet"),
       pending.map((st) => {
         const ok = el("button", { class: "btn small ok" }, "✓ Freischalten");
         ok.onclick = () => busy(ok, () => setStudentStatus(st, "active"));
@@ -1318,9 +1317,9 @@ async function adminStudents() {
     el("div", { class: "card" },
       el("h2", {}, "Aktive Schüler"),
       active.length ? table(active) : el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler."),
-      el("p", { class: "muted small" }, "Auf einen Namen tippen, um Fahrstunden zu sehen oder den Zugang zu beenden.")),
+      el("p", { class: "muted small" }, "Namen antippen für Fahrstunden, Ausbildungsstand und Daten.")),
     blocked.length ? el("div", { class: "card" },
-      el("h2", {}, "Gesperrt / Ausbildung beendet"),
+      el("h2", {}, "Fertige Schüler"),
       table(blocked)) : null,
   );
 }
@@ -1328,7 +1327,7 @@ async function adminStudents() {
 async function setStudentStatus(st, status) {
   const { error } = await sb.from("profiles").update({ status }).eq("id", st.id);
   if (error) throw error;
-  const msg = { active: "freigeschaltet", blocked: "gesperrt" }[status];
+  const msg = { active: "freigeschaltet", blocked: "als fertig markiert" }[status];
   toast(`${fullName(st)} wurde ${msg}.`);
   closeModal();
   render();
@@ -1409,12 +1408,12 @@ async function openStudent(st) {
   if (error) return fail(error);
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
 
-  const block = el("button", { class: "btn danger" }, "Zugang sperren (Ausbildung beendet)");
+  const block = el("button", { class: "btn ok" }, "🎓 Ausbildung abgeschlossen");
   block.onclick = () => busy(block, async () => {
-    if (!confirm(`Zugang von ${fullName(st)} sperren? Die Person sieht danach keine Termine mehr und kann nichts mehr buchen. Die gefahrenen Stunden bleiben bei dir gespeichert.`)) return;
+    if (!confirm(`${fullName(st)} als fertig markieren? Er/sie kann danach keine Fahrstunden mehr buchen. Fahrstunden und Ausbildungsstand bleiben bei dir gespeichert.`)) return;
     await setStudentStatus(st, "blocked");
   });
-  const unblock = el("button", { class: "btn ok" }, "Wieder freischalten");
+  const unblock = el("button", { class: "btn ghost" }, "Wieder aktiv setzen");
   unblock.onclick = () => busy(unblock, () => setStudentStatus(st, "active"));
   const del = el("button", { class: "btn danger" }, "Endgültig löschen");
   del.onclick = () => busy(del, () => deleteStudent(st));
@@ -1437,10 +1436,10 @@ async function openStudent(st) {
     el("hr"),
     limitControl(st),
     el("hr"),
-    el("h3", {}, "Zugang"),
+    el("h3", {}, "Ausbildung"),
     el("p", { class: "muted small" }, st.status === "blocked"
-      ? "Gesperrt: Die Person sieht keine Termine mehr. Du kannst sie wieder freischalten oder endgültig löschen."
-      : "Nach der Ausbildung: Sperren behält die Fahrstunden-Historie bei dir. Löschen entfernt Konto und alle Daten (z. B. für den Datenschutz)."),
+      ? "Fertig: kann keine Fahrstunden mehr buchen. Die Daten bleiben bei dir, bis du den Schüler löschst."
+      : "Nach der Prüfung als fertig markieren – oder den Schüler mit allen Daten löschen."),
     el("div", { class: "actions" }, st.status === "blocked" ? unblock : block, del));
 }
 

@@ -29,7 +29,8 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - Bei jedem Schüler siehst du **Klasse, 👓 Sehhilfe und Umschreiber**.
 - Übersicht pro Schüler: Anzahl gefahrener Stunden und Gesamtzeit.
 - **Neue Anmeldungen freischalten:** Wer sich registriert, sieht erst nach deiner Freischaltung den Kalender.
-- **Nach der Ausbildung:** Den Zugang **sperren** (die Fahrstunden-Historie bleibt bei dir) oder den Schüler **endgültig löschen** (Konto und alle Daten werden entfernt, z. B. für den Datenschutz).
+- **Nach der Ausbildung:** Den Schüler mit **„🎓 Ausbildung abgeschlossen“** zu den **fertigen Schülern** verschieben (Fahrstunden und Ausbildungsstand bleiben bei dir) oder ihn **endgültig löschen** (Konto und alle Daten werden entfernt, z. B. für den Datenschutz).
+- Der Tab „Schüler“ ist in drei Bereiche gegliedert: **Neu angemeldet** (nur sichtbar, wenn jemand auf Freischaltung wartet), **Aktive Schüler** und **Fertige Schüler**.
 - Die Standarddauer unter „Einstellungen“ dauerhaft ändern.
 - **Freigeben oder zuordnen:** Beim Anlegen wählst du **🟢 Freigeben**, dann können alle Schüler die Termine anfragen, oder **👤 Einem Schüler zuordnen**. Beim Zuordnen tippst du den Schüler in der Liste an, und alle Termine werden direkt bestätigt für ihn eingetragen, z. B. für die Prüfungsvorbereitung die ganze Woche.
 - **Höchstzahl pro Schüler:** Standard für alle (Einstellungen). In der Schülerliste setzt ein **Häkchen „Mehr erlauben“** einen Schüler mit einem Klick auf unbegrenzt. Im Schüler-Fenster geht auch eine eigene Anzahl (z. B. 5).
@@ -125,8 +126,8 @@ Im Tab **„Fahrlehrer“** Name, E-Mail und Link-Kürzel eintragen (das Passwor
 > **Datenschutz:** Als Betreiber speicherst du auch die Schülerdaten deiner Kollegen, selbst wenn du sie nicht sehen kannst. Mit den Kollegen sollte deshalb eine kurze Vereinbarung zur Auftragsverarbeitung (DSGVO) getroffen werden.
 
 ### 7. Schüler freischalten
-Neue Registrierungen erscheinen im Tab **Schüler** unter „Neue Anmeldungen“ (rote Zahl am Tab). Mit **✓ Freischalten** erhält die Person Zugang, mit **Ablehnen & löschen** wird sie entfernt.
-Nach der Ausbildung tippst du in der Schülerliste auf den Namen und wählst **Zugang sperren** oder **Endgültig löschen**.
+Neue Registrierungen erscheinen im Tab **Schüler** unter „Neu angemeldet“ (rote Zahl am Tab). Mit **✓ Freischalten** erhält die Person Zugang, mit **Ablehnen & löschen** wird sie entfernt.
+Nach der Ausbildung tippst du in der Schülerliste auf den Namen und wählst **🎓 Ausbildung abgeschlossen** oder **Endgültig löschen**.
 
 ---
 
