@@ -195,3 +195,76 @@ code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2
 .lv i.on.l2 { background: #93c5fd; border-color: #2563eb; }
 .lv i.on.l3 { background: #4ade80; border-color: #16a34a; }
 .lv-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 4px; }
+
+/* ================= Handy & Tablet ================= */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { -webkit-tap-highlight-color: rgba(37, 99, 235, .12); overflow-x: hidden; }
+/* Mind. 16 px in Eingabefeldern – sonst zoomt das iPhone beim Antippen hinein */
+input, select, textarea { font-size: 16px; }
+/* Notch / abgerundete Ecken (iPhone quer, App auf dem Startbildschirm) */
+.topbar { padding-top: max(10px, env(safe-area-inset-top)); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+.container { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+.footer { padding-bottom: max(28px, calc(env(safe-area-inset-bottom) + 12px)); }
+.toast { bottom: max(20px, calc(env(safe-area-inset-bottom) + 12px)); }
+.tabs { -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+
+/* Fingerfreundliche Tippflächen auf Touch-Geräten (mind. 44 px) */
+@media (pointer: coarse) {
+  .btn, .tab, .pick, button.slot, .topic.editable { min-height: 44px; }
+  .btn.small { min-height: 40px; padding: 8px 12px; }
+  .close { min-width: 44px; min-height: 44px; }
+  .footer button, .linkbtn { padding: 10px 2px; }
+  .dur-field input { width: 76px; min-height: 44px; }
+  label.check { padding: 6px 0; }
+  label.check input { width: 24px; height: 24px; }
+  .day-head .plus { min-width: 40px; min-height: 40px; font-size: 24px; }
+}
+
+/* Handy (schmal) */
+@media (max-width: 600px) {
+  body { font-size: 15px; }
+  .container { padding-top: 12px; }
+  .brand { font-size: 16px; gap: 8px; }
+  .brand img { width: 32px; height: 32px; }
+  .brand small { display: none; }
+  .userbox { gap: 6px; font-size: 13px; }
+  .userbox > span.small { display: none; }        /* „· Fahrlehrer …“ ausblenden, Platz sparen */
+  /* Kopfzeile kompakt in einer Zeile: Name und Rollen-Abzeichen ausblenden, nicht mitscrollen */
+  .topbar { position: static; padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 8px; }
+  .userbox { flex-wrap: nowrap; }
+  .userbox > span:first-child, .userbox .badge { display: none; }
+  .userbox .btn { padding: 6px 10px; font-size: 13px; }
+  .hide-sm { display: none; }
+  .brand { min-width: 0; }
+  .brand span { overflow: hidden; text-overflow: ellipsis; }
+  .card { padding: 14px; }
+  h2 { font-size: 18px; }
+  /* Wochenansicht als Liste: ein Tag pro Zeile, leere Tage kompakt */
+  .week { grid-template-columns: 1fr; gap: 8px; }
+  .day { min-height: 0; padding: 8px 10px; }
+  .day .empty { display: inline; }
+  .weekbar .title { order: -1; width: 100%; }
+  /* Haupt-Tabs: umbrechen statt abschneiden */
+  .container > .tabs:first-child { flex-wrap: wrap; overflow: visible; gap: 6px; }
+  .container > .tabs:first-child .tab { flex: 1 1 auto; padding: 8px 10px; font-size: 14px; text-align: center; }
+  /* Leere Tage als schmale Zeile */
+  .day:has(> .empty) { display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; }
+  .day:has(> .empty) .day-head { margin: 0; font-weight: 500; color: var(--muted); }
+  /* Fenster als „Blatt“ von unten, volle Breite, scrollbar */
+  dialog { width: 100vw; max-width: 100vw; max-height: 92dvh; margin: auto 0 0; border-radius: 16px 16px 0 0; border: none; }
+  #modal-body { padding: 0 14px max(18px, calc(env(safe-area-inset-bottom) + 12px)); }
+  .modal-head { position: sticky; top: 0; background: var(--card); padding: 10px 0 8px; z-index: 2; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+  .actions .btn { flex: 1 1 auto; }
+  .row { grid-template-columns: 1fr 1fr; }
+  table { font-size: 13px; }
+  th, td { padding: 8px 4px; }
+}
+@media (max-width: 360px) {
+  .row { grid-template-columns: 1fr; }
+}
+/* Tablet */
+@media (min-width: 601px) and (max-width: 1024px) {
+  .week { grid-template-columns: repeat(4, 1fr); }
+  dialog { width: min(640px, calc(100vw - 48px)); }
+}

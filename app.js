@@ -410,7 +410,7 @@ function renderUserbox() {
   userbox.replaceChildren(...[
     el("span", {}, fullName(state.profile)),
     isAdmin() ? el("span", { class: "badge admin" }, isOwner() ? "Haupt-Admin" : "Fahrlehrer") : null,
-    isAdmin() ? el("button", { class: "btn small", onclick: openLinkModal }, "🔗 Schüler-Link") : null,
+    isAdmin() ? el("button", { class: "btn small", onclick: openLinkModal, "aria-label": "Schüler-Link", title: "Schüler-Link" }, "🔗", el("span", { class: "hide-sm" }, " Schüler-Link")) : null,
     !isAdmin() && state.settings.display_name ? el("span", { class: "small muted" }, "· Fahrlehrer " + state.settings.display_name) : null,
     el("button", { class: "btn small ghost", onclick: async () => { await sb.auth.signOut(); } }, "Abmelden"),
   ].filter(Boolean));

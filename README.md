@@ -142,6 +142,25 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 
 ---
 
+## Handy & Tablet
+
+Die App ist für **Handy und Tablet** gebaut und in Hoch- und Querformat geprüft:
+- Nichts ragt über den Bildschirmrand, und die Wochenansicht wird auf dem Handy zu einer Liste.
+- Eingabefelder haben mindestens 16 px Schrift. Das iPhone zoomt beim Antippen also nicht ungewollt hinein.
+- Alle Knöpfe sind auf Touch-Geräten mindestens 44 px groß, so wie es Apple und Google empfehlen.
+- Fenster öffnen sich auf dem Handy als Blatt von unten, über die volle Breite und scrollbar.
+- Notch und abgerundete Ecken werden berücksichtigt.
+
+**Als App auf den Startbildschirm:**
+- **iPhone (Safari):** Teilen-Knopf antippen, dann **„Zum Home-Bildschirm“** wählen.
+- **Android (Chrome):** Menü ⋮ antippen, dann **„App installieren“** bzw. **„Zum Startbildschirm hinzufügen“**.
+
+Die App öffnet sich dann ohne Browser-Leiste, mit eigenem Symbol und dem Namen „Fahrstunden“.
+
+**Nach einem Update:** In `index.html` stehen hinter den Dateien Versionsnummern (`?v=2026-10-31`). Bei jeder Änderung das Datum hochsetzen. Dann laden alle Handys sicher die neue Version.
+
+---
+
 ## Rechtliches (Impressum, Datenschutz, AGB, Copyright)
 
 Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, **Datenschutz** und **Nutzungsbedingungen (AGB)**. Die Texte stehen in der Datei [`legal.js`](legal.js).
@@ -193,6 +212,7 @@ Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, *
 | `index.html` | Grundgerüst der Seite |
 | `app.js` | Die ganze App-Logik (Kalender, Buchen, Bestätigen …) |
 | `style.css` | Aussehen (immer helles Layout, auch auf dem Handy) |
+| `manifest.webmanifest`, `icons/` | App-Symbol und Einstellungen für „Zum Startbildschirm hinzufügen“ |
 | `logo.svg` | Logo für Kopfzeile und Browser-Tab (kann durch ein eigenes ersetzt werden) |
 | `legal.js` | Impressum, Datenschutzerklärung, Nutzungsbedingungen – oben Anschrift/E-Mail eintragen |
 | `LICENSE` | Urheberrecht: © Kürsat Cinar, alle Rechte vorbehalten |
