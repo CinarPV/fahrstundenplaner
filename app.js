@@ -177,8 +177,11 @@ async function init() {
   state.session = data.session;
   await loadUserAndRender();
 
+  // Beim Zurückkehren zur Seite neu laden – aber nie, während jemand gerade etwas eingibt
+  app.addEventListener("input", () => (state.dirty = true));
+  app.addEventListener("click", (e) => { if (e.target.closest(".card button, .card details")) state.dirty = true; });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && state.profile && !modal.open) render();
+    if (document.visibilityState === "visible" && state.profile && !modal.open && !state.dirty) render();
   });
 }
 
@@ -307,6 +310,7 @@ function renderNewPassword() {
 
 async function render() {
   if (!state.profile) return;
+  state.dirty = false;
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"]];
@@ -345,7 +349,32 @@ async function updateRequestCount(tabbar) {
   badge("students", pend.count);
 }
 
-function weekBar() {
+function openCopyWeek(slots) {
+  const weeks = el("input", { type: "number", min: 1, max: 26, value: 1 });
+  const btn = el("button", { class: "btn" }, "Kopieren");
+  btn.onclick = () => busy(btn, async () => {
+    const n = Math.max(1, Math.min(26, +weeks.value || 1)), list = [];
+    for (let k = 1; k <= n; k++) {
+      for (const s of slots) {
+        const d = new Date(s.starts_at);
+        const at = fromInputs(dateInput(addDays(d, k * 7)), timeInput(d)); // gleiche Uhrzeit, auch bei Zeitumstellung
+        list.push({ starts_at: at.toISOString(), duration_min: s.duration_min });
+      }
+    }
+    const res = await insertSlots(list);
+    toast(insertedMsg(res));
+    closeModal();
+    render();
+  });
+  openModal("Woche kopieren",
+    el("p", {}, `Alle ${slots.length} Termine dieser Woche (${fmtDay(state.weekStart)} – ${fmtDay(addDays(state.weekStart, 6))}) mit denselben Tagen, Uhrzeiten und Dauern als `,
+      el("b", {}, "freie Termine"), " in die folgenden Wochen übernehmen."),
+    el("label", {}, "Für wie viele folgende Wochen?"), weeks,
+    el("p", { class: "muted small" }, "Buchungen werden nicht mitkopiert. Termine, die es zur selben Zeit schon gibt, werden übersprungen."),
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+function weekBar(extra) {
   const end = addDays(state.weekStart, 6);
   const go = (n) => { state.weekStart = addDays(state.weekStart, n); render(); };
   return el("div", { class: "weekbar" },
@@ -354,7 +383,8 @@ function weekBar() {
       el("button", { class: "btn small ghost", onclick: () => { state.weekStart = startOfWeek(new Date()); render(); } }, "Heute"),
       el("button", { class: "btn small ghost", onclick: () => go(7), "aria-label": "Nächste Woche" }, "›")),
     el("span", { class: "title" }, `${fmtDay(state.weekStart)} – ${fmtDay(end)} ${end.getFullYear()}`),
-    el("button", { class: "btn small ghost", onclick: () => render() }, "↻ Aktualisieren"),
+    el("div", { class: "actions", style: "margin:0" }, extra,
+      el("button", { class: "btn small ghost", onclick: () => render() }, "↻ Aktualisieren")),
   );
 }
 
@@ -408,71 +438,131 @@ async function adminCalendar() {
 
   return el("div", {},
     form.node,
-    weekBar(),
+    weekBar(slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null),
     legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"]]),
     grid,
   );
 }
 
+const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const weekdayIndex = (d) => (new Date(d).getDay() + 6) % 7; // Montag = 0
+
+// Neue Termine an Datenbank senden – Termine, die es zur selben Zeit schon gibt, werden übersprungen
+async function insertSlots(list) {
+  if (!list.length) throw new Error("Keine Termine ausgewählt");
+  const times = list.map((x) => new Date(x.starts_at).getTime());
+  const { data: existing, error: e1 } = await sb.from("slots").select("starts_at")
+    .gte("starts_at", new Date(Math.min(...times)).toISOString())
+    .lte("starts_at", new Date(Math.max(...times)).toISOString());
+  if (e1) throw e1;
+  const taken = new Set((existing || []).map((x) => new Date(x.starts_at).getTime()));
+  const fresh = list.filter((x) => !taken.has(new Date(x.starts_at).getTime()));
+  if (fresh.length) {
+    const { error } = await sb.from("slots").insert(fresh);
+    if (error) throw error;
+  }
+  return { added: fresh.length, skipped: list.length - fresh.length };
+}
+const insertedMsg = ({ added, skipped }) =>
+  `${added} Termin${added === 1 ? "" : "e"} freigegeben` + (skipped ? ` (${skipped} gab es schon)` : "") + ".";
+
 function newSlotForm() {
-  const now = new Date();
-  const date = el("input", { type: "date", value: dateInput(now) });
-  const time = el("input", { type: "time", value: "08:00", step: 300 });
+  const date = el("input", { type: "date", value: dateInput(new Date()) });
   const dur = durationControl(state.settings.default_duration);
-  const count = el("input", { type: "number", min: 1, max: 10, value: 1 });
-  const pause = el("input", { type: "number", min: 0, max: 240, step: 5, value: 0 });
   const weeks = el("input", { type: "number", min: 1, max: 26, value: 1 });
-  const preview = el("p", { class: "muted small" });
+  const preview = el("p", { class: "small", style: "margin-top:12px" });
   const btn = el("button", { class: "btn" }, "Termine freigeben");
 
+  // Wochentage
+  const days = new Set([weekdayIndex(new Date())]);
+  const dayBtns = WEEKDAYS.map((name, i) => el("button", { type: "button", class: "tab", onclick: () => { days.has(i) ? days.delete(i) : days.add(i); refresh(); } }, name));
+  const setDays = (list) => { days.clear(); list.forEach((i) => days.add(i)); refresh(); };
+
+  // Uhrzeiten: eine Reihe erzeugen (Beginn + Anzahl + Pause) und einzeln ergänzen/entfernen
+  let times = ["08:00"];
+  const first = el("input", { type: "time", value: "08:00", step: 300 });
+  const count = el("input", { type: "number", min: 1, max: 10, value: 1 });
+  const pause = el("input", { type: "number", min: 0, max: 240, step: 5, value: 0 });
+  const extra = el("input", { type: "time", step: 300 });
+  const timeChips = el("div", { class: "chips" });
+  const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+  const fromMin = (m) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
+  function makeRow() {
+    if (!first.value) return;
+    const n = Math.max(1, Math.min(10, +count.value || 1)), p = Math.max(0, +pause.value || 0);
+    times = Array.from({ length: n }, (_, i) => fromMin(toMin(first.value) + i * (dur.value + p)));
+    refresh();
+  }
+  [first, count, pause].forEach((i) => i.addEventListener("input", makeRow));
+  dur.input.addEventListener("input", () => { if (+count.value > 1) makeRow(); });
+  const addTime = el("button", { type: "button", class: "btn small ghost", onclick: () => {
+    if (extra.value && !times.includes(extra.value)) { times.push(extra.value); times.sort(); extra.value = ""; refresh(); }
+  } }, "+ Uhrzeit hinzufügen");
+
   function build() {
-    const list = [];
-    const base = fromInputs(date.value, time.value);
-    if (isNaN(base)) return list;
-    const n = Math.max(1, +count.value || 1), w = Math.max(1, +weeks.value || 1), p = Math.max(0, +pause.value || 0);
+    const start = fromInputs(date.value, "00:00");
+    if (isNaN(start)) return [];
+    const monday = startOfWeek(start), now = Date.now(), list = [];
+    const w = Math.max(1, Math.min(26, +weeks.value || 1));
     for (let wk = 0; wk < w; wk++) {
-      for (let i = 0; i < n; i++) {
-        const start = addMin(addDays(base, wk * 7), i * (dur.value + p));
-        list.push({ starts_at: start.toISOString(), duration_min: dur.value });
+      for (const d of [...days].sort()) {
+        const day = addDays(monday, wk * 7 + d);
+        if (day < start) continue;
+        for (const t of times) {
+          const at = fromInputs(dateInput(day), t);
+          if (at.getTime() > now) list.push({ starts_at: at.toISOString(), duration_min: dur.value });
+        }
       }
     }
     return list;
   }
-  function updatePreview() {
+  function refresh() {
+    dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
+    timeChips.replaceChildren(...times.map((t) => el("span", { class: "tag", style: "font-size:14px;padding:4px 8px" },
+      `${t} – ${fromMin(toMin(t) + dur.value)} `,
+      el("button", { type: "button", class: "close", style: "font-size:16px", "aria-label": "Uhrzeit entfernen", onclick: () => { times = times.filter((x) => x !== t); refresh(); } }, "×"))));
     const list = build();
-    if (!list.length) { preview.textContent = ""; return; }
-    const first = list[0];
-    preview.textContent = `${list.length} Termin${list.length > 1 ? "e" : ""} – erster: ${fmtDate(first.starts_at)}, ${fmtRange(first.starts_at, first.duration_min)}`;
+    preview.replaceChildren(list.length
+      ? el("span", {}, el("b", {}, `${list.length} Termin${list.length > 1 ? "e" : ""}`),
+        ` · ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${+weeks.value > 1 ? weeks.value + " Wochen" : "1 Woche"} · ab ${fmtDay(list[0].starts_at)}`)
+      : el("span", { class: "muted" }, "Noch keine Termine – Wochentage und Uhrzeiten wählen."));
   }
-  [date, time, count, pause, weeks, dur.input].forEach((i) => i.addEventListener("input", updatePreview));
-  updatePreview();
+  [date, weeks].forEach((i) => i.addEventListener("input", refresh));
+  dur.input.addEventListener("input", refresh);
 
   btn.onclick = () => busy(btn, async () => {
     const list = build();
-    if (!list.length) throw new Error("Bitte Datum und Uhrzeit angeben");
-    const { error } = await sb.from("slots").insert(list);
-    if (error) throw error;
-    toast(`${list.length} Termin${list.length > 1 ? "e" : ""} freigegeben.`);
+    const res = await insertSlots(list);
+    toast(insertedMsg(res));
     state.weekStart = startOfWeek(new Date(list[0].starts_at));
     render();
   });
 
+  refresh();
   const node = el("div", { class: "card" },
     el("h3", {}, "Neue Fahrstunden freigeben"),
     el("div", { class: "row" },
-      el("div", {}, el("label", {}, "Datum"), date),
-      el("div", {}, el("label", {}, "Beginn"), time)),
-    el("label", {}, "Dauer (Standard: " + state.settings.default_duration + " Min.)"), dur.node,
-    el("details", {},
-      el("summary", { class: "small muted", style: "margin-top:10px;cursor:pointer" }, "Mehrere Termine auf einmal …"),
-      el("div", { class: "row" },
-        el("div", {}, el("label", {}, "Anzahl hintereinander"), count),
-        el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause),
-        el("div", {}, el("label", {}, "Wöchentlich für … Wochen"), weeks))),
+      el("div", {}, el("label", {}, "Ab Datum"), date),
+      el("div", {}, el("label", {}, "Für … Wochen wiederholen (1 = nur diese Woche)"), weeks)),
+    el("label", {}, "An welchen Tagen?"),
+    el("div", { class: "tabs", style: "margin-bottom:6px;flex-wrap:wrap" }, dayBtns),
+    el("div", { class: "chips" },
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4]) }, "Mo–Fr"),
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4, 5]) }, "Mo–Sa"),
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4, 5, 6]) }, "Ganze Woche"),
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([]) }, "Keiner")),
+    el("label", {}, "Dauer pro Fahrstunde (Standard: " + state.settings.default_duration + " Min.)"), dur.node,
+    el("label", {}, "Uhrzeiten pro Tag"),
+    el("div", { class: "row" },
+      el("div", {}, el("label", {}, "Erste Fahrstunde um"), first),
+      el("div", {}, el("label", {}, "Fahrstunden hintereinander"), count),
+      el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause)),
+    timeChips,
+    el("div", { class: "done-row" }, el("span", { style: "width:130px" }, extra), addTime),
     preview,
     el("div", { class: "actions" }, btn),
   );
-  return { node, setDate: (d) => { date.value = dateInput(d); updatePreview(); } };
+  return { node, setDate: (d) => { date.value = dateInput(d); setDays([weekdayIndex(d)]); } };
 }
 
 async function openAdminSlot(slotId) {
@@ -871,6 +961,25 @@ function openBooking(s) {
 
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */
 
+// Übersicht aller abgehakten Fahrstunden – nummeriert, mit Datum, Uhrzeit und Minuten
+function doneList(rows, total) {
+  const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null)
+    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
+  if (!done.length) return null;
+  return el("div", { class: "card" },
+    el("h3", {}, "Gefahrene Fahrstunden"),
+    el("div", { style: "overflow-x:auto" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Nr."), el("th", {}, "Datum"), el("th", {}, "Uhrzeit"), el("th", { class: "num" }, "Minuten"))),
+      el("tbody", {}, done.map((b, i) => el("tr", {},
+        el("td", {}, i + 1),
+        el("td", {}, new Date(b.slots.starts_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })),
+        el("td", {}, fmtTime(b.slots.starts_at)),
+        el("td", { class: "num" }, b.actual_minutes)))),
+      el("tfoot", {}, el("tr", {},
+        el("th", { colspan: 3 }, `Gesamt: ${done.length} Fahrstunde${done.length === 1 ? "" : "n"}`),
+        el("th", { class: "num" }, `${total} Min. (${fmtMinutes(total)})`))))));
+}
+
 function openStudentCancel(b) {
   const late = isLate(b.slots.starts_at);
   const reason = el("textarea", { maxlength: 150, placeholder: "Kurzer Satz, z. B. „Ich habe eine Klausur.“", style: "min-height:56px" });
@@ -944,7 +1053,8 @@ async function studentMine() {
   return el("div", {},
     el("div", { class: "card" }, el("b", {}, `${doneCount} Fahrstunde${doneCount === 1 ? "" : "n"} gefahren`), " · insgesamt ", el("b", {}, fmtMinutes(total)),
       notHeldCount ? ` · ${notHeldCount}× ausgefallen` : "", lateCount ? ` · davon ${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}` : ""),
-    el("h2", {}, "Anstehend"),
+    doneList(rows, total),
+    el("h2", { style: "margin-top:24px" }, "Anstehend"),
     upcoming.length ? upcoming.map(item) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
     rest.length ? [el("h2", { style: "margin-top:24px" }, "Gefahren, abgesagt & abgelehnt"), rest.map(item)] : null,
   );

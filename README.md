@@ -7,7 +7,8 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 **Fahrlehrer (Admin)**
 - Freie Termine anlegen: Datum, Uhrzeit, Dauer. Die Standarddauer von 90 Minuten ist vorausgefüllt.
 - Die Dauer pro Termin im 15-Minuten-Takt ändern (−15 / +15) oder per Schnellwahl auf 45, 60, 90 oder 135 Minuten setzen.
-- Mehrere Termine hintereinander oder wöchentlich wiederholt auf einmal anlegen.
+- Viele Termine auf einmal anlegen: **Wochentage** ankreuzen (oder Mo–Fr, Mo–Sa, ganze Woche), **Uhrzeiten** festlegen (z. B. 3 Fahrstunden hintereinander mit 15 Min. Pause, dazu einzelne Uhrzeiten) und **für wie viele Wochen** das gelten soll.
+- **⧉ Woche kopieren:** Eine fertig geplante Woche mit einem Klick in die nächsten Wochen übernehmen. Termine, die es schon gibt, werden übersprungen.
 - Anfragen **bestätigen** (verbindlich) oder **ablehnen**. Dabei lassen sich die Uhrzeit anpassen und eine Antwort schreiben, etwa „Ausweis + Brille mitbringen, Treffpunkt Bahnhof“.
 - Nach der Fahrstunde **abhaken**: Die geplanten Minuten stehen schon drin. Bei kürzerer oder längerer Fahrt passt du sie mit −15/−5/+5/+15 an und setzt dann den Haken.
 - Nicht gefahren? Den Grund ankreuzen: **🤒 Krank gemeldet**, **🙋 Schüler hat abgesagt** oder **🚫 Ich habe abgesagt**. Dazu kommen eine kurze Notiz und der Haken **„Fehlstunde – kostenpflichtig“**, der nach der Frist automatisch vorausgewählt ist. Ein zukünftiger Termin wird dabei wieder frei.
@@ -23,6 +24,7 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 - Der Wochenkalender zeigt **freie** Termine, die **eigenen** Termine und Termine, die jemand anderes **angefragt** hat, die aber **noch nicht bestätigt** sind (ohne Namen). So lohnt es sich, wieder reinzuschauen. Bestätigte Fahrstunden anderer sind unsichtbar.
 - Freien Termin anfragen, mit einer kurzen Nachricht (max. 300 Zeichen). Ein Hinweis erklärt: Nach der Bestätigung ist die Fahrstunde verbindlich, und eine Absage nach dem Vortag 18:00 Uhr ist eine kostenpflichtige Fehlstunde.
 - Eine bestätigte Fahrstunde mit **„Fahrstunde absagen“** absagen. Dafür muss der Schüler einen kurzen Grund schreiben und einen Haken setzen. Nach der Frist erscheint eine deutliche Warnung, und die Absage wird automatisch als Fehlstunde vermerkt.
+- Unter „Meine Fahrstunden“ eine **nummerierte Liste aller gefahrenen Fahrstunden** (Datum, Uhrzeit, Minuten, Gesamtsumme) sehen.
 - Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers, die **gefahrenen Minuten** und **„Abgesagt – krank“** sehen.
 - Eine noch unbestätigte Anfrage zurückziehen.
 
