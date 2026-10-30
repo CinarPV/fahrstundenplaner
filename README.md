@@ -160,6 +160,7 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 
 - **Schüler:** Auf der Anmeldeseite auf **„Passwort vergessen?“** tippen. Sie bekommen eine E-Mail mit einem Link zum Zurücksetzen. Weder der Fahrlehrer noch der Haupt-Admin sieht oder setzt Schüler-Passwörter.
 - **Fahrlehrer:** Entweder ebenfalls über „Passwort vergessen?“ oder der **Haupt-Admin** setzt im Tab „Fahrlehrer“ mit **„🔑 Neues Passwort“** ein neues Passwort und schickt es per WhatsApp.
+- **Eigenes Passwort ist Pflicht:** Nach einem vom Haupt-Admin vergebenen Passwort (beim ersten Mal oder nach einem Reset) muss der Fahrlehrer bei der nächsten Anmeldung **zuerst ein eigenes Passwort festlegen**, bevor er weiterarbeiten kann. Danach kennt nur er es. Ändern kann er es jederzeit unter **Einstellungen → Passwort ändern**.
 - **Lesen** kann Passwörter niemand, auch der Haupt-Admin nicht. Sie sind verschlüsselt gespeichert und können nur **neu gesetzt** werden.
 - Hinweis: Im kostenlosen Supabase-Plan können nur wenige E-Mails pro Stunde verschickt werden. Für mehr kann man später einen eigenen E-Mail-Dienst anschließen.
 

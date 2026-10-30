@@ -22,6 +22,7 @@ create table if not exists public.profiles (
   max_open       int check (max_open between 0 and 50),  -- eigene Höchstzahl: NULL = Standard, 0 = unbegrenzt
   role           text not null default 'student' check (role in ('student','teacher')),
   is_owner       boolean not null default false,   -- Haupt-Admin
+  must_change_password boolean not null default false,  -- vom Haupt-Admin vergebenes Passwort → selbst neu festlegen
   -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt
   status         text not null default 'pending' check (status in ('pending','active','blocked')),
   teacher_id     uuid references public.profiles(id) on delete cascade,  -- Schüler → sein Fahrlehrer
@@ -188,7 +189,8 @@ begin
     raise exception 'Dieses Konto ist bereits als Schüler aktiv';
   end if;
   update profiles set role = 'teacher', status = 'active', teacher_id = null, is_owner = false,
-         slug = lower(trim(p_slug)), first_name = trim(p_first), last_name = trim(p_last)
+         slug = lower(trim(p_slug)), first_name = trim(p_first), last_name = trim(p_last),
+         must_change_password = true
   where id = p_id;
   if not found then raise exception 'Konto nicht gefunden'; end if;
   insert into settings (teacher_id, display_name) values (p_id, trim(p_first))
@@ -231,7 +233,14 @@ begin
   if char_length(coalesce(p_password, '')) < 6 then raise exception 'Passwort: mindestens 6 Zeichen'; end if;
   update auth.users set encrypted_password = crypt(p_password, gen_salt('bf')), updated_at = now()
   where id = p_id;
+  update profiles set must_change_password = true where id = p_id;
 end $$;
+
+-- Nach dem Festlegen eines eigenen Passworts: Pflicht-Hinweis entfernen
+create or replace function public.password_changed()
+returns void language sql security definer set search_path = public as $$
+  update profiles set must_change_password = false where id = auth.uid();
+$$;
 
 -- Für die Registrierungsseite: Namen + Kürzel der aktiven Fahrlehrer (ohne weitere Daten)
 create or replace function public.public_teachers()
@@ -523,4 +532,5 @@ grant execute on function public.set_teacher_status(uuid, text) to authenticated
 grant execute on function public.delete_teacher(uuid) to authenticated;
 grant execute on function public.owner_set_teacher_password(uuid, text) to authenticated;
 grant execute on function public.restore_backup(jsonb) to authenticated;
+grant execute on function public.password_changed() to authenticated;
 grant execute on function public.public_teachers() to anon, authenticated;

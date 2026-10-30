@@ -345,12 +345,33 @@ async function loadUserAndRender() {
   } catch (e) { fail(e); }
   state.tab = "calendar";
   renderUserbox();
-  const p = state.profile;
-  if (p && !isAdmin() && !state.active) renderWaiting();
-  else render();
+  render();
 }
 
 // Schüler ist (noch) nicht freigeschaltet oder wurde gesperrt
+// Fahrlehrer mit vom Haupt-Admin vergebenem Passwort: erst eigenes Passwort festlegen
+function renderForcePassword() {
+  const pw1 = el("input", { type: "password", minlength: 6, autocomplete: "new-password" });
+  const pw2 = el("input", { type: "password", minlength: 6, autocomplete: "new-password" });
+  const btn = el("button", { class: "btn" }, "Passwort speichern & weiter");
+  btn.onclick = () => busy(btn, async () => {
+    if (pw1.value.length < 6) throw new Error("Mindestens 6 Zeichen");
+    if (pw1.value !== pw2.value) throw new Error("Die beiden Passwörter stimmen nicht überein");
+    const { error } = await sb.auth.updateUser({ password: pw1.value });
+    if (error) throw new Error(/different|same/i.test(error.message) ? "Bitte ein anderes Passwort als das bisherige wählen" : error.message);
+    const { error: e2 } = await sb.rpc("password_changed");
+    if (e2) throw e2;
+    toast("Dein neues Passwort ist gespeichert.");
+    await loadUserAndRender();
+  });
+  app.replaceChildren(el("div", { class: "card narrow" },
+    el("h2", {}, "Willkommen! Bitte eigenes Passwort festlegen"),
+    el("p", {}, "Du hast ein Passwort vom Haupt-Admin bekommen. Lege jetzt dein eigenes fest – nur du kennst es dann."),
+    el("label", {}, "Neues Passwort (mind. 6 Zeichen)"), pw1,
+    el("label", {}, "Neues Passwort wiederholen"), pw2,
+    el("div", { class: "actions" }, btn)));
+}
+
 function renderWaiting() {
   const p = state.profile;
   const blocked = p.status !== "pending";
@@ -502,6 +523,9 @@ function renderNewPassword() {
 async function render() {
   if (!state.profile) return;
   state.dirty = false;
+  // Sperrseiten immer zuerst – egal von wo render() aufgerufen wird
+  if (state.profile.must_change_password) return renderForcePassword();
+  if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
@@ -1597,6 +1621,7 @@ function passwordCard() {
     if (pw.value.length < 6) throw new Error("Mindestens 6 Zeichen");
     const { error } = await sb.auth.updateUser({ password: pw.value });
     if (error) throw error;
+    if (state.profile.must_change_password) await sb.rpc("password_changed");
     pw.value = "";
     toast("Passwort geändert.");
   });
