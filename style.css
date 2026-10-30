@@ -282,7 +282,7 @@ input, select, textarea { font-size: 16px; }
 
 /* Hausfarben: Feinschliff */
 .topbar { border-bottom: 3px solid var(--teal); }
-h2, h3 { color: var(--brand); }
+
 .btn:hover:not(:disabled) { filter: brightness(1.06); }
 .btn.ghost:hover { border-color: var(--teal); }
 .tab.active { background: var(--brand); border-color: var(--brand); }
@@ -292,3 +292,58 @@ h2, h3 { color: var(--brand); }
 .note.reply { border-left-color: var(--teal); }
 .footer button:hover, .linkbtn { color: var(--brand); }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outline-offset: 0; border-color: var(--teal); }
+
+/* ============ Design in Hausfarben (Text bleibt neutral dunkel) ============ */
+
+/* Kopfzeile: Petrolblau mit türkiser Unterkante */
+.topbar { background: linear-gradient(100deg, var(--brand) 0%, #0a7aa8 70%, #1597a8 100%); border-bottom: 4px solid var(--teal); box-shadow: 0 2px 10px rgba(5, 103, 154, .18); }
+.brand, .brand span { color: #fff; }
+.brand .easy { color: #9be6e8; }
+.brand small { color: rgba(255, 255, 255, .8); }
+.brand img { background: #fff; border-radius: 9px; padding: 2px; }
+.userbox, .userbox span { color: #fff; }
+.userbox .badge.admin { background: var(--teal); border-color: var(--teal); color: #fff; }
+.userbox .btn { background: rgba(255, 255, 255, .14); border-color: rgba(255, 255, 255, .55); color: #fff; }
+.userbox .btn:not(.ghost) { background: var(--teal); border-color: var(--teal); }
+
+/* Überschriften mit Farbbalken */
+h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
+.modal-head h3, .stage-head h4, .legal h4 { border: none; padding-left: 0; }
+
+/* Karten: feine türkise Oberkante */
+.card { border-top: 3px solid var(--teal); }
+
+/* Fenster: Kopfleiste in Petrolblau */
+.modal-head { background: var(--brand); color: #fff; margin: -18px -18px 14px; padding: 12px 18px; border-bottom: 4px solid var(--teal); }
+.modal-head h3 { color: #fff; }
+.modal-head .close { color: #fff; }
+
+/* Kalender: Tageskopf als Farbleiste */
+.day { padding-top: 0; overflow: hidden; }
+.day-head { background: linear-gradient(90deg, #e1f4f5, #eef7fb); margin: 0 -10px 8px; padding: 7px 10px; border-bottom: 2px solid var(--teal); color: var(--brand); }
+.day.today .day-head { background: var(--teal); color: #fff; border-bottom-color: var(--brand); }
+.day.today .day-head .plus { color: #fff; }
+.weekbar .title { color: var(--brand); }
+
+/* Ausbildungsstand: Stufen als Farbbalken */
+.stage-head { background: var(--brand); border-radius: 8px; padding: 7px 10px; border-bottom: none; border-left: 6px solid var(--teal); }
+.stage-head h4 { color: #fff; }
+.training .bar.small { background: rgba(255, 255, 255, .25); border-color: rgba(255, 255, 255, .4); }
+.training .bar.small i { background: var(--teal); }
+
+/* Tabs */
+.tab { border-color: #c9e3e6; }
+
+/* Fußzeile über die volle Breite in Petrolblau */
+.footer { border-top: 4px solid var(--teal); background: var(--brand); color: rgba(255, 255, 255, .85);
+  box-shadow: 0 0 0 100vmax var(--brand); clip-path: inset(0 -100vmax -100vmax); margin-top: 32px; }
+.footer button { color: #fff; }
+.footer button:hover { color: #9be6e8; }
+
+@media (max-width: 600px) {
+  .modal-head { margin: 0 -14px 10px; padding: 12px 14px; }
+  .day { padding-top: 0; }
+  .day-head { margin: 0 -10px 6px; }
+  .day:has(> .empty) { padding: 0 10px; background: var(--card); }
+  .day:has(> .empty) .day-head { background: none; border: none; margin: 0; padding: 6px 0; color: var(--muted); }
+}
