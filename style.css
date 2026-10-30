@@ -349,3 +349,4 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 }
 .repeat-toggle { background: #eaf6f7; border: 1px solid #bfe5e7; border-radius: 10px; padding: 10px 12px; margin-top: 14px; }
 .repeat-box { border-left: 4px solid var(--teal); padding: 2px 0 6px 12px; margin: 8px 0 4px; }
+.dur-hint { display: block; margin-top: 4px; font-size: 13px; color: var(--teal-text); font-weight: 600; }
