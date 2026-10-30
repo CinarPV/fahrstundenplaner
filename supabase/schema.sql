@@ -14,6 +14,7 @@ create table if not exists public.profiles (
   license_class  text check (license_class in ('B','B197','B Automatik')),
   needs_glasses  boolean not null default false,   -- Sehhilfe (Brille/Kontaktlinsen)
   is_conversion  boolean not null default false,   -- Umschreiber (ausländischer Führerschein)
+  phone          text check (char_length(phone) <= 30),  -- für WhatsApp-Nachrichten
   role       text not null default 'student' check (role in ('student','admin')),
   -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt (z. B. Ausbildung beendet)
   status      text not null default 'pending' check (status in ('pending','active','blocked')),
@@ -23,7 +24,9 @@ create table if not exists public.profiles (
 -- Einstellungen (genau eine Zeile)
 create table if not exists public.settings (
   id                int primary key default 1 check (id = 1),
-  default_duration  int not null default 90 check (default_duration between 5 and 600)
+  default_duration  int not null default 90 check (default_duration between 5 and 600),
+  max_open          int not null default 3 check (max_open between 0 and 50),  -- max. offene/anstehende Fahrstunden pro Schüler (0 = unbegrenzt)
+  admin_phone       text check (char_length(admin_phone) <= 30)               -- Handynummer des Fahrlehrers für WhatsApp
 );
 insert into public.settings (id) values (1) on conflict do nothing;
 
@@ -51,6 +54,8 @@ create table if not exists public.bookings (
                                     'sick','cancelled_student','cancelled_teacher')),
   cancel_reason   text check (char_length(cancel_reason) <= 300),
   late_cancel     boolean not null default false,  -- Fehlstunde (kostenpflichtig)
+  lesson_type     text not null default 'normal'
+                  check (lesson_type in ('normal','ueberland','autobahn','nacht')),  -- Sonderfahrten
   student_note    text check (char_length(student_note) <= 300),
   admin_reply     text check (char_length(admin_reply) <= 1000),
   actual_start    timestamptz,
@@ -92,7 +97,7 @@ end $$;
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion)
+  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion, phone)
   values (
     new.id,
     new.email,
@@ -101,7 +106,8 @@ begin
     case when new.raw_user_meta_data->>'license_class' in ('B','B197','B Automatik')
          then new.raw_user_meta_data->>'license_class' end,
     coalesce((new.raw_user_meta_data->>'needs_glasses')::boolean, false),
-    coalesce((new.raw_user_meta_data->>'is_conversion')::boolean, false)
+    coalesce((new.raw_user_meta_data->>'is_conversion')::boolean, false),
+    nullif(left(trim(coalesce(new.raw_user_meta_data->>'phone', '')), 30), '')
   );
   return new;
 end $$;
@@ -154,9 +160,19 @@ $$;
 -- Termin anfragen
 create or replace function public.book_slot(p_slot uuid, p_note text)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare v_id uuid; v_start timestamptz;
+declare v_id uuid; v_start timestamptz; v_max int; v_open int;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  -- Obergrenze: offene Anfragen + anstehende bestätigte Fahrstunden
+  select max_open into v_max from settings where id = 1;
+  if coalesce(v_max, 0) > 0 then
+    select count(*) into v_open from bookings b join slots s on s.id = b.slot_id
+    where b.student_id = auth.uid() and s.starts_at > now()
+      and (b.status = 'requested' or (b.status = 'confirmed' and b.actual_minutes is null));
+    if v_open >= v_max then
+      raise exception 'Du hast schon % offene bzw. anstehende Fahrstunden – mehr sind gerade nicht möglich.', v_open;
+    end if;
+  end if;
   select starts_at into v_start from slots where id = p_slot;
   if v_start is null then raise exception 'Termin nicht gefunden'; end if;
   if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
@@ -193,6 +209,23 @@ begin
          late_cancel = v_late, decided_at = now()
   where id = p_booking;
   return v_late;
+end $$;
+
+-- Eigene Profildaten ändern (Rolle und Freischaltung bleiben unberührt)
+create or replace function public.update_my_profile(
+  p_first text, p_last text, p_class text, p_glasses boolean, p_conversion boolean, p_phone text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  if coalesce(trim(p_first), '') = '' or coalesce(trim(p_last), '') = '' then
+    raise exception 'Bitte Vor- und Nachnamen angeben';
+  end if;
+  update profiles set
+    first_name = left(trim(p_first), 60), last_name = left(trim(p_last), 60),
+    license_class = case when p_class in ('B','B197','B Automatik') then p_class end,
+    needs_glasses = coalesce(p_glasses, false), is_conversion = coalesce(p_conversion, false),
+    phone = nullif(left(trim(coalesce(p_phone, '')), 30), '')
+  where id = auth.uid();
 end $$;
 
 -- Eigene, noch nicht bestätigte Anfrage zurückziehen
@@ -250,6 +283,7 @@ grant execute on function public.get_calendar(timestamptz, timestamptz) to authe
 grant execute on function public.book_slot(uuid, text) to authenticated;
 grant execute on function public.cancel_request(uuid) to authenticated;
 grant execute on function public.cancel_booking(uuid, text) to authenticated;
+grant execute on function public.update_my_profile(text, text, text, boolean, boolean, text) to authenticated;
 grant execute on function public.cancel_deadline(timestamptz) to authenticated;
 grant execute on function public.is_admin() to authenticated;
 grant execute on function public.is_active() to authenticated;

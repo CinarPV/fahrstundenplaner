@@ -18,12 +18,23 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 - **Neue Anmeldungen freischalten:** Wer sich registriert, sieht erst nach deiner Freischaltung den Kalender.
 - **Nach der Ausbildung:** Den Zugang **sperren** (die Fahrstunden-Historie bleibt bei dir) oder den Schüler **endgültig löschen** (Konto und alle Daten werden entfernt, z. B. für den Datenschutz).
 - Die Standarddauer unter „Einstellungen“ dauerhaft ändern.
+- **Schüler direkt eintragen:** In einem freien Termin einen Schüler auswählen, z. B. nach telefonischer Absprache. Die Fahrstunde ist dann sofort bestätigt.
+- **Sonderfahrten:** Beim Abhaken die Art wählen (Übungsfahrt, 🌳 Überland, 🛣️ Autobahn, 🌙 Nacht). Die Zahlen erscheinen pro Schüler in der Übersicht.
+- **Schülerdaten bearbeiten** (Name, Klasse, Sehhilfe, Umschreiber, Handynummer).
+- **Export** der Fahrstunden eines Schülers als Excel-Datei (CSV) oder zum Drucken bzw. als PDF.
+- **Höchstzahl offener Fahrstunden** pro Schüler festlegen (Einstellungen, Standard 3, 0 = unbegrenzt).
+- **WhatsApp-Benachrichtigung:** Nach Bestätigen, Ablehnen, Absagen oder Eintragen erscheint ein Knopf mit fertigem Nachrichtentext (wenn der Schüler eine Handynummer hinterlegt hat).
+- Rote Zahlen an den Tabs zeigen offene Anfragen, neue Anmeldungen und neue Absagen.
 
 **Fahrschüler**
 - Einmal registrieren mit Vor- und Nachname, Führerscheinklasse (B, B197 oder B Automatik), Sehhilfe ja/nein, Umschreiber ja/nein, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
 - Der Wochenkalender zeigt **freie** Termine, die **eigenen** Termine und Termine, die jemand anderes **angefragt** hat, die aber **noch nicht bestätigt** sind (ohne Namen). So lohnt es sich, wieder reinzuschauen. Bestätigte Fahrstunden anderer sind unsichtbar.
 - Freien Termin anfragen, mit einer kurzen Nachricht (max. 300 Zeichen). Ein Hinweis erklärt: Nach der Bestätigung ist die Fahrstunde verbindlich, und eine Absage nach dem Vortag 18:00 Uhr ist eine kostenpflichtige Fehlstunde.
 - Eine bestätigte Fahrstunde mit **„Fahrstunde absagen“** absagen. Dafür muss der Schüler einen kurzen Grund schreiben und einen Haken setzen. Nach der Frist erscheint eine deutliche Warnung, und die Absage wird automatisch als Fehlstunde vermerkt.
+- **Mein Profil:** eigene Daten (Name, Klasse, Sehhilfe, Umschreiber, Handynummer) selbst ändern.
+- **„Neu“-Markierung:** Eine rote Zahl am Tab „Meine Fahrstunden“ zeigt Bestätigungen, Ablehnungen oder abgehakte Stunden seit dem letzten Besuch.
+- Eigene Fahrstunden als **Excel-Datei (CSV)** speichern oder **drucken / als PDF** sichern, dazu eine Übersicht der Sonderfahrten.
+- Knopf **„💬 Fahrlehrer per WhatsApp“**. Nach einer Absage wird eine fertige Nachricht an den Fahrlehrer angeboten.
 - Unter „Meine Fahrstunden“ eine **nummerierte Liste aller gefahrenen Fahrstunden** (Datum, Uhrzeit, Minuten, Gesamtsumme) sehen.
 - Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers, die **gefahrenen Minuten** und **„Abgesagt – krank“** sehen.
 - Eine noch unbestätigte Anfrage zurückziehen.

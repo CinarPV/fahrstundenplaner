@@ -110,6 +110,138 @@ function studentTags(p) {
 }
 const isAdmin = () => state.profile && state.profile.role === "admin";
 
+// Sonderfahrten
+const LESSON_TYPES = { normal: "Übungsfahrt", ueberland: "Überlandfahrt", autobahn: "Autobahnfahrt", nacht: "Nachtfahrt" };
+const LESSON_ICON = { normal: "", ueberland: "🌳", autobahn: "🛣️", nacht: "🌙" };
+const SPECIAL_TYPES = ["ueberland", "autobahn", "nacht"];
+const typeLabel = (t) => `${LESSON_ICON[t || "normal"]} ${LESSON_TYPES[t || "normal"]}`.trim();
+
+// WhatsApp: Handynummer in internationales Format bringen (0151… → 49151…)
+function waNumber(phone) {
+  let d = (phone || "").replace(/[^\d+]/g, "");
+  if (d.startsWith("+")) d = d.slice(1);
+  else if (d.startsWith("00")) d = d.slice(2);
+  else if (d.startsWith("0")) d = "49" + d.slice(1);
+  return /^\d{8,15}$/.test(d) ? d : null;
+}
+function waButton(phone, text, label = "💬 Per WhatsApp schreiben") {
+  const n = waNumber(phone);
+  return n ? el("a", { class: "btn ok", href: `https://wa.me/${n}?text=${encodeURIComponent(text)}`, target: "_blank", rel: "noopener" }, label) : null;
+}
+// Nachrichtentext vom Fahrlehrer an den Schüler
+function waTextForStudent(kind, profile, slot, reply) {
+  const when = `${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr`;
+  const hi = `Hallo ${(profile && profile.first_name) || ""},`;
+  const body = {
+    confirmed: `${hi} deine Fahrstunde am ${when} (${slot.duration_min} Min.) ist bestätigt.`,
+    rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen. Schau gern nach einem anderen freien Termin.`,
+    cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
+  }[kind];
+  return body + (reply ? `\n${reply}` : "") + "\n\nDein Fahrlehrer";
+}
+// Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
+function notifyStep(msg, phone, text, who = "den Schüler") {
+  state.renderOnClose = true;
+  const wa = waButton(phone, text, `💬 ${who[0].toUpperCase() + who.slice(1)} per WhatsApp informieren`);
+  openModal("✓ " + msg,
+    wa ? el("p", {}, `Möchtest du ${who} per WhatsApp informieren? Der Text ist schon vorbereitet.`)
+       : el("p", { class: "muted small" }, `Für ${who} ist keine Handynummer hinterlegt – keine WhatsApp-Nachricht möglich.`),
+    wa ? el("div", { class: "note" }, text) : null,
+    el("div", { class: "actions" }, wa, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+}
+modal.addEventListener("close", () => { if (state.renderOnClose) { state.renderOnClose = false; render(); } });
+
+// "Neu"-Markierung: Zeitpunkt des letzten Besuchs pro Gerät merken
+const seenKey = (name) => `fsp_seen_${name}_${state.profile && state.profile.id}`;
+function getSeen(name) { try { return localStorage.getItem(seenKey(name)) || "1970-01-01T00:00:00Z"; } catch { return new Date().toISOString(); } }
+function markSeen(name) { try { localStorage.setItem(seenKey(name), new Date().toISOString()); } catch { /* egal */ } }
+
+// Formularfelder für Profildaten (Registrierung ausgenommen)
+function profileFields(p) {
+  const first = el("input", { value: p.first_name || "", autocomplete: "given-name" });
+  const last = el("input", { value: p.last_name || "", autocomplete: "family-name" });
+  const cls = el("select", {}, el("option", { value: "" }, "– keine Angabe –"),
+    LICENSE_CLASSES.map((c) => el("option", { value: c }, c)));
+  cls.value = p.license_class || "";
+  const glasses = el("input", { type: "checkbox" }); glasses.checked = !!p.needs_glasses;
+  const conversion = el("input", { type: "checkbox" }); conversion.checked = !!p.is_conversion;
+  const phone = el("input", { type: "tel", value: p.phone || "", placeholder: "z. B. 0151 23456789", autocomplete: "tel" });
+  return {
+    node: el("div", {},
+      el("div", { class: "row" },
+        el("div", {}, el("label", {}, "Vorname"), first),
+        el("div", {}, el("label", {}, "Nachname"), last)),
+      el("label", {}, "Führerscheinklasse"), cls,
+      el("label", { class: "check" }, glasses, "Sehhilfe (Brille / Kontaktlinsen)"),
+      el("label", { class: "check" }, conversion, "Umschreiber"),
+      el("label", {}, "Handynummer (für WhatsApp-Nachrichten, freiwillig)"), phone),
+    values: () => ({
+      first_name: first.value.trim(), last_name: last.value.trim(), license_class: cls.value || null,
+      needs_glasses: glasses.checked, is_conversion: conversion.checked, phone: phone.value.trim() || null,
+    }),
+  };
+}
+
+// Export der Fahrstunden eines Schülers: Excel (CSV) oder Drucken/PDF
+function lessonRows(rows) {
+  return rows.filter((b) => b.slots && b.status !== "requested" && b.status !== "cancelled")
+    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at))
+    .map((b) => ({
+      date: new Date(b.slots.starts_at).toLocaleDateString("de-DE"),
+      time: fmtRange(b.slots.starts_at, b.slots.duration_min),
+      type: b.actual_minutes !== null ? LESSON_TYPES[b.lesson_type || "normal"] : "",
+      minutes: b.actual_minutes ?? "",
+      status: b.status === "confirmed" ? (b.actual_minutes !== null ? "Gefahren" : "Bestätigt") : STATUS_TEXT[b.status],
+      late: b.late_cancel ? "ja" : "",
+      reason: b.cancel_reason || "",
+    }));
+}
+function exportCsv(p, rows) {
+  const head = ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "Status", "Fehlstunde", "Grund"];
+  const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [head.map(esc).join(";")].concat(lessonRows(rows).map((r, i) =>
+    [i + 1, r.date, r.time, r.type, r.minutes, r.status, r.late, r.reason].map(esc).join(";")));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = el("a", { href: URL.createObjectURL(blob), download: `Fahrstunden_${fullName(p).replace(/\s+/g, "_")}.csv` });
+  document.body.append(a); a.click(); a.remove();
+}
+function exportPrint(p, rows) {
+  const w = window.open("", "_blank");
+  if (!w) { toast("Bitte Pop-ups für diese Seite erlauben.", true); return; }
+  const d = w.document;
+  d.title = "Fahrstunden " + fullName(p);
+  const st = d.createElement("style");
+  st.textContent = "body{font:13px system-ui,sans-serif;margin:24px;color:#111}h1{font-size:20px;margin:0 0 4px}table{border-collapse:collapse;width:100%;margin-top:12px}th,td{border:1px solid #bbb;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}";
+  d.head.append(st);
+  const r = lessonRows(rows);
+  const done = r.filter((x) => x.status === "Gefahren");
+  const total = done.reduce((s, x) => s + (+x.minutes || 0), 0);
+  const tag = (t, txt, cls) => { const e = d.createElement(t); if (txt !== undefined) e.textContent = txt; if (cls) e.className = cls; return e; };
+  const table = tag("table");
+  const hr = tag("tr"); ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "Status", "Fehlstunde", "Grund"].forEach((h) => hr.append(tag("th", h)));
+  table.append(hr);
+  r.forEach((x, i) => { const tr = tag("tr"); [i + 1, x.date, x.time, x.type, x.minutes, x.status, x.late, x.reason].forEach((v, j) => tr.append(tag("td", v, j === 4 ? "r" : ""))); table.append(tr); });
+  const counts = SPECIAL_TYPES.map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
+  d.body.append(tag("h1", "Fahrstunden – " + fullName(p)),
+    tag("div", [p.license_class ? "Klasse " + p.license_class : "", `Stand: ${new Date().toLocaleDateString("de-DE")}`].filter(Boolean).join(" · ")),
+    tag("p", `Gefahren: ${done.length} Fahrstunden, ${total} Min. (${fmtMinutes(total)}) · ${counts}`),
+    table);
+  setTimeout(() => w.print(), 300);
+}
+function exportButtons(p, rows) {
+  return el("div", { class: "actions" },
+    el("button", { class: "btn small ghost", onclick: () => exportCsv(p, rows) }, "⬇ Excel (CSV)"),
+    el("button", { class: "btn small ghost", onclick: () => exportPrint(p, rows) }, "🖨 Drucken / PDF"));
+}
+// Sonderfahrten zählen
+function specialSummary(rows) {
+  const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null);
+  return SPECIAL_TYPES.map((t) => {
+    const list = done.filter((b) => b.lesson_type === t);
+    return `${LESSON_ICON[t]} ${LESSON_TYPES[t]}: ${list.length}× (${list.reduce((s, b) => s + b.actual_minutes, 0)} Min.)`;
+  }).join(" · ");
+}
+
 // Minuten-Auswahl: Wert vorbelegt, mit −/+ im 15-Minuten-Takt änderbar.
 // opts.fine = true erlaubt zusätzlich 5er-Schritte (für tatsächlich gefahrene Minuten).
 function durationControl(initial, opts = {}) {
@@ -232,6 +364,7 @@ function renderAuth(mode = "login") {
     LICENSE_CLASSES.map((c) => el("option", { value: c }, c === "B" ? "B (Schaltwagen)" : c === "B197" ? "B197 (Automatik-Prüfung + Schalt-Schulung)" : c)));
   const glasses = el("input", { type: "checkbox" });
   const conversion = el("input", { type: "checkbox" });
+  const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "z. B. 0151 23456789" });
   const submit = el("button", { class: "btn", type: "submit" }, mode === "login" ? "Anmelden" : "Registrieren");
 
   const form = el("form", {
@@ -248,6 +381,7 @@ function renderAuth(mode = "login") {
               data: {
                 first_name: first.value.trim(), last_name: last.value.trim(),
                 license_class: licenseClass.value, needs_glasses: glasses.checked, is_conversion: conversion.checked,
+                phone: phone.value.trim(),
               },
               emailRedirectTo: location.origin + location.pathname },
           });
@@ -269,6 +403,7 @@ function renderAuth(mode = "login") {
       el("label", {}, "Führerscheinklasse"), licenseClass,
       el("label", { class: "check" }, glasses, "Ich brauche eine Sehhilfe (Brille / Kontaktlinsen)"),
       el("label", { class: "check" }, conversion, "Ich bin Umschreiber (habe schon einen ausländischen Führerschein)"),
+      el("label", {}, "Handynummer (freiwillig – für WhatsApp-Nachrichten deines Fahrlehrers)"), phone,
     ] : null,
     el("label", {}, "E-Mail"), email,
     el("label", {}, "Passwort" + (mode === "register" ? " (mind. 6 Zeichen)" : "")), pw,
@@ -313,7 +448,7 @@ async function render() {
   state.dirty = false;
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
-    : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"]];
+    : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["profile", "Mein Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
     el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => { state.tab = id; render(); } }, label)));
@@ -321,6 +456,7 @@ async function render() {
   app.replaceChildren(tabbar, content);
 
   if (isAdmin()) updateRequestCount(tabbar);
+  else updateStudentNews(tabbar);
 
   try {
     let view;
@@ -329,6 +465,7 @@ async function render() {
     else if (state.tab === "students") view = await adminStudents();
     else if (state.tab === "settings") view = adminSettings();
     else if (state.tab === "mine") view = await studentMine();
+    else if (state.tab === "profile") view = studentProfile();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -336,16 +473,27 @@ async function render() {
   }
 }
 
+// Schüler: Zahl der Neuigkeiten (Bestätigung, Ablehnung, Abhaken …) seit dem letzten Blick auf "Meine Fahrstunden"
+async function updateStudentNews(tabbar) {
+  if (state.tab === "mine") return;
+  const { count } = await sb.from("bookings").select("id", { count: "exact", head: true })
+    .eq("student_id", state.profile.id).gt("decided_at", getSeen("mine"));
+  const btn = tabbar.querySelector('[data-tab="mine"]');
+  if (btn && count) btn.append(el("span", { class: "count" }, count));
+}
+
 async function updateRequestCount(tabbar) {
-  const [req, pend] = await Promise.all([
+  const [req, pend, canc] = await Promise.all([
     sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
     sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending"),
+    sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "cancelled_student").gt("decided_at", getSeen("requests")),
   ]);
   const badge = (tab, count) => {
     const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
     if (btn && count) btn.append(el("span", { class: "count" }, count));
   };
-  badge("requests", req.count);
+  badge("requests", (req.count || 0) + (state.tab === "requests" ? 0 : canc.count || 0));
+  if (state.tab === "requests") markSeen("requests");
   badge("students", pend.count);
 }
 
@@ -414,7 +562,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => b.status === "
 async function adminCalendar() {
   const from = state.weekStart, to = addDays(state.weekStart, 7);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,bookings(id,status,actual_minutes,late_cancel,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,bookings(id,status,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
 
@@ -430,7 +578,7 @@ async function adminCalendar() {
     if (b && b.status === "requested") { cls = "requested"; label = "Anfrage: " + fullName(b.profiles) + glasses(b.profiles); }
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
-      label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. · ` : "") + fullName(b.profiles) + glasses(b.profiles);
+      label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
     return el("button", { class: "slot " + cls, onclick: () => openAdminSlot(s.id) },
       el("b", {}, fmtRange(s.starts_at, s.duration_min)), label);
@@ -567,7 +715,7 @@ function newSlotForm() {
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,bookings(id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,bookings(id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -605,7 +753,7 @@ async function openAdminSlot(slotId) {
       done("Termin gelöscht.");
     });
     parts.push(el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
-      timeFields, el("div", { class: "actions" }, save, del));
+      timeFields, el("div", { class: "actions" }, save, del), el("hr"), await bookForStudentForm(slot, saveTime));
   } else {
     const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen. Treffpunkt: Bahnhof Haupteingang." }, b.admin_reply || "");
     parts.push(
@@ -624,14 +772,15 @@ async function openAdminSlot(slotId) {
         await saveTime();
         const { error } = await sb.from("bookings").update({ status: "confirmed", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
-        done("Fahrstunde bestätigt.");
+        const newSlot = { starts_at: fromInputs(date.value, time.value).toISOString(), duration_min: dur.value };
+        notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, reply.value.trim()));
       });
       const no = el("button", { class: "btn danger" }, "Ablehnen");
       no.onclick = () => busy(no, async () => {
         if (!confirm("Anfrage ablehnen? Der Termin wird danach wieder frei.")) return;
         const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
-        done("Anfrage abgelehnt – Termin ist wieder frei.");
+        notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, slot, reply.value.trim()));
       });
       parts.push(el("div", { class: "actions" }, ok, no));
     } else {
@@ -666,15 +815,50 @@ async function openAdminSlot(slotId) {
   openModal(`${fmtDate(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)}`, ...parts);
 }
 
+// Admin trägt einen Schüler direkt (bestätigt) in einen freien Termin ein – z. B. nach telefonischer Absprache
+async function bookForStudentForm(slot, saveTime) {
+  const { data: students, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
+    .eq("role", "student").eq("status", "active").order("last_name");
+  if (error) throw error;
+  if (!students.length) return el("p", { class: "muted small" }, "Noch keine freigeschalteten Schüler zum Eintragen.");
+  const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
+    students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
+  const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional), z. B. Treffpunkt" });
+  const btn = el("button", { class: "btn ok" }, "✓ Eintragen & bestätigen");
+  btn.onclick = () => busy(btn, async () => {
+    const st = students.find((x) => x.id === who.value);
+    if (!st) throw new Error("Bitte einen Schüler wählen");
+    await saveTime();
+    const { error } = await sb.from("bookings").insert({
+      slot_id: slot.id, student_id: st.id, status: "confirmed",
+      admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString(),
+    });
+    if (error) throw new Error(error.code === "23505" ? "Der Termin wurde gerade schon vergeben." : error.message);
+    const { data: fresh } = await sb.from("slots").select("starts_at,duration_min").eq("id", slot.id).single();
+    notifyStep(`${fullName(st)} eingetragen`, st.phone, waTextForStudent("confirmed", st, fresh || slot, reply.value.trim()));
+  });
+  return el("div", {},
+    el("h3", {}, "Für einen Schüler eintragen"),
+    el("p", { class: "muted small" }, "Z. B. nach telefonischer Absprache. Die Fahrstunde ist dann sofort bestätigt."),
+    who, el("label", {}, "Hinweis"), reply, el("div", { class: "actions" }, btn));
+}
+
 // Ergebnis einer bestätigten Fahrstunde: gefahren (mit Minuten) – oder warum sie nicht zustande kam
 function doneControls(slot, b, after, opts = {}) {
   const isDone = b.actual_minutes !== null;
   const mins = durationControl(isDone ? b.actual_minutes : slot.duration_min, { fine: true });
-  const check = el("button", { class: "btn ok" }, isDone ? "✓ Minuten speichern" : "✓ Gefahren – abhaken");
+  // Art der Fahrt (Sonderfahrten für den Ausbildungsnachweis)
+  let type = b.lesson_type || "normal";
+  const typeBtns = Object.keys(LESSON_TYPES).map((t) => el("button", {
+    type: "button", class: "tab" + (t === type ? " active" : ""),
+    onclick: (e) => { type = t; typeBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget)); },
+  }, typeLabel(t)));
+  const check = el("button", { class: "btn ok" }, isDone ? "✓ Speichern" : "✓ Gefahren – abhaken");
   check.onclick = () => busy(check, async () => {
-    const { error } = await sb.from("bookings").update({ actual_minutes: mins.value }).eq("id", b.id);
+    const { error } = await sb.from("bookings").update({ actual_minutes: mins.value, lesson_type: type }).eq("id", b.id);
     if (error) throw error;
-    after(`✓ Abgehakt: ${fmtMinutes(mins.value)} gefahren`);
+    after(`✓ Abgehakt: ${fmtMinutes(mins.value)} ${LESSON_TYPES[type]}`);
   });
   const undo = el("button", { class: "btn ghost" }, "Haken entfernen");
   undo.onclick = () => busy(undo, async () => {
@@ -706,7 +890,9 @@ function doneControls(slot, b, after, opts = {}) {
       actual_minutes: null, decided_at: new Date().toISOString(),
     }).eq("id", b.id);
     if (error) throw error;
-    after(`Gespeichert: ${STATUS_TEXT[r.value]}${isLateCancel ? " (Fehlstunde)" : ""}.`);
+    if (r.value === "cancelled_teacher") {
+      notifyStep("Fahrstunde abgesagt", b.profiles && b.profiles.phone, waTextForStudent("cancelled_teacher", b.profiles, slot, reason.value.trim()));
+    } else after(`Gespeichert: ${STATUS_TEXT[r.value]}${isLateCancel ? " (Fehlstunde)" : ""}.`);
   });
   const notHeld = el("details", { class: "nothere" },
     el("summary", {}, "✗ Nicht gefahren …"),
@@ -719,6 +905,7 @@ function doneControls(slot, b, after, opts = {}) {
       ? "Erledigt. Falls nötig, Minuten korrigieren oder den Haken entfernen."
       : "Geplant waren " + slot.duration_min + " Min. Kürzer oder länger gefahren? Minuten anpassen, dann abhaken."),
     mins.node,
+    el("div", { class: "tabs", style: "margin:10px 0 0;flex-wrap:wrap" }, typeBtns),
     el("div", { class: "actions" }, check, isDone ? undo : null),
     isDone ? null : notHeld);
 }
@@ -729,7 +916,7 @@ async function adminRequests() {
   const weekAgo = addDays(new Date(), -7).toISOString();
   const [req, open, cancels] = await Promise.all([
     sb.from("bookings").select("id,student_note,created_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)").eq("status", "requested").order("created_at"),
-    sb.from("bookings").select("id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
+    sb.from("bookings").select("id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
     sb.from("bookings").select("id,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .eq("status", "cancelled_student").gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
   ]);
@@ -769,16 +956,19 @@ async function adminRequests() {
 
 async function adminStudents() {
   const [p, b] = await Promise.all([
-    sb.from("profiles").select("id,first_name,last_name,email,license_class,needs_glasses,is_conversion,role,status,created_at").order("last_name"),
-    sb.from("bookings").select("student_id,status,actual_minutes,late_cancel"),
+    sb.from("profiles").select("id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,role,status,created_at").order("last_name"),
+    sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
   ]);
   if (p.error) throw p.error;
   if (b.error) throw b.error;
 
   const stats = {};
   for (const x of b.data) {
-    const s = (stats[x.student_id] ||= { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0 });
-    if (x.status === "confirmed" && x.actual_minutes !== null) { s.done++; s.minutes += x.actual_minutes; }
+    const s = (stats[x.student_id] ||= { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} });
+    if (x.status === "confirmed" && x.actual_minutes !== null) {
+      s.done++; s.minutes += x.actual_minutes;
+      if (SPECIAL_TYPES.includes(x.lesson_type)) s.special[x.lesson_type] = (s.special[x.lesson_type] || 0) + 1;
+    }
     else if (x.status === "confirmed") s.upcoming++;
     else if (x.status === "requested") s.open++;
     else if (NOT_HELD_ICON[x.status]) { s.notHeld++; if (x.late_cancel) s.late++; }
@@ -790,13 +980,14 @@ async function adminStudents() {
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."))),
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."))),
     el("tbody", {}, list.map((st) => {
-      const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0 };
+      const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
         el("td", {}, fullName(st), st.needs_glasses ? " 👓" : "", st.is_conversion ? el("div", { class: "small muted" }, "Umschreiber") : null),
         el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
-        el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late));
+        el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
+        el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late));
     }))));
 
   return el("div", {},
@@ -841,9 +1032,25 @@ async function deleteStudent(st) {
   render();
 }
 
+function openEditStudent(st) {
+  const f = profileFields(st);
+  const save = el("button", { class: "btn" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    const v = f.values();
+    if (!v.first_name || !v.last_name) throw new Error("Bitte Vor- und Nachnamen angeben");
+    const { error } = await sb.from("profiles").update(v).eq("id", st.id);
+    if (error) throw error;
+    toast("Gespeichert.");
+    Object.assign(st, v);
+    openStudent(st);
+  });
+  openModal("Daten bearbeiten – " + fullName(st), f.node,
+    el("div", { class: "actions" }, save, el("button", { class: "btn ghost", onclick: () => openStudent(st) }, "Zurück")));
+}
+
 async function openStudent(st) {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,slots(id,starts_at,duration_min)").eq("student_id", st.id);
+    .select("id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,lesson_type,slots(id,starts_at,duration_min)").eq("student_id", st.id);
   if (error) return fail(error);
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
 
@@ -856,15 +1063,18 @@ async function openStudent(st) {
   unblock.onclick = () => busy(unblock, () => setStudentStatus(st, "active"));
   const del = el("button", { class: "btn danger" }, "Endgültig löschen");
   del.onclick = () => busy(del, () => deleteStudent(st));
+  const edit = el("button", { class: "btn small ghost", onclick: () => openEditStudent(st) }, "✏️ Daten bearbeiten");
 
   openModal(fullName(st),
-    el("p", {}, studentTags(st)),
-    st.email ? el("p", { class: "muted small" }, st.email) : null,
+    el("div", { class: "done-row" }, studentTags(st), edit),
+    el("p", { class: "muted small" }, [st.email, st.phone].filter(Boolean).join(" · ")),
+    el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
+    el("p", { class: "small" }, specialSummary(data)),
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
         el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
         el("span", { class: "badge " + b.status }, b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
-      b.actual_minutes !== null ? el("div", { class: "small" }, "Gefahren: " + fmtMinutes(b.actual_minutes)) : null,
+      b.actual_minutes !== null ? el("div", { class: "small" }, `Gefahren: ${fmtMinutes(b.actual_minutes)} · ${typeLabel(b.lesson_type)}`) : null,
       b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null,
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null))
       : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
@@ -880,12 +1090,15 @@ async function openStudent(st) {
 
 function adminSettings() {
   const dur = durationControl(state.settings.default_duration);
+  const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3 });
+  const phone = el("input", { type: "tel", value: state.settings.admin_phone || "", placeholder: "z. B. 0151 23456789" });
   const save = el("button", { class: "btn" }, "Speichern");
   save.onclick = () => busy(save, async () => {
-    const { error } = await sb.from("settings").update({ default_duration: dur.value }).eq("id", 1);
+    const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null };
+    const { error } = await sb.from("settings").update(v).eq("id", 1);
     if (error) throw error;
-    state.settings.default_duration = dur.value;
-    toast("Standarddauer: " + dur.value + " Min.");
+    Object.assign(state.settings, v);
+    toast("Einstellungen gespeichert.");
   });
   const link = location.origin + location.pathname;
   const linkInput = el("input", { readonly: true, value: link });
@@ -893,7 +1106,14 @@ function adminSettings() {
     el("div", { class: "card" },
       el("h3", {}, "Standarddauer für neue Termine"),
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
-      dur.node, el("div", { class: "actions" }, save)),
+      dur.node,
+      el("h3", { style: "margin-top:18px" }, "Höchstzahl offener Fahrstunden pro Schüler"),
+      el("p", { class: "muted small" }, "So viele Anfragen + anstehende Fahrstunden darf ein Schüler gleichzeitig haben. 0 = unbegrenzt."),
+      maxOpen,
+      el("h3", { style: "margin-top:18px" }, "Deine Handynummer"),
+      el("p", { class: "muted small" }, "Damit Schüler dich per WhatsApp-Knopf erreichen (z. B. nach einer Absage). Wird nur freigeschalteten Schülern angezeigt."),
+      phone,
+      el("div", { class: "actions" }, save)),
     el("div", { class: "card" },
       el("h3", {}, "Link für deine Schüler"),
       el("p", { class: "muted small" }, "Diesen Link per WhatsApp oder SMS schicken. Schüler registrieren sich dort einmal mit Vor- und Nachnamen."),
@@ -959,6 +1179,28 @@ function openBooking(s) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
+/* ---------------- Schüler: Mein Profil ---------------- */
+
+function studentProfile() {
+  const f = profileFields(state.profile);
+  const save = el("button", { class: "btn" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    const v = f.values();
+    const { error } = await sb.rpc("update_my_profile", {
+      p_first: v.first_name, p_last: v.last_name, p_class: v.license_class,
+      p_glasses: v.needs_glasses, p_conversion: v.is_conversion, p_phone: v.phone,
+    });
+    if (error) throw error;
+    Object.assign(state.profile, v);
+    renderUserbox();
+    toast("Profil gespeichert.");
+  });
+  return el("div", { class: "card narrow", style: "margin:0 auto" },
+    el("h2", {}, "Mein Profil"),
+    el("p", { class: "muted small" }, state.profile.email || ""),
+    f.node, el("div", { class: "actions" }, save));
+}
+
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */
 
 // Übersicht aller abgehakten Fahrstunden – nummeriert, mit Datum, Uhrzeit und Minuten
@@ -969,14 +1211,15 @@ function doneList(rows, total) {
   return el("div", { class: "card" },
     el("h3", {}, "Gefahrene Fahrstunden"),
     el("div", { style: "overflow-x:auto" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Nr."), el("th", {}, "Datum"), el("th", {}, "Uhrzeit"), el("th", { class: "num" }, "Minuten"))),
+      el("thead", {}, el("tr", {}, el("th", {}, "Nr."), el("th", {}, "Datum"), el("th", {}, "Uhrzeit"), el("th", {}, "Art"), el("th", { class: "num" }, "Minuten"))),
       el("tbody", {}, done.map((b, i) => el("tr", {},
         el("td", {}, i + 1),
         el("td", {}, new Date(b.slots.starts_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })),
         el("td", {}, fmtTime(b.slots.starts_at)),
+        el("td", {}, typeLabel(b.lesson_type)),
         el("td", { class: "num" }, b.actual_minutes)))),
       el("tfoot", {}, el("tr", {},
-        el("th", { colspan: 3 }, `Gesamt: ${done.length} Fahrstunde${done.length === 1 ? "" : "n"}`),
+        el("th", { colspan: 4 }, `Gesamt: ${done.length} Fahrstunde${done.length === 1 ? "" : "n"}`),
         el("th", { class: "num" }, `${total} Min. (${fmtMinutes(total)})`))))));
 }
 
@@ -991,9 +1234,9 @@ function openStudentCancel(b) {
   btn.onclick = () => busy(btn, async () => {
     const { data: wasLate, error } = await sb.rpc("cancel_booking", { p_booking: b.id, p_reason: reason.value.trim() });
     if (error) throw error;
-    toast(wasLate ? "Abgesagt – als Fehlstunde vermerkt (kostenpflichtig)." : "Fahrstunde abgesagt.");
-    closeModal();
-    render();
+    const text = `Hallo, hier ist ${fullName(state.profile)}. Ich habe meine Fahrstunde am ${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr abgesagt.\nGrund: ${reason.value.trim()}`;
+    notifyStep(wasLate ? "Abgesagt – als Fehlstunde vermerkt (kostenpflichtig)" : "Fahrstunde abgesagt",
+      state.settings.admin_phone, text, "deinen Fahrlehrer");
   });
   openModal("Fahrstunde absagen",
     el("p", {}, el("b", {}, fmtDate(b.slots.starts_at)), el("br"), fmtRange(b.slots.starts_at, b.slots.duration_min)),
@@ -1009,7 +1252,7 @@ function openStudentCancel(b) {
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,created_at,slots(starts_at,duration_min)")
+    .select("id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,slots(starts_at,duration_min)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -1019,6 +1262,8 @@ async function studentMine() {
   const total = rows.reduce((sum, b) => sum + (b.status === "confirmed" && b.actual_minutes ? b.actual_minutes : 0), 0);
   const doneCount = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null).length;
   const notHeldCount = rows.filter((b) => NOT_HELD_ICON[b.status]).length;
+  const seen = getSeen("mine");
+  markSeen("mine");
   const lateCount = rows.filter((b) => b.late_cancel).length;
 
   const item = (b) => {
@@ -1036,11 +1281,12 @@ async function studentMine() {
     return el("div", { class: "list-item" },
       el("div", { class: "head" },
         el("div", {}, el("b", {}, fmtDate(b.slots.starts_at)), el("div", {}, fmtRange(b.slots.starts_at, b.slots.duration_min))),
+        b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null,
         el("span", { class: "badge " + b.status }, b.status === "requested" ? "Wartet auf Bestätigung"
           : b.status === "confirmed" && b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
       b.student_note ? el("div", { class: "note" }, "Deine Nachricht: ", b.student_note) : null,
       b.admin_reply ? el("div", { class: "note reply" }, el("b", {}, "Fahrlehrer: "), b.admin_reply) : null,
-      b.actual_minutes !== null ? el("div", { class: "small", style: "margin-top:8px" }, "Gefahren: ", el("b", {}, fmtMinutes(b.actual_minutes)),
+      b.actual_minutes !== null ? el("div", { class: "small", style: "margin-top:8px" }, `${typeLabel(b.lesson_type)} · gefahren: `, el("b", {}, fmtMinutes(b.actual_minutes)),
         b.actual_minutes !== b.slots.duration_min ? ` (geplant waren ${b.slots.duration_min} Min.)` : "") : null,
       b.cancel_reason ? el("div", { class: "note" }, "Grund der Absage: ", b.cancel_reason) : null,
       b.late_cancel ? el("div", { class: "notice danger" }, "Fehlstunde – kurzfristig abgesagt, kostenpflichtig.") : null,
@@ -1052,7 +1298,10 @@ async function studentMine() {
 
   return el("div", {},
     el("div", { class: "card" }, el("b", {}, `${doneCount} Fahrstunde${doneCount === 1 ? "" : "n"} gefahren`), " · insgesamt ", el("b", {}, fmtMinutes(total)),
-      notHeldCount ? ` · ${notHeldCount}× ausgefallen` : "", lateCount ? ` · davon ${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}` : ""),
+      notHeldCount ? ` · ${notHeldCount}× ausgefallen` : "", lateCount ? ` · davon ${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}` : "",
+      el("div", { class: "small", style: "margin-top:6px" }, "Sonderfahrten: ", specialSummary(rows)),
+      el("div", { class: "done-row" }, waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer per WhatsApp"),
+        rows.length ? exportButtons(state.profile, rows) : null)),
     doneList(rows, total),
     el("h2", { style: "margin-top:24px" }, "Anstehend"),
     upcoming.length ? upcoming.map(item) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
