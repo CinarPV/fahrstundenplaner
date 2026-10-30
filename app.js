@@ -207,9 +207,14 @@ function exportCsv(p, rows) {
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
   const lines = [head.map(esc).join(";")].concat(lessonRows(rows).map((r, i) =>
     [i + 1, r.date, r.time, r.type, r.minutes, r.status, r.late, r.reason].map(esc).join(";")));
-  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-  const a = el("a", { href: URL.createObjectURL(blob), download: `Fahrstunden_${fullName(p).replace(/\s+/g, "_")}.csv` });
+  downloadFile(csvBlob(lines), `Fahrstunden_${fullName(p).replace(/\s+/g, "_")}.csv`);
+}
+const csvBlob = (lines) => new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+function downloadFile(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: name });
   document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 function exportPrint(p, rows) {
   const w = window.open("", "_blank");
@@ -548,6 +553,9 @@ async function updateRequestCount(tabbar) {
   badge("requests", (req.count || 0) + (state.tab === "requests" ? 0 : canc.count || 0));
   if (state.tab === "requests") markSeen("requests");
   badge("students", pend.count);
+  // Erinnerung: Sicherung älter als 30 Tage
+  const st = tabbar.querySelector('[data-tab="settings"]');
+  if (st && backupOverdue()) st.append(el("span", { class: "count", title: "Datensicherung fällig" }, "!"));
 }
 
 function openCopyWeek(slots) {
@@ -1434,6 +1442,90 @@ function openLinkModal() {
     linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden bei mir (${state.settings.display_name || "deinem Fahrlehrer"}) anmelden:`));
 }
 
+/* ---------------- Fahrlehrer: Datensicherung ---------------- */
+
+// Supabase liefert höchstens 1000 Zeilen pro Abfrage – daher seitenweise holen
+async function fetchAll(makeQuery) {
+  let all = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await makeQuery().range(from, from + 999);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < 1000) return all;
+  }
+}
+async function loadOwnData() {
+  const tid = state.profile.id;
+  const [settings, students, slots, bookings] = await Promise.all([
+    sb.from("settings").select("*").eq("teacher_id", tid).maybeSingle().then(({ data, error }) => { if (error) throw error; return data; }),
+    fetchAll(() => sb.from("profiles").select("*").eq("teacher_id", tid).order("last_name")),
+    fetchAll(() => sb.from("slots").select("*").eq("teacher_id", tid).order("starts_at")),
+    fetchAll(() => sb.from("bookings").select("*").order("created_at")), // Zugriffsregeln: nur Buchungen auf eigenen Terminen
+  ]);
+  return { settings, students, slots, bookings };
+}
+const today = () => dateInput(new Date());
+const backupKey = () => `fsp_backup_${state.profile && state.profile.id}`;
+function lastBackup() { try { return localStorage.getItem(backupKey()); } catch { return null; } }
+const backupOverdue = () => { const l = lastBackup(); return !l || Date.now() - new Date(l).getTime() > 30 * 86400000; };
+
+// Komplette Sicherung als JSON-Datei (alle eigenen Daten, maschinenlesbar und wiederherstellbar)
+async function makeBackup() {
+  const d = await loadOwnData();
+  const { id, email, first_name, last_name, slug } = state.profile;
+  const backup = {
+    app: "Fahrstundenplaner", format: 1, created_at: new Date().toISOString(),
+    teacher: { id, email, first_name, last_name, slug },
+    counts: { students: d.students.length, slots: d.slots.length, bookings: d.bookings.length },
+    ...d,
+  };
+  downloadFile(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), `Sicherung_Fahrstundenplaner_${today()}.json`);
+  try { localStorage.setItem(backupKey(), new Date().toISOString()); } catch { /* egal */ }
+  return backup.counts;
+}
+// Alle Fahrstunden aller eigenen Schüler als Excel-Liste (CSV)
+async function exportAllLessons() {
+  const d = await loadOwnData();
+  const student = Object.fromEntries(d.students.map((x) => [x.id, x]));
+  const slot = Object.fromEntries(d.slots.map((x) => [x.id, x]));
+  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const head = ["Schüler", "Klasse", "Datum", "Uhrzeit", "Geplant (Min.)", "Gefahren (Min.)", "Art", "Status", "Fehlstunde", "Grund", "Notiz Schüler", "Hinweis Fahrlehrer"];
+  const rows = d.bookings.filter((b) => slot[b.slot_id] && b.status !== "cancelled")
+    .sort((a, b) => slot[a.slot_id].starts_at.localeCompare(slot[b.slot_id].starts_at))
+    .map((b) => {
+      const s = slot[b.slot_id], p = student[b.student_id];
+      return [p ? fullName(p) : "?", p && p.license_class, new Date(s.starts_at).toLocaleDateString("de-DE"), fmtRange(s.starts_at, s.duration_min),
+        s.duration_min, b.actual_minutes ?? "", b.actual_minutes !== null ? LESSON_TYPES[b.lesson_type || "normal"] : "",
+        b.status === "confirmed" && b.actual_minutes !== null ? "Gefahren" : STATUS_TEXT[b.status],
+        b.late_cancel ? "ja" : "", b.cancel_reason, b.student_note, b.admin_reply].map(esc).join(";");
+    });
+  downloadFile(csvBlob([head.map(esc).join(";")].concat(rows)), `Alle_Fahrstunden_${today()}.csv`);
+  return rows.length;
+}
+function backupCard() {
+  const last = lastBackup();
+  const btn = el("button", { class: "btn" }, "💾 Komplette Sicherung herunterladen");
+  btn.onclick = () => busy(btn, async () => {
+    const c = await makeBackup();
+    toast(`Sicherung gespeichert: ${c.students} Schüler, ${c.slots} Termine, ${c.bookings} Buchungen.`);
+    render();
+  });
+  const csv = el("button", { class: "btn ghost" }, "📊 Alle Fahrstunden als Excel-Liste");
+  csv.onclick = () => busy(csv, async () => { const n = await exportAllLessons(); toast(`${n} Einträge exportiert.`); });
+  return el("div", { class: "card" },
+    el("h3", {}, "💾 Datensicherung"),
+    backupOverdue() ? el("div", { class: "notice danger" }, last
+      ? `Deine letzte Sicherung auf diesem Gerät ist vom ${new Date(last).toLocaleDateString("de-DE")} – mehr als 30 Tage her. Bitte neu sichern.`
+      : "Auf diesem Gerät wurde noch keine Sicherung gemacht.") :
+      el("p", { class: "small" }, `✓ Letzte Sicherung auf diesem Gerät: ${new Date(last).toLocaleDateString("de-DE")}`),
+    el("p", { class: "muted small" },
+      "Die Sicherung enthält alle deine Daten: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen. ",
+      "Sie wird als Datei auf dieses Gerät geladen (Mac: Ordner „Downloads“, iPhone: App „Dateien“). ",
+      "Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren."),
+    el("div", { class: "actions" }, btn, csv),
+    el("p", { class: "muted small" }, "Die Excel-Liste ist zum Anschauen und Abrechnen gedacht. Für eine Wiederherstellung braucht man die Sicherungsdatei (.json)."));
+}
+
 // Eigenes Passwort ändern (Fahrlehrer und Schüler)
 function passwordCard() {
   const pw = el("input", { type: "password", minlength: 6, autocomplete: "new-password", placeholder: "Neues Passwort (mind. 6 Zeichen)" });
@@ -1483,6 +1575,7 @@ function adminSettings() {
       el("h3", {}, "🔗 Dein Schüler-Link"),
       el("p", { class: "muted small" }, "Wer sich über diesen Link registriert, landet automatisch bei dir. Den Link findest du auch jederzeit oben über „🔗 Schüler-Link“."),
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden bei mir (${state.settings.display_name || "deinem Fahrlehrer"}) anmelden:`)),
+    backupCard(),
     passwordCard(),
   );
 }

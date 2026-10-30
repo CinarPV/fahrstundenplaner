@@ -139,6 +139,21 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 
 ---
 
+## Datensicherung
+
+**Wo liegen die Daten?** Alle laufenden Daten (Schüler, Termine, Fahrstunden) liegen in **Supabase**, auf einem Server in Frankfurt (Region eu-central-1).
+
+**Sichern per Knopfdruck:** Unter **Einstellungen → 💾 Datensicherung**:
+- **„Komplette Sicherung herunterladen“** lädt eine Datei `Sicherung_Fahrstundenplaner_JJJJ-MM-TT.json` mit **allen deinen Daten** herunter: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen.
+- **„Alle Fahrstunden als Excel-Liste“** lädt eine Datei `Alle_Fahrstunden_JJJJ-MM-TT.csv` zum Anschauen und Abrechnen herunter.
+- Die Dateien landen auf **dem Gerät, auf dem du den Knopf drückst**: am Mac im Ordner „Downloads“, am iPhone in der App „Dateien“. Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren.
+- Ist die letzte Sicherung auf diesem Gerät **älter als 30 Tage**, erscheint ein rotes **„!“** am Tab „Einstellungen“.
+- Jeder Fahrlehrer sichert **nur seine eigenen** Daten.
+
+**Wiederherstellen:** Sollte einmal etwas verloren gehen, lassen sich die Daten aus der `.json`-Datei per SQL-Skript wieder einspielen. Dabei hilft Claude.
+
+---
+
 ## Dateien
 
 | Datei | Inhalt |
