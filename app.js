@@ -1353,6 +1353,7 @@ async function ownerTeachers() {
       if (error) throw error;
       render();
     });
+    const pwBtn = el("button", { class: "btn small ghost", onclick: () => openTeacherPassword(t) }, "🔑 Neues Passwort");
     const del = el("button", { class: "btn small danger" }, "Löschen");
     del.onclick = () => busy(del, async () => {
       const typed = prompt(`ACHTUNG: ${fullName(t)} wird mit ALLEN seinen Schülern, Terminen und Fahrstunden endgültig gelöscht.\n\nZum Bestätigen den Vornamen „${t.first_name}“ eintippen:`);
@@ -1369,7 +1370,7 @@ async function ownerTeachers() {
           t.is_owner ? el("span", { class: "badge admin" }, "Haupt-Admin") : null,
           t.status !== "active" ? el("span", { class: "badge rejected" }, "Gesperrt") : null,
           el("div", { class: "small muted" }, t.email || "")),
-        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, toggle, del)),
+        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, pwBtn, toggle, del)),
       el("div", { class: "done-row small" }, el("code", {}, link),
         el("button", { class: "btn small ghost", onclick: () => copyText(link, "Link kopiert.") }, "Kopieren")));
   };
@@ -1392,6 +1393,30 @@ async function ownerTeachers() {
       el("h2", {}, `Fahrlehrer (${teachers.length})`),
       teachers.map(row)),
   );
+}
+
+// Fahrlehrer hat sein Passwort vergessen: Haupt-Admin setzt ein neues (lesen kann man Passwörter nie)
+function openTeacherPassword(t) {
+  const pw = el("input", { value: randomPassword(), autocomplete: "off", minlength: 6 });
+  const btn = el("button", { class: "btn" }, "Neues Passwort setzen");
+  btn.onclick = () => busy(btn, async () => {
+    if (pw.value.length < 6) throw new Error("Mindestens 6 Zeichen");
+    const { error } = await sb.rpc("owner_set_teacher_password", { p_id: t.id, p_password: pw.value });
+    if (error) throw error;
+    const text = `Hallo ${t.first_name}, dein Passwort für den Fahrstundenplaner wurde zurückgesetzt.\n\n` +
+      `Anmelden: ${appLink()}\nE-Mail: ${t.email}\nNeues Passwort: ${pw.value}\n\nBitte ändere es nach der Anmeldung unter „Einstellungen“.`;
+    openModal(`✓ Neues Passwort für ${fullName(t)}`,
+      el("div", { class: "note", style: "white-space:pre-wrap" }, text),
+      el("div", { class: "actions" },
+        el("button", { class: "btn", onclick: () => copyText(text, "Kopiert.") }, "📋 Kopieren"),
+        el("a", { class: "btn ok", href: "https://wa.me/?text=" + encodeURIComponent(text), target: "_blank", rel: "noopener" }, "💬 Per WhatsApp senden"),
+        el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+  });
+  openModal(`🔑 Neues Passwort – ${fullName(t)}`,
+    el("p", { class: "muted small" }, "Passwörter sind verschlüsselt gespeichert und können von niemandem gelesen werden. Du kannst aber ein neues setzen – das alte gilt dann nicht mehr."),
+    el("label", {}, "Neues Passwort (mind. 6 Zeichen)"),
+    el("div", { class: "linkbox" }, pw, el("button", { type: "button", class: "btn ghost", title: "Neues Passwort erzeugen", onclick: () => (pw.value = randomPassword()) }, "🎲")),
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
 function showTeacherCredentials(v, needsConfirm) {
@@ -1502,6 +1527,40 @@ async function exportAllLessons() {
   downloadFile(csvBlob([head.map(esc).join(";")].concat(rows)), `Alle_Fahrstunden_${today()}.csv`);
   return rows.length;
 }
+// Sicherungsdatei auswählen, prüfen, Zusammenfassung zeigen und nach Bestätigung einspielen
+async function openRestore(f) {
+  let data;
+  try { data = JSON.parse(await f.text()); } catch { return toast("Diese Datei ist keine gültige Sicherung (.json).", true); }
+  if (!data || data.app !== "Fahrstundenplaner" || !Array.isArray(data.slots) || !Array.isArray(data.bookings)) {
+    return toast("Diese Datei ist keine Fahrstundenplaner-Sicherung.", true);
+  }
+  if (!data.teacher || data.teacher.id !== state.profile.id) {
+    return toast("Diese Sicherung gehört zu einem anderen Fahrlehrer-Konto und kann hier nicht eingespielt werden.", true);
+  }
+  const agree = el("input", { type: "checkbox" });
+  const btn = el("button", { class: "btn danger", disabled: true }, "Jetzt wiederherstellen");
+  agree.addEventListener("change", () => (btn.disabled = !agree.checked));
+  btn.onclick = () => busy(btn, async () => {
+    const { data: res, error } = await sb.rpc("restore_backup", { p_data: data });
+    if (error) throw error;
+    state.renderOnClose = true;
+    openModal("✓ Wiederhergestellt",
+      el("p", {}, `${res.students} Schüler, ${res.slots} Termine und ${res.bookings} Buchungen wurden auf den Stand vom ${new Date(data.created_at).toLocaleString("de-DE")} gebracht.`),
+      res.skipped ? el("p", { class: "muted small" }, `${res.skipped} ${res.skipped === 1 ? "Eintrag wurde" : "Einträge wurden"} übersprungen – z. B. weil ein Schülerkonto inzwischen gelöscht wurde oder ein Termin inzwischen anders vergeben ist.`) : null,
+      el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "Fertig")));
+  });
+  const c = data.counts || { students: (data.students || []).length, slots: data.slots.length, bookings: data.bookings.length };
+  openModal("📂 Sicherung wiederherstellen",
+    el("p", {}, "Datei: ", el("b", {}, f.name)),
+    el("p", {}, `Stand: ${new Date(data.created_at).toLocaleString("de-DE")} · ${c.students} Schüler · ${c.slots} Termine · ${c.bookings} Buchungen`),
+    el("div", { class: "notice" },
+      "Was passiert: Gelöschte Termine und Buchungen kommen zurück, geänderte werden auf den Stand der Sicherung zurückgesetzt. ",
+      "Was du seit der Sicherung neu angelegt hast, bleibt erhalten. Schülerkonten, die inzwischen gelöscht wurden, können nicht zurückgeholt werden."),
+    el("p", { class: "small" }, "Tipp: Mach vorher noch schnell eine aktuelle Sicherung – dann kannst du jederzeit zurück."),
+    el("label", { class: "check" }, agree, "Ich möchte die Daten auf den Stand dieser Sicherung zurücksetzen."),
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
 function backupCard() {
   const last = lastBackup();
   const btn = el("button", { class: "btn" }, "💾 Komplette Sicherung herunterladen");
@@ -1511,6 +1570,9 @@ function backupCard() {
     render();
   });
   const csv = el("button", { class: "btn ghost" }, "📊 Alle Fahrstunden als Excel-Liste");
+  const file = el("input", { type: "file", accept: ".json,application/json", hidden: true });
+  file.addEventListener("change", () => { if (file.files[0]) openRestore(file.files[0]); file.value = ""; });
+  const restore = el("button", { class: "btn ghost", onclick: () => file.click() }, "📂 Sicherung wiederherstellen …");
   csv.onclick = () => busy(csv, async () => { const n = await exportAllLessons(); toast(`${n} Einträge exportiert.`); });
   return el("div", { class: "card" },
     el("h3", {}, "💾 Datensicherung"),
@@ -1521,8 +1583,9 @@ function backupCard() {
     el("p", { class: "muted small" },
       "Die Sicherung enthält alle deine Daten: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen. ",
       "Sie wird als Datei auf dieses Gerät geladen (Mac: Ordner „Downloads“, iPhone: App „Dateien“). ",
-      "Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren."),
-    el("div", { class: "actions" }, btn, csv),
+      "Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren. ",
+      "Zum Wiederherstellen auf „Sicherung wiederherstellen“ tippen und die Datei auswählen."),
+    el("div", { class: "actions" }, btn, csv, restore, file),
     el("p", { class: "muted small" }, "Die Excel-Liste ist zum Anschauen und Abrechnen gedacht. Für eine Wiederherstellung braucht man die Sicherungsdatei (.json)."));
 }
 

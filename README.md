@@ -150,7 +150,18 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 - Ist die letzte Sicherung auf diesem Gerät **älter als 30 Tage**, erscheint ein rotes **„!“** am Tab „Einstellungen“.
 - Jeder Fahrlehrer sichert **nur seine eigenen** Daten.
 
-**Wiederherstellen:** Sollte einmal etwas verloren gehen, lassen sich die Daten aus der `.json`-Datei per SQL-Skript wieder einspielen. Dabei hilft Claude.
+**Wiederherstellen per Klick:** Unter **Einstellungen → 💾 Datensicherung → „📂 Sicherung wiederherstellen …“** die Sicherungsdatei auswählen. Die App zeigt das Datum und den Inhalt der Sicherung an. Nach Bestätigung mit einem Haken werden die Daten auf diesen Stand zurückgesetzt:
+- Gelöschte Termine und Buchungen kommen zurück, geänderte werden auf den Stand der Sicherung gesetzt.
+- Was seit der Sicherung neu angelegt wurde, bleibt erhalten.
+- Schülerkonten, die inzwischen **gelöscht** wurden, können nicht zurückgeholt werden; deren Buchungen werden übersprungen.
+- Man kann nur **die eigene** Sicherung einspielen, nie die eines anderen Fahrlehrers.
+
+## Passwort vergessen?
+
+- **Schüler:** Auf der Anmeldeseite auf **„Passwort vergessen?“** tippen. Sie bekommen eine E-Mail mit einem Link zum Zurücksetzen. Weder der Fahrlehrer noch der Haupt-Admin sieht oder setzt Schüler-Passwörter.
+- **Fahrlehrer:** Entweder ebenfalls über „Passwort vergessen?“ oder der **Haupt-Admin** setzt im Tab „Fahrlehrer“ mit **„🔑 Neues Passwort“** ein neues Passwort und schickt es per WhatsApp.
+- **Lesen** kann Passwörter niemand, auch der Haupt-Admin nicht. Sie sind verschlüsselt gespeichert und können nur **neu gesetzt** werden.
+- Hinweis: Im kostenlosen Supabase-Plan können nur wenige E-Mails pro Stunde verschickt werden. Für mehr kann man später einen eigenen E-Mail-Dienst anschließen.
 
 ---
 

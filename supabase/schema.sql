@@ -218,6 +218,21 @@ begin
   delete from auth.users where id = p_id;
 end $$;
 
+-- Neues Passwort für einen Fahrlehrer setzen (Passwörter selbst sind nie lesbar, nur neu setzbar).
+-- Gilt NUR für Fahrlehrer – Schüler setzen ihr Passwort selbst über „Passwort vergessen?“ zurück.
+create or replace function public.owner_set_teacher_password(p_id uuid, p_password text)
+returns void language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if not is_owner() then raise exception 'Nur der Haupt-Admin'; end if;
+  if p_id = auth.uid() then raise exception 'Dein eigenes Passwort änderst du unter Einstellungen'; end if;
+  if not exists (select 1 from profiles where id = p_id and role = 'teacher') then
+    raise exception 'Passwörter können nur für Fahrlehrer neu gesetzt werden';
+  end if;
+  if char_length(coalesce(p_password, '')) < 6 then raise exception 'Passwort: mindestens 6 Zeichen'; end if;
+  update auth.users set encrypted_password = crypt(p_password, gen_salt('bf')), updated_at = now()
+  where id = p_id;
+end $$;
+
 -- Für die Registrierungsseite: Namen + Kürzel der aktiven Fahrlehrer (ohne weitere Daten)
 create or replace function public.public_teachers()
 returns table (slug text, display_name text)
@@ -238,6 +253,91 @@ begin
     raise exception 'Nur der eigene Fahrlehrer darf diesen Schüler löschen';
   end if;
   delete from auth.users where id = p_id;
+end $$;
+
+-- Sicherung wiederherstellen (nur die eigene!). Gelöschte Termine/Buchungen kommen zurück,
+-- geänderte werden auf den Stand der Sicherung gesetzt. Neu Hinzugekommenes bleibt bestehen.
+-- Schülerkonten, die inzwischen gelöscht wurden, können nicht neu angelegt werden (deren Buchungen werden übersprungen).
+create or replace function public.restore_backup(p_data jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  me uuid := auth.uid();
+  r jsonb;
+  n_students int := 0; n_slots int := 0; n_bookings int := 0; n_skipped int := 0;
+begin
+  if not is_teacher() then raise exception 'Nur Fahrlehrer können eine Sicherung wiederherstellen'; end if;
+  if coalesce(p_data->>'app', '') <> 'Fahrstundenplaner' then raise exception 'Das ist keine Fahrstundenplaner-Sicherung'; end if;
+  if (p_data->'teacher'->>'id') is distinct from me::text then
+    raise exception 'Diese Sicherung gehört zu einem anderen Fahrlehrer-Konto';
+  end if;
+
+  -- Einstellungen
+  if jsonb_typeof(p_data->'settings') = 'object' then
+    begin
+      update settings set
+        display_name     = coalesce(p_data->'settings'->>'display_name', display_name),
+        default_duration = coalesce((p_data->'settings'->>'default_duration')::int, default_duration),
+        max_open         = coalesce((p_data->'settings'->>'max_open')::int, max_open),
+        admin_phone      = p_data->'settings'->>'admin_phone'
+      where teacher_id = me;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end if;
+
+  -- Schüler (nur Konten, die noch existieren und zu mir gehören bzw. keinem Fahrlehrer zugeordnet sind)
+  for r in select * from jsonb_array_elements(coalesce(p_data->'students', '[]'::jsonb)) loop
+    begin
+      update profiles set
+        first_name = coalesce(r->>'first_name', first_name), last_name = coalesce(r->>'last_name', last_name),
+        license_class = r->>'license_class',
+        needs_glasses = coalesce((r->>'needs_glasses')::boolean, false),
+        is_conversion = coalesce((r->>'is_conversion')::boolean, false),
+        phone = r->>'phone', max_open = (r->>'max_open')::int,
+        status = coalesce(r->>'status', status), teacher_id = me
+      where id = (r->>'id')::uuid and role = 'student' and (teacher_id = me or teacher_id is null);
+      if found then n_students := n_students + 1; else n_skipped := n_skipped + 1; end if;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end loop;
+
+  -- Termine
+  for r in select * from jsonb_array_elements(coalesce(p_data->'slots', '[]'::jsonb)) loop
+    begin
+      insert into slots (id, teacher_id, starts_at, duration_min, created_at)
+      values ((r->>'id')::uuid, me, (r->>'starts_at')::timestamptz, (r->>'duration_min')::int,
+              coalesce((r->>'created_at')::timestamptz, now()))
+      on conflict (id) do update set starts_at = excluded.starts_at, duration_min = excluded.duration_min
+        where slots.teacher_id = me;
+      if found then n_slots := n_slots + 1; else n_skipped := n_skipped + 1; end if;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end loop;
+
+  -- Buchungen (nur auf eigenen Terminen für eigene, noch existierende Schüler)
+  for r in select * from jsonb_array_elements(coalesce(p_data->'bookings', '[]'::jsonb)) loop
+    begin
+      if slot_teacher((r->>'slot_id')::uuid) is distinct from me
+         or student_teacher((r->>'student_id')::uuid) is distinct from me then
+        n_skipped := n_skipped + 1;
+        continue;
+      end if;
+      insert into bookings (id, slot_id, student_id, status, cancel_reason, late_cancel, lesson_type,
+                            student_note, admin_reply, actual_minutes, created_at, decided_at)
+      values ((r->>'id')::uuid, (r->>'slot_id')::uuid, (r->>'student_id')::uuid, r->>'status',
+              r->>'cancel_reason', coalesce((r->>'late_cancel')::boolean, false), coalesce(r->>'lesson_type', 'normal'),
+              r->>'student_note', r->>'admin_reply', (r->>'actual_minutes')::int,
+              coalesce((r->>'created_at')::timestamptz, now()), (r->>'decided_at')::timestamptz)
+      on conflict (id) do update set
+        status = excluded.status, cancel_reason = excluded.cancel_reason, late_cancel = excluded.late_cancel,
+        lesson_type = excluded.lesson_type, student_note = excluded.student_note, admin_reply = excluded.admin_reply,
+        actual_minutes = excluded.actual_minutes, decided_at = excluded.decided_at
+        where slot_teacher(bookings.slot_id) = me;
+      if found then n_bookings := n_bookings + 1; else n_skipped := n_skipped + 1; end if;
+    exception when others then n_skipped := n_skipped + 1;  -- z. B. Termin inzwischen anders vergeben
+    end;
+  end loop;
+
+  return jsonb_build_object('students', n_students, 'slots', n_slots, 'bookings', n_bookings, 'skipped', n_skipped);
 end $$;
 
 -- ---------- Funktionen für Schüler -----------------------------------
@@ -421,4 +521,6 @@ grant execute on function public.delete_student(uuid) to authenticated;
 grant execute on function public.create_teacher(uuid, text, text, text) to authenticated;
 grant execute on function public.set_teacher_status(uuid, text) to authenticated;
 grant execute on function public.delete_teacher(uuid) to authenticated;
+grant execute on function public.owner_set_teacher_password(uuid, text) to authenticated;
+grant execute on function public.restore_backup(jsonb) to authenticated;
 grant execute on function public.public_teachers() to anon, authenticated;
