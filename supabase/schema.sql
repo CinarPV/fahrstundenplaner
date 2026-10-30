@@ -10,7 +10,10 @@ create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
   first_name  text not null default '',
   last_name   text not null default '',
+  email       text,
   role        text not null default 'student' check (role in ('student','admin')),
+  -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt (z. B. Ausbildung beendet)
+  status      text not null default 'pending' check (status in ('pending','active','blocked')),
   created_at  timestamptz not null default now()
 );
 
@@ -57,13 +60,31 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (select 1 from profiles where id = auth.uid() and role = 'admin');
 $$;
 
+-- Freigeschaltet = Admin oder Schüler mit Status 'active'
+create or replace function public.is_active()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from profiles where id = auth.uid() and (role = 'admin' or status = 'active'));
+$$;
+
+-- Schüler endgültig löschen (Konto, Profil und alle Buchungen) – nur Admin
+create or replace function public.delete_student(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_admin() then raise exception 'Nur der Fahrlehrer darf Schüler löschen'; end if;
+  if exists (select 1 from profiles where id = p_id and role = 'admin') then
+    raise exception 'Admin-Konten können hier nicht gelöscht werden';
+  end if;
+  delete from auth.users where id = p_id;
+end $$;
+
 -- Neues Profil automatisch anlegen, wenn sich jemand registriert
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into profiles (id, first_name, last_name)
+  insert into profiles (id, email, first_name, last_name)
   values (
     new.id,
+    new.email,
     coalesce(trim(new.raw_user_meta_data->>'first_name'), ''),
     coalesce(trim(new.raw_user_meta_data->>'last_name'), '')
   );
@@ -85,7 +106,7 @@ begin
   if v_id is null then
     return 'Kein Benutzer mit dieser E-Mail gefunden – erst in der App registrieren.';
   end if;
-  update profiles set role = 'admin' where id = v_id;
+  update profiles set role = 'admin', status = 'active' where id = v_id;
   return 'OK – ' || p_email || ' ist jetzt Admin.';
 end $$;
 revoke execute on function public.make_admin(text) from public, anon, authenticated;
@@ -109,7 +130,7 @@ language sql stable security definer set search_path = public as $$
   left join bookings b
     on b.slot_id = s.id and b.status in ('requested','confirmed')
   where s.starts_at >= p_from and s.starts_at < p_to
-    and auth.uid() is not null
+    and is_active()
   order by s.starts_at;
 $$;
 
@@ -118,7 +139,7 @@ create or replace function public.book_slot(p_slot uuid, p_note text)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_start timestamptz;
 begin
-  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
   select starts_at into v_start from slots where id = p_slot;
   if v_start is null then raise exception 'Termin nicht gefunden'; end if;
   if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
@@ -137,7 +158,7 @@ create or replace function public.cancel_request(p_booking uuid)
 returns void language plpgsql security definer set search_path = public as $$
 begin
   update bookings set status = 'cancelled', decided_at = now()
-  where id = p_booking and student_id = auth.uid() and status = 'requested';
+  where id = p_booking and student_id = auth.uid() and status = 'requested' and is_active();
   if not found then raise exception 'Anfrage kann nicht zurückgezogen werden'; end if;
 end $$;
 
@@ -156,10 +177,10 @@ drop policy if exists profiles_admin_update on public.profiles;
 create policy profiles_admin_update on public.profiles for update
   using (public.is_admin()) with check (public.is_admin());
 
--- Einstellungen: alle Angemeldeten lesen, nur Admin ändert
+-- Einstellungen: alle Freigeschalteten lesen, nur Admin ändert
 drop policy if exists settings_select on public.settings;
 create policy settings_select on public.settings for select
-  using (auth.uid() is not null);
+  using (public.is_active());
 drop policy if exists settings_update on public.settings;
 create policy settings_update on public.settings for update
   using (public.is_admin()) with check (public.is_admin());
@@ -171,13 +192,13 @@ create policy slots_admin on public.slots for all
 -- Schüler dürfen die Termine ihrer EIGENEN Buchungen lesen
 drop policy if exists slots_own on public.slots;
 create policy slots_own on public.slots for select
-  using (exists (select 1 from public.bookings b
+  using (public.is_active() and exists (select 1 from public.bookings b
                  where b.slot_id = slots.id and b.student_id = auth.uid()));
 
--- Buchungen: Schüler sehen nur eigene; Admin alles
+-- Buchungen: freigeschaltete Schüler sehen nur eigene; Admin alles
 drop policy if exists bookings_select on public.bookings;
 create policy bookings_select on public.bookings for select
-  using (student_id = auth.uid() or public.is_admin());
+  using ((student_id = auth.uid() and public.is_active()) or public.is_admin());
 drop policy if exists bookings_admin on public.bookings;
 create policy bookings_admin on public.bookings for all
   using (public.is_admin()) with check (public.is_admin());
@@ -187,3 +208,5 @@ grant execute on function public.get_calendar(timestamptz, timestamptz) to authe
 grant execute on function public.book_slot(uuid, text) to authenticated;
 grant execute on function public.cancel_request(uuid) to authenticated;
 grant execute on function public.is_admin() to authenticated;
+grant execute on function public.is_active() to authenticated;
+grant execute on function public.delete_student(uuid) to authenticated;

@@ -160,7 +160,21 @@ async function loadUserAndRender() {
   } catch (e) { fail(e); }
   state.tab = "calendar";
   renderUserbox();
-  render();
+  if (state.profile && !isAdmin() && state.profile.status !== "active") renderWaiting();
+  else render();
+}
+
+// Schüler ist (noch) nicht freigeschaltet oder wurde gesperrt
+function renderWaiting() {
+  const blocked = state.profile.status === "blocked";
+  app.replaceChildren(el("div", { class: "card narrow" },
+    el("h2", {}, blocked ? "Zugang beendet" : "Fast geschafft – warte auf Freischaltung"),
+    el("p", {}, blocked
+      ? "Dein Zugang zum Fahrstundenplaner ist nicht mehr aktiv. Bei Fragen wende dich bitte direkt an deinen Fahrlehrer."
+      : `Hallo ${state.profile.first_name || ""}! Deine Anmeldung ist angekommen. Dein Fahrlehrer muss dich noch freischalten – danach siehst du hier den Kalender und kannst Fahrstunden anfragen.`),
+    blocked ? null : el("div", { class: "actions" },
+      el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen")),
+  ));
 }
 
 function renderUserbox() {
@@ -271,9 +285,16 @@ async function render() {
 }
 
 async function updateRequestCount(tabbar) {
-  const { count } = await sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested");
-  const btn = tabbar.querySelector('[data-tab="requests"]');
-  if (btn && count) btn.append(el("span", { class: "count" }, count));
+  const [req, pend] = await Promise.all([
+    sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
+    sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending"),
+  ]);
+  const badge = (tab, count) => {
+    const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
+    if (btn && count) btn.append(el("span", { class: "count" }, count));
+  };
+  badge("requests", req.count);
+  badge("students", pend.count);
 }
 
 function weekBar() {
@@ -565,7 +586,7 @@ async function adminRequests() {
 
 async function adminStudents() {
   const [p, b] = await Promise.all([
-    sb.from("profiles").select("id,first_name,last_name,role,created_at").order("last_name"),
+    sb.from("profiles").select("id,first_name,last_name,email,role,status,created_at").order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes"),
   ]);
   if (p.error) throw p.error;
@@ -579,19 +600,60 @@ async function adminStudents() {
     else if (x.status === "requested") s.open++;
   }
   const students = p.data.filter((x) => x.role === "student");
+  const pending = students.filter((x) => x.status === "pending");
+  const active = students.filter((x) => x.status === "active");
+  const blocked = students.filter((x) => x.status === "blocked");
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
-  return el("div", { class: "card" },
-    el("h2", {}, "Schüler"),
-    el("div", { style: "overflow-x:auto" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", { class: "num" }, "Offen"))),
-      el("tbody", {}, students.map((st) => {
-        const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0 };
-        return el("tr", { class: "clickable", onclick: () => openStudent(st) },
-          el("td", {}, fullName(st)), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
-          el("td", { class: "num" }, s.upcoming), el("td", { class: "num" }, s.open));
-      })))),
-    el("p", { class: "muted small" }, "Auf einen Namen tippen, um alle Fahrstunden zu sehen."));
+  const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", { class: "num" }, "Offen"))),
+    el("tbody", {}, list.map((st) => {
+      const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0 };
+      return el("tr", { class: "clickable", onclick: () => openStudent(st) },
+        el("td", {}, fullName(st)), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
+        el("td", { class: "num" }, s.upcoming), el("td", { class: "num" }, s.open));
+    }))));
+
+  return el("div", {},
+    pending.length ? el("div", { class: "card" },
+      el("h2", {}, "Neue Anmeldungen"),
+      el("p", { class: "muted small" }, "Diese Personen haben sich registriert und warten auf deine Freischaltung. Erst danach sehen sie den Kalender."),
+      pending.map((st) => {
+        const ok = el("button", { class: "btn small ok" }, "✓ Freischalten");
+        ok.onclick = () => busy(ok, () => setStudentStatus(st, "active"));
+        const del = el("button", { class: "btn small danger" }, "Ablehnen & löschen");
+        del.onclick = () => busy(del, () => deleteStudent(st));
+        return el("div", { class: "list-item" },
+          el("div", { class: "head" },
+            el("div", {}, el("b", {}, fullName(st)), el("div", { class: "small muted" }, st.email || "", " · registriert am ", fmtDay(st.created_at))),
+            el("div", { class: "actions", style: "margin:0" }, ok, del)));
+      })) : null,
+    el("div", { class: "card" },
+      el("h2", {}, "Aktive Schüler"),
+      active.length ? table(active) : el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler."),
+      el("p", { class: "muted small" }, "Auf einen Namen tippen, um Fahrstunden zu sehen oder den Zugang zu beenden.")),
+    blocked.length ? el("div", { class: "card" },
+      el("h2", {}, "Gesperrt / Ausbildung beendet"),
+      table(blocked)) : null,
+  );
+}
+
+async function setStudentStatus(st, status) {
+  const { error } = await sb.from("profiles").update({ status }).eq("id", st.id);
+  if (error) throw error;
+  const msg = { active: "freigeschaltet", blocked: "gesperrt" }[status];
+  toast(`${fullName(st)} wurde ${msg}.`);
+  closeModal();
+  render();
+}
+
+async function deleteStudent(st) {
+  if (!confirm(`${fullName(st)} endgültig löschen?\n\nDas Konto und ALLE Fahrstunden-Einträge dieser Person werden gelöscht. Das kann nicht rückgängig gemacht werden.`)) return;
+  const { error } = await sb.rpc("delete_student", { p_id: st.id });
+  if (error) throw error;
+  toast(`${fullName(st)} wurde gelöscht.`);
+  closeModal();
+  render();
 }
 
 async function openStudent(st) {
@@ -599,13 +661,31 @@ async function openStudent(st) {
     .select("id,status,student_note,admin_reply,actual_minutes,slots(id,starts_at,duration_min)").eq("student_id", st.id);
   if (error) return fail(error);
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
+
+  const block = el("button", { class: "btn danger" }, "Zugang sperren (Ausbildung beendet)");
+  block.onclick = () => busy(block, async () => {
+    if (!confirm(`Zugang von ${fullName(st)} sperren? Die Person sieht danach keine Termine mehr und kann nichts mehr buchen. Die gefahrenen Stunden bleiben bei dir gespeichert.`)) return;
+    await setStudentStatus(st, "blocked");
+  });
+  const unblock = el("button", { class: "btn ok" }, "Wieder freischalten");
+  unblock.onclick = () => busy(unblock, () => setStudentStatus(st, "active"));
+  const del = el("button", { class: "btn danger" }, "Endgültig löschen");
+  del.onclick = () => busy(del, () => deleteStudent(st));
+
   openModal(fullName(st),
+    st.email ? el("p", { class: "muted small" }, st.email) : null,
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
         el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
         el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status])),
       b.actual_minutes !== null ? el("div", { class: "small" }, "Gefahren: " + fmtMinutes(b.actual_minutes)) : null))
-      : el("p", { class: "muted" }, "Noch keine Fahrstunden."));
+      : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
+    el("hr"),
+    el("h3", {}, "Zugang"),
+    el("p", { class: "muted small" }, st.status === "blocked"
+      ? "Gesperrt: Die Person sieht keine Termine mehr. Du kannst sie wieder freischalten oder endgültig löschen."
+      : "Nach der Ausbildung: Sperren behält die Fahrstunden-Historie bei dir. Löschen entfernt Konto und alle Daten (z. B. für den Datenschutz)."),
+    el("div", { class: "actions" }, st.status === "blocked" ? unblock : block, del));
 }
 
 /* ---------------- Admin: Einstellungen ---------------- */

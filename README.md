@@ -11,10 +11,12 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 - Anfragen **bestätigen** (verbindlich) oder **ablehnen**. Dabei lassen sich die Uhrzeit anpassen und eine Antwort schreiben, etwa „Ausweis + Brille mitbringen, Treffpunkt Bahnhof“.
 - Nach der Fahrstunde die **tatsächliche Fahrzeit** eintragen (Beginn und Ende, die Minuten werden berechnet).
 - Übersicht pro Schüler: Anzahl gefahrener Stunden und Gesamtzeit.
+- **Neue Anmeldungen freischalten:** Wer sich registriert, sieht erst nach deiner Freischaltung den Kalender.
+- **Nach der Ausbildung:** Den Zugang **sperren** (die Fahrstunden-Historie bleibt bei dir) oder den Schüler **endgültig löschen** (Konto und alle Daten werden entfernt, z. B. für den Datenschutz).
 - Die Standarddauer unter „Einstellungen“ dauerhaft ändern.
 
 **Fahrschüler**
-- Einmal registrieren mit Vor- und Nachname, E-Mail und Passwort.
+- Einmal registrieren mit Vor- und Nachname, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
 - Wochenkalender mit den Zuständen **frei**, **angefragt (noch nicht bestätigt)** und **gebucht**. Fremde Namen sieht der Schüler nicht.
 - Freien Termin anfragen, mit einer kurzen Nachricht (max. 300 Zeichen).
 - Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers und die gefahrene Zeit sehen.
@@ -79,6 +81,21 @@ Optional: Unter **Authentication → Providers → Email** lässt sich „Confir
 ### 6. Link an die Schüler schicken
 Unter **Einstellungen → Link für deine Schüler** auf **Kopieren** klicken und den Link per WhatsApp schicken.
 
+### 7. Schüler freischalten
+Neue Registrierungen erscheinen im Tab **Schüler** unter „Neue Anmeldungen“ (rote Zahl am Tab). Mit **✓ Freischalten** erhält die Person Zugang, mit **Ablehnen & löschen** wird sie entfernt.
+Nach der Ausbildung tippst du in der Schülerliste auf den Namen und wählst **Zugang sperren** oder **Endgültig löschen**.
+
+---
+
+## Vorher lokal testen (ohne GitHub)
+
+Bevor die App online geht, kannst du sie auf deinem Mac ausprobieren:
+1. Schritte 1–5 oben durchführen. In Schritt 3 trägst du als Adresse vorerst `http://localhost:8000/` ein.
+2. Im Ordner der App starten: `python3 -m http.server 8000`
+3. Im Browser `http://localhost:8000/` öffnen.
+
+Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) die echte Adresse.
+
 ---
 
 ## Dateien
@@ -92,6 +109,7 @@ Unter **Einstellungen → Link für deine Schüler** auf **Kopieren** klicken un
 | `supabase/schema.sql` | Datenbank-Tabellen und Zugriffsregeln |
 
 ## Sicherheit in Kürze
+- Nicht freigeschaltete oder gesperrte Personen sehen **gar nichts**: keine Termine und keine Einstellungen. Das prüft die Datenbank selbst, nicht nur die Oberfläche.
 - Schüler sehen nur **eigene** Anfragen und Nachrichten. Bei fremden Terminen steht nur „angefragt“ oder „gebucht“.
 - Nur der Admin kann Termine anlegen, bestätigen, ablehnen und Fahrzeiten eintragen.
 - Ein Termin kann nie doppelt angefragt werden. Das prüft die Datenbank selbst.
