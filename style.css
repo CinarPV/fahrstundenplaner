@@ -176,3 +176,22 @@ code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2
 .badge.offered { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-bd); }
 .badge.declined { background: var(--done-bg); color: var(--done-fg); border-color: var(--done-bd); }
 .list-item.offer { border-color: var(--off-fg); box-shadow: inset 4px 0 0 var(--off-fg); }
+/* Ausbildungsstand */
+.training .bar { height: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 6px 0 12px; }
+.training .bar.small { height: 6px; margin: 0; width: 120px; flex: none; }
+.training .bar i { display: block; height: 100%; background: linear-gradient(90deg, #60a5fa, #16a34a); }
+.stage { margin-top: 14px; }
+.stage-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 2px solid var(--border); padding-bottom: 4px; margin-bottom: 4px; }
+.stage-head h4 { margin: 0; font-size: 15px; color: #1e3a8a; }
+.topic { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 6px; border: none; border-bottom: 1px solid var(--border); background: none; font: inherit; color: var(--text); text-align: left; }
+.topic.editable { cursor: pointer; border-radius: 6px; }
+.topic.editable:hover { background: var(--bg); }
+.topic-title { font-size: 14px; }
+.lv-wrap { display: flex; align-items: center; gap: 8px; flex: none; }
+.lv-text { width: 64px; text-align: right; }
+.lv { display: inline-flex; gap: 3px; vertical-align: middle; }
+.lv i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); background: #fff; display: inline-block; }
+.lv i.on.l1 { background: #fde68a; border-color: #f59e0b; }
+.lv i.on.l2 { background: #93c5fd; border-color: #2563eb; }
+.lv i.on.l3 { background: #4ade80; border-color: #16a34a; }
+.lv-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 4px; }

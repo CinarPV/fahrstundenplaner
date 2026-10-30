@@ -558,7 +558,7 @@ async function render() {
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
-    : [["calendar", "Kalender"], ["mine", "Meine Stunden"], ["profile", "Profil"]];
+    : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
     el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => { state.tab = id; render(); } }, label)));
@@ -577,6 +577,7 @@ async function render() {
     else if (state.tab === "teachers") view = await ownerTeachers();
     else if (state.tab === "mine") view = await studentMine();
     else if (state.tab === "profile") view = studentProfile();
+    else if (state.tab === "training") view = await studentTraining();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -1114,6 +1115,102 @@ function doneControls(slot, b, after, opts = {}) {
     isDone ? null : notHeld);
 }
 
+/* ---------------- Ausbildungsstand ---------------- */
+
+const STAGES = [
+  ["grund", "Grundstufe"], ["aufbau", "Aufbaustufe"], ["leistung", "Leistungsstufe"],
+  ["grundfahr", "Grundfahraufgaben"], ["sonder", "Besondere Ausbildungsfahrten"],
+  ["reife", "Reife- und Teststufe"], ["eigene", "Eigene Themen & Strecken"],
+];
+const LEVELS = ["offen", "eingeführt", "geübt", "sicher"];
+// Sonderfahrt-Thema ↔ Fahrt-Art beim Abhaken (zeigt, wie oft schon gefahren)
+const TOPIC_LESSON = { s01: "ueberland", s02: "autobahn", s03: "nacht" };
+
+// Ausbildungsstand eines Schülers: editable = Fahrlehrer (antippen), sonst nur ansehen
+async function trainingView(student, editable, lessons) {
+  const [t, p] = await Promise.all([
+    sb.from("training_topics").select("id,stage,sort,title").order("sort"),
+    sb.from("training_progress").select("topic_id,level,updated_at").eq("student_id", student.id),
+  ]);
+  if (t.error) throw t.error;
+  if (p.error) throw p.error;
+  const level = Object.fromEntries(p.data.map((x) => [x.topic_id, x.level]));
+  const topics = t.data;
+  const done = (lessons || []).filter((b) => b.status === "confirmed" && b.actual_minutes !== null);
+  const total = el("div", {});
+  const stageBars = {};
+
+  function percent(list) {
+    if (!list.length) return 0;
+    return Math.round((list.reduce((sum, x) => sum + (level[x.id] || 0), 0) / (list.length * 3)) * 100);
+  }
+  function updateBars() {
+    const pc = percent(topics);
+    total.replaceChildren(
+      el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
+        el("b", {}, `Gesamt: ${pc} %`),
+        el("span", { class: "small muted" }, `${topics.filter((x) => level[x.id] === 3).length} von ${topics.length} Themen sicher`)),
+      el("div", { class: "bar" }, el("i", { style: `width:${pc}%` })));
+    for (const [stage, node] of Object.entries(stageBars)) {
+      const pcs = percent(topics.filter((x) => x.stage === stage));
+      node.replaceChildren(el("i", { style: `width:${pcs}%` }));
+      node.title = pcs + " %";
+    }
+  }
+
+  function row(topic) {
+    const dots = el("span", { class: "lv" });
+    const label = el("span", { class: "small muted lv-text" });
+    const paint = () => {
+      const l = level[topic.id] || 0;
+      dots.replaceChildren(...[1, 2, 3].map((n) => el("i", { class: n <= l ? "on l" + l : "" })));
+      label.textContent = LEVELS[l];
+    };
+    paint();
+    const lt = TOPIC_LESSON[topic.id];
+    const count = lt ? done.filter((b) => b.lesson_type === lt) : null;
+    const info = count ? el("span", { class: "small muted" }, ` · ${count.length}× gefahren (${count.reduce((s2, b) => s2 + b.actual_minutes, 0)} Min.)`) : null;
+    const attrs = { class: "topic" + (editable ? " editable" : "") };
+    if (editable) {
+      attrs.title = "Antippen: offen → eingeführt → geübt → sicher";
+      attrs.onclick = async () => {
+        const old = level[topic.id] || 0, next = (old + 1) % 4;
+        level[topic.id] = next; paint(); updateBars();
+        const { error } = next === 0
+          ? await sb.from("training_progress").delete().eq("student_id", student.id).eq("topic_id", topic.id)
+          : await sb.from("training_progress").upsert({ student_id: student.id, topic_id: topic.id, level: next, updated_at: new Date().toISOString() });
+        if (error) { level[topic.id] = old; paint(); updateBars(); fail(error); }
+      };
+    }
+    return el(editable ? "button" : "div", attrs, el("span", { class: "topic-title" }, topic.title, info), el("span", { class: "lv-wrap" }, label, dots));
+  }
+
+  const sections = STAGES.map(([stage, name]) => {
+    const list = topics.filter((x) => x.stage === stage);
+    if (!list.length) return null;
+    stageBars[stage] = el("div", { class: "bar small" });
+    return el("div", { class: "stage" },
+      el("div", { class: "stage-head" }, el("h4", {}, name), stageBars[stage]),
+      list.map(row));
+  });
+  updateBars();
+  return el("div", { class: "training" },
+    total,
+    el("div", { class: "lv-legend small muted" },
+      [1, 2, 3].map((n) => el("span", {}, el("span", { class: "lv" }, [1, 2, 3].map((k) => el("i", { class: k <= n ? "on l" + n : "" }))), " " + LEVELS[n])),
+      editable ? el("span", {}, "· Thema antippen, um die Stufe zu ändern") : null),
+    sections);
+}
+
+async function openTraining(st, lessons) {
+  openModal("📈 Ausbildungsstand – " + fullName(st), el("p", { class: "muted" }, "Lädt …"));
+  try {
+    const view = await trainingView(st, true, lessons);
+    openModal("📈 Ausbildungsstand – " + fullName(st), view,
+      el("div", { class: "actions" }, el("button", { class: "btn ghost", onclick: () => openStudent(st) }, "‹ Zurück zum Schüler")));
+  } catch (e) { fail(e); }
+}
+
 /* ---------------- Admin: Anfragen ---------------- */
 
 async function adminRequests() {
@@ -1322,9 +1419,10 @@ async function openStudent(st) {
   const del = el("button", { class: "btn danger" }, "Endgültig löschen");
   del.onclick = () => busy(del, () => deleteStudent(st));
   const edit = el("button", { class: "btn small ghost", onclick: () => openEditStudent(st) }, "✏️ Daten bearbeiten");
+  const training = el("button", { class: "btn small", onclick: () => openTraining(st, data) }, "📈 Ausbildungsstand");
 
   openModal(fullName(st),
-    el("div", { class: "done-row" }, studentTags(st), edit),
+    el("div", { class: "done-row" }, studentTags(st), training, edit),
     el("p", { class: "muted small" }, [st.email, st.phone].filter(Boolean).join(" · ")),
     el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
     el("p", { class: "small" }, specialSummary(data)),
@@ -1534,13 +1632,14 @@ async function fetchAll(makeQuery) {
 }
 async function loadOwnData() {
   const tid = state.profile.id;
-  const [settings, students, slots, bookings] = await Promise.all([
+  const [settings, students, slots, bookings, progress] = await Promise.all([
     sb.from("settings").select("*").eq("teacher_id", tid).maybeSingle().then(({ data, error }) => { if (error) throw error; return data; }),
     fetchAll(() => sb.from("profiles").select("*").eq("teacher_id", tid).order("last_name")),
     fetchAll(() => sb.from("slots").select("*").eq("teacher_id", tid).order("starts_at")),
     fetchAll(() => sb.from("bookings").select("*").order("created_at")), // Zugriffsregeln: nur Buchungen auf eigenen Terminen
+    fetchAll(() => sb.from("training_progress").select("*").order("student_id")), // nur eigene Schüler
   ]);
-  return { settings, students, slots, bookings };
+  return { settings, students, slots, bookings, progress };
 }
 const today = () => dateInput(new Date());
 const backupKey = () => `fsp_backup_${state.profile && state.profile.id}`;
@@ -1554,7 +1653,7 @@ async function makeBackup() {
   const backup = {
     app: "Fahrstundenplaner", format: 1, created_at: new Date().toISOString(),
     teacher: { id, email, first_name, last_name, slug },
-    counts: { students: d.students.length, slots: d.slots.length, bookings: d.bookings.length },
+    counts: { students: d.students.length, slots: d.slots.length, bookings: d.bookings.length, progress: d.progress.length },
     ...d,
   };
   downloadFile(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), `Sicherung_Fahrstundenplaner_${today()}.json`);
@@ -1634,7 +1733,7 @@ function backupCard() {
       : "Auf diesem Gerät wurde noch keine Sicherung gemacht.") :
       el("p", { class: "small" }, `✓ Letzte Sicherung auf diesem Gerät: ${new Date(last).toLocaleDateString("de-DE")}`),
     el("p", { class: "muted small" },
-      "Die Sicherung enthält alle deine Daten: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen. ",
+      "Die Sicherung enthält alle deine Daten: Schüler, Termine, Buchungen, Fahrzeiten, Notizen, Ausbildungsstand und Einstellungen. ",
       "Sie wird als Datei auf dieses Gerät geladen (Mac: Ordner „Downloads“, iPhone: App „Dateien“). ",
       "Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren. ",
       "Zum Wiederherstellen auf „Sicherung wiederherstellen“ tippen und die Datei auswählen."),
@@ -1757,6 +1856,17 @@ function openBooking(s) {
     isLate(s.starts_at) ? el("div", { class: "notice danger" },
       "Kurzfristige Buchung: Die Absagefrist ist bereits abgelaufen. Wird diese Fahrstunde bestätigt, ist eine Absage kostenpflichtig.") : null,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+/* ---------------- Schüler: Ausbildungsstand (nur ansehen) ---------------- */
+
+async function studentTraining() {
+  const { data, error } = await sb.from("bookings").select("status,actual_minutes,lesson_type").eq("student_id", state.profile.id);
+  if (error) throw error;
+  return el("div", { class: "card" },
+    el("h2", {}, "📈 Mein Ausbildungsstand"),
+    el("p", { class: "muted small" }, "Dein Fahrlehrer trägt hier nach den Fahrstunden ein, was du schon kannst."),
+    await trainingView(state.profile, false, data));
 }
 
 /* ---------------- Schüler: Mein Profil ---------------- */

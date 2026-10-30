@@ -81,6 +81,67 @@ create unique index if not exists bookings_one_active_per_slot
   on public.bookings (slot_id) where status in ('requested','confirmed','offered');
 create index if not exists bookings_student_idx on public.bookings (student_id);
 
+-- Ausbildungsthemen (eigene Formulierung, angelehnt an den gesetzlichen Ausbildungsplan).
+-- teacher_id NULL = Standardthemen für alle; später können Fahrlehrer eigene Themen/Strecken ergänzen.
+create table if not exists public.training_topics (
+  id          text primary key,
+  teacher_id  uuid references public.profiles(id) on delete cascade,
+  stage       text not null check (stage in ('grund','aufbau','leistung','grundfahr','sonder','reife','eigene')),
+  sort        int not null default 0,
+  title       text not null check (char_length(title) <= 120)
+);
+insert into public.training_topics (id, stage, sort, title) values
+  ('g01', 'grund', 1, 'Einsteigen, Sitz, Spiegel und Lenkrad einstellen'),
+  ('g02', 'grund', 2, 'Bedienelemente und Kontrollleuchten'),
+  ('g03', 'grund', 3, 'Motor starten, anfahren und anhalten'),
+  ('g04', 'grund', 4, 'Schalten bzw. Automatik richtig bedienen'),
+  ('g05', 'grund', 5, 'Lenkhaltung und Lenktechnik'),
+  ('g06', 'grund', 6, 'Dosiert und zielgenau bremsen'),
+  ('g07', 'grund', 7, 'Anfahren und Halten an Steigung und Gefälle'),
+  ('g08', 'grund', 8, 'Geradeaus rückwärtsfahren'),
+  ('g09', 'grund', 9, 'Richtige Fahrbahn- und Fahrstreifenbenutzung'),
+  ('a01', 'aufbau', 10, 'Angepasste Geschwindigkeit und Rollen'),
+  ('a02', 'aufbau', 11, 'Abstand nach vorne und zur Seite'),
+  ('a03', 'aufbau', 12, 'Beobachten: Spiegel und Schulterblick'),
+  ('a04', 'aufbau', 13, 'Vorfahrt und Vorrang'),
+  ('a05', 'aufbau', 14, 'Verkehrszeichen, Markierungen und Ampeln'),
+  ('a06', 'aufbau', 15, 'Ein- und Ausfahren (Grundstücke, Parkplätze)'),
+  ('a07', 'aufbau', 16, 'Fahrstreifenwechsel'),
+  ('a08', 'aufbau', 17, 'Rechts abbiegen'),
+  ('a09', 'aufbau', 18, 'Links abbiegen'),
+  ('a10', 'aufbau', 19, 'Kreisverkehr'),
+  ('l01', 'leistung', 20, 'Kreuzungen und Einmündungen sicher bewältigen'),
+  ('l02', 'leistung', 21, 'Fußgänger, Radfahrer, Schulwege und Haltestellen'),
+  ('l03', 'leistung', 22, 'Engstellen, Hindernisse, Vorbeifahren und Überholen'),
+  ('l04', 'leistung', 23, 'Bahnübergänge'),
+  ('l05', 'leistung', 24, 'Verkehrsberuhigte Bereiche und Tempo-30-Zonen'),
+  ('l06', 'leistung', 25, 'Vorausschauend und partnerschaftlich fahren'),
+  ('l07', 'leistung', 26, 'Gefahren erkennen und richtig reagieren'),
+  ('l08', 'leistung', 27, 'Umweltschonend und energiesparend fahren'),
+  ('f01', 'grundfahr', 28, 'Rückwärts um eine Ecke'),
+  ('f02', 'grundfahr', 29, 'Rückwärts längs einparken'),
+  ('f03', 'grundfahr', 30, 'Rückwärts quer einparken'),
+  ('f04', 'grundfahr', 31, 'Vorwärts quer einparken'),
+  ('f05', 'grundfahr', 32, 'Umkehren (Wenden)'),
+  ('f06', 'grundfahr', 33, 'Gefahrbremsung'),
+  ('s01', 'sonder', 34, 'Überlandfahrt'),
+  ('s02', 'sonder', 35, 'Autobahnfahrt'),
+  ('s03', 'sonder', 36, 'Fahrt bei Dunkelheit'),
+  ('r01', 'reife', 37, 'Fahrzeugtechnik und Abfahrtkontrolle'),
+  ('r02', 'reife', 38, 'Selbstständig fahren ohne Hilfestellung'),
+  ('r03', 'reife', 39, 'Testfahrt unter Prüfungsbedingungen'),
+  ('r04', 'reife', 40, 'Prüfungsreife erreicht')
+on conflict (id) do nothing;
+
+-- Ausbildungsstand: pro Schüler und Thema eine Stufe (1 = eingeführt, 2 = geübt, 3 = sicher)
+create table if not exists public.training_progress (
+  student_id  uuid not null references public.profiles(id) on delete cascade,
+  topic_id    text not null references public.training_topics(id) on delete cascade,
+  level       smallint not null check (level between 1 and 3),
+  updated_at  timestamptz not null default now(),
+  primary key (student_id, topic_id)
+);
+
 -- ---------- Hilfsfunktionen ------------------------------------------
 
 -- Aktiver Fahrlehrer?
@@ -348,6 +409,21 @@ begin
     end;
   end loop;
 
+  -- Ausbildungsstand
+  for r in select * from jsonb_array_elements(coalesce(p_data->'progress', '[]'::jsonb)) loop
+    begin
+      if student_teacher((r->>'student_id')::uuid) is distinct from me then
+        n_skipped := n_skipped + 1;
+        continue;
+      end if;
+      insert into training_progress (student_id, topic_id, level, updated_at)
+      values ((r->>'student_id')::uuid, r->>'topic_id', (r->>'level')::smallint,
+              coalesce((r->>'updated_at')::timestamptz, now()))
+      on conflict (student_id, topic_id) do update set level = excluded.level, updated_at = excluded.updated_at;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end loop;
+
   return jsonb_build_object('students', n_students, 'slots', n_slots, 'bookings', n_bookings, 'skipped', n_skipped);
 end $$;
 
@@ -472,6 +548,8 @@ alter table public.profiles enable row level security;
 alter table public.settings enable row level security;
 alter table public.slots    enable row level security;
 alter table public.bookings enable row level security;
+alter table public.training_topics   enable row level security;
+alter table public.training_progress enable row level security;
 
 -- Profile: man sieht sich selbst; Fahrlehrer sehen ihre eigenen Schüler; Haupt-Admin sieht die Fahrlehrer
 drop policy if exists profiles_select on public.profiles;
@@ -512,6 +590,25 @@ create policy bookings_teacher on public.bookings for all
   using (public.is_teacher() and public.slot_teacher(slot_id) = auth.uid())
   with check (public.is_teacher() and public.slot_teacher(slot_id) = auth.uid()
               and public.student_teacher(student_id) = auth.uid());
+
+-- Ausbildungsthemen: Standardthemen + eigene Themen des eigenen Fahrlehrers lesen
+drop policy if exists topics_select on public.training_topics;
+create policy topics_select on public.training_topics for select
+  using (public.is_active() and (teacher_id is null or teacher_id = public.my_teacher_id()));
+drop policy if exists topics_teacher on public.training_topics;
+create policy topics_teacher on public.training_topics for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+
+-- Ausbildungsstand: Schüler sehen nur ihren eigenen; nur der eigene Fahrlehrer darf abhaken
+drop policy if exists progress_select on public.training_progress;
+create policy progress_select on public.training_progress for select
+  using ((student_id = auth.uid() and public.is_active())
+         or (public.is_teacher() and public.student_teacher(student_id) = auth.uid()));
+drop policy if exists progress_teacher on public.training_progress;
+create policy progress_teacher on public.training_progress for all
+  using (public.is_teacher() and public.student_teacher(student_id) = auth.uid())
+  with check (public.is_teacher() and public.student_teacher(student_id) = auth.uid());
 
 -- Rechte für Funktionen
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
