@@ -163,3 +163,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .toast.error { background: var(--danger); color: #fff; }
 .linkbox { display: flex; gap: 8px; }
 .linkbox input { flex: 1; }
+details.fold { margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); padding: 10px 14px; }
+details.fold > summary { cursor: pointer; font-weight: 600; }
+details.fold[open] > summary { margin-bottom: 10px; }
+details.fold .card { border: none; padding: 0; margin: 0 0 8px; }

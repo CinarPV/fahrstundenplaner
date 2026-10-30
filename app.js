@@ -448,7 +448,7 @@ async function render() {
   state.dirty = false;
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
-    : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["profile", "Mein Profil"]];
+    : [["calendar", "Kalender"], ["mine", "Meine Stunden"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
     el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => { state.tab = id; render(); } }, label)));
@@ -1032,7 +1032,7 @@ async function adminStudents() {
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { class: "num" }, "Max. offen"))),
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"))),
     el("tbody", {}, list.map((st) => {
       const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
@@ -1040,7 +1040,7 @@ async function adminStudents() {
         el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
         el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
         el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late),
-        el("td", { class: "num" }, limitLabel(st.max_open)));
+        el("td", { onclick: (e) => e.stopPropagation() }, moreToggle(st)));
     }))));
 
   return el("div", {},
@@ -1083,6 +1083,23 @@ async function deleteStudent(st) {
   toast(`${fullName(st)} wurde gelöscht.`);
   closeModal();
   render();
+}
+
+// Schnell-Häkchen: Schüler darf unbegrenzt anfragen (an) oder nur den Standard (aus)
+function moreToggle(st) {
+  const box = el("input", { type: "checkbox", style: "width:20px;height:20px", "aria-label": `${fullName(st)} darf mehr anfragen` });
+  box.checked = st.max_open === 0;
+  const own = st.max_open > 0;
+  box.addEventListener("change", async () => {
+    const v = box.checked ? 0 : null;
+    const { error } = await sb.from("profiles").update({ max_open: v }).eq("id", st.id);
+    if (error) { box.checked = !box.checked; return fail(error); }
+    st.max_open = v;
+    hint.textContent = "";
+    toast(box.checked ? `${fullName(st)} darf jetzt unbegrenzt anfragen.` : `${fullName(st)}: wieder Standard (${state.settings.max_open || "∞"}).`);
+  });
+  const hint = el("span", { class: "small muted" }, own ? ` ${st.max_open}` : "");
+  return el("label", { class: "check", style: "margin:0;align-items:center" }, box, hint);
 }
 
 // Höchstzahl offener Fahrstunden: null = Standard, 0 = unbegrenzt, sonst Zahl
@@ -1378,16 +1395,24 @@ async function studentMine() {
       cancel || cancelLesson ? el("div", { class: "actions" }, cancel, cancelLesson) : null);
   };
 
+  // Schlicht: oben das Wichtigste (Anstehend), darunter aufklappbar Liste/Export und Verlauf
+  const wa = waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer anschreiben");
+  if (wa) wa.className = "btn small ghost";
   return el("div", {},
-    el("div", { class: "card" }, el("b", {}, `${doneCount} Fahrstunde${doneCount === 1 ? "" : "n"} gefahren`), " · insgesamt ", el("b", {}, fmtMinutes(total)),
-      notHeldCount ? ` · ${notHeldCount}× ausgefallen` : "", lateCount ? ` · davon ${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}` : "",
-      el("div", { class: "small", style: "margin-top:6px" }, "Sonderfahrten: ", specialSummary(rows)),
-      el("div", { class: "done-row" }, waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer per WhatsApp"),
-        rows.length ? exportButtons(state.profile, rows) : null)),
-    doneList(rows, total),
-    el("h2", { style: "margin-top:24px" }, "Anstehend"),
+    el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 12px" },
+      el("span", {}, el("b", {}, `${doneCount} Fahrstunde${doneCount === 1 ? "" : "n"}`), ` gefahren · ${fmtMinutes(total)}`,
+        lateCount ? el("span", { class: "badge late", style: "margin-left:6px" }, `${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}`) : null),
+      wa),
+    el("h2", {}, "Anstehend"),
     upcoming.length ? upcoming.map(item) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
-    rest.length ? [el("h2", { style: "margin-top:24px" }, "Gefahren, abgesagt & abgelehnt"), rest.map(item)] : null,
+    doneCount ? el("details", { class: "fold" },
+      el("summary", {}, `Gefahrene Fahrstunden (${doneCount}) · Sonderfahrten · Export`),
+      doneList(rows, total),
+      el("p", { class: "small" }, specialSummary(rows)),
+      exportButtons(state.profile, rows)) : null,
+    rest.length ? el("details", { class: "fold" },
+      el("summary", {}, `Verlauf (${rest.length})` + (notHeldCount ? ` · ${notHeldCount}× ausgefallen` : "")),
+      rest.map(item)) : null,
   );
 }
 

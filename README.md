@@ -19,7 +19,7 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 - **Nach der Ausbildung:** Den Zugang **sperren** (die Fahrstunden-Historie bleibt bei dir) oder den Schüler **endgültig löschen** (Konto und alle Daten werden entfernt, z. B. für den Datenschutz).
 - Die Standarddauer unter „Einstellungen“ dauerhaft ändern.
 - **Freigeben oder zuordnen:** Beim Anlegen wählst du **🟢 Freigeben**, dann können alle Schüler die Termine anfragen, oder **👤 Einem Schüler zuordnen**. Beim Zuordnen tippst du den Schüler in der Liste an, und alle Termine werden direkt bestätigt für ihn eingetragen, z. B. für die Prüfungsvorbereitung die ganze Woche.
-- **Höchstzahl pro Schüler:** Standard für alle (Einstellungen), dazu einzeln pro Schüler eine eigene Anzahl (z. B. 5) oder unbegrenzt.
+- **Höchstzahl pro Schüler:** Standard für alle (Einstellungen). In der Schülerliste setzt ein **Häkchen „Mehr erlauben“** einen Schüler mit einem Klick auf unbegrenzt. Im Schüler-Fenster geht auch eine eigene Anzahl (z. B. 5).
 - **Schüler direkt eintragen:** In einem freien Termin einen Schüler auswählen, z. B. nach telefonischer Absprache. Die Fahrstunde ist dann sofort bestätigt.
 - **Sonderfahrten:** Beim Abhaken die Art wählen (Übungsfahrt, 🌳 Überland, 🛣️ Autobahn, 🌙 Nacht). Die Zahlen erscheinen pro Schüler in der Übersicht.
 - **Schülerdaten bearbeiten** (Name, Klasse, Sehhilfe, Umschreiber, Handynummer).
