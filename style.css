@@ -347,3 +347,5 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
   .day:has(> .empty) { padding: 0 10px; background: var(--card); }
   .day:has(> .empty) .day-head { background: none; border: none; margin: 0; padding: 6px 0; color: var(--muted); }
 }
+.repeat-toggle { background: #eaf6f7; border: 1px solid #bfe5e7; border-radius: 10px; padding: 10px 12px; margin-top: 14px; }
+.repeat-box { border-left: 4px solid var(--teal); padding: 2px 0 6px 12px; margin: 8px 0 4px; }

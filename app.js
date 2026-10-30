@@ -735,7 +735,10 @@ const insertedMsg = ({ added, skipped }) =>
 function newSlotForm() {
   const date = el("input", { type: "date", value: dateInput(new Date()) });
   const dur = durationControl(state.settings.default_duration);
-  const weeks = el("input", { type: "number", min: 1, max: 26, value: 1 });
+  // Wiederholen: aus = genau ein Tag; an = gewählte Wochentage bis zum Enddatum
+  const repeat = el("input", { type: "checkbox" });
+  const until = el("input", { type: "date", value: dateInput(addDays(new Date(), 27)) });
+  const repeatBox = el("div", { class: "repeat-box", hidden: true });
   const preview = el("p", { class: "small", style: "margin-top:12px" });
   const btn = el("button", { class: "btn" }, "Termine freigeben");
 
@@ -804,16 +807,19 @@ function newSlotForm() {
   function build() {
     const start = fromInputs(date.value, "00:00");
     if (isNaN(start)) return [];
-    const monday = startOfWeek(start), now = Date.now(), list = [];
-    const w = Math.max(1, Math.min(26, +weeks.value || 1));
-    for (let wk = 0; wk < w; wk++) {
-      for (const d of [...days].sort()) {
-        const day = addDays(monday, wk * 7 + d);
-        if (day < start) continue;
-        for (const t of times) {
-          const at = fromInputs(dateInput(day), t);
-          if (at.getTime() > now) list.push({ starts_at: at.toISOString(), duration_min: dur.value });
-        }
+    const now = Date.now(), list = [];
+    let end = start;
+    if (repeat.checked) {
+      end = fromInputs(until.value, "00:00");
+      if (isNaN(end) || end < start) return [];
+      const max = addDays(start, 26 * 7);              // höchstens ein halbes Jahr auf einmal
+      if (end > max) end = max;
+    }
+    for (let day = start; day <= end; day = addDays(day, 1)) {
+      if (repeat.checked && !days.has(weekdayIndex(day))) continue;
+      for (const t of times) {
+        const at = fromInputs(dateInput(day), t);
+        if (at.getTime() > now) list.push({ starts_at: at.toISOString(), duration_min: dur.value });
       }
     }
     return list;
@@ -829,10 +835,20 @@ function newSlotForm() {
     const list = build();
     preview.replaceChildren(list.length
       ? el("span", {}, el("b", {}, `${list.length} Termin${list.length > 1 ? "e" : ""}`),
-        ` · ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${+weeks.value > 1 ? weeks.value + " Wochen" : "1 Woche"} · ab ${fmtDay(list[0].starts_at)}`)
+        repeat.checked
+          ? ` · jeden ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
+          : ` · ${fmtDate(list[0].starts_at)} · ${times.map((t) => t + " Uhr").join(", ")}`)
       : el("span", { class: "muted" }, "Noch keine Termine – Wochentage und Uhrzeiten wählen."));
   }
-  [date, weeks].forEach((i) => i.addEventListener("input", refresh));
+  [date, until].forEach((i) => i.addEventListener("input", refresh));
+  date.addEventListener("input", () => { if (!repeat.checked) { days.clear(); days.add(weekdayIndex(fromInputs(date.value, "00:00"))); } });
+  repeat.addEventListener("change", () => {
+    repeatBox.hidden = !repeat.checked;
+    // Beim Einschalten: Wochentag des gewählten Datums vorauswählen (weitere Tage dazu antippen)
+    if (repeat.checked) setDays([weekdayIndex(fromInputs(date.value, "00:00"))]);
+    refresh();
+  });
+  const untilIn = (w) => { until.value = dateInput(addDays(fromInputs(date.value, "00:00"), w * 7 - 1)); refresh(); };
   dur.input.addEventListener("input", refresh);
 
   btn.onclick = () => busy(btn, async () => {
@@ -865,16 +881,9 @@ function newSlotForm() {
     el("h3", {}, "Neue Fahrstunden anlegen"),
     el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns),
     assignBox,
-    el("div", { class: "row" },
-      el("div", {}, el("label", {}, "Ab Datum"), date),
-      el("div", {}, el("label", {}, "Für … Wochen wiederholen (1 = nur diese Woche)"), weeks)),
-    el("label", {}, "An welchen Tagen?"),
-    el("div", { class: "tabs", style: "margin-bottom:6px;flex-wrap:wrap" }, dayBtns),
-    el("div", { class: "chips" },
-      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4]) }, "Mo–Fr"),
-      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4, 5]) }, "Mo–Sa"),
-      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4, 5, 6]) }, "Ganze Woche"),
-      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([]) }, "Keiner")),
+    el("label", {}, "Datum"), date,
+    el("label", { class: "check repeat-toggle" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
+    repeatBox,
     el("label", {}, "Dauer pro Fahrstunde (Standard: " + state.settings.default_duration + " Min.)"), dur.node,
     el("label", {}, "Uhrzeiten pro Tag"),
     el("div", { class: "row" },
@@ -886,7 +895,17 @@ function newSlotForm() {
     preview,
     el("div", { class: "actions" }, btn),
   );
-  return { node, setDate: (d) => { date.value = dateInput(d); setDays([weekdayIndex(d)]); } };
+  repeatBox.append(
+    el("label", {}, "An welchen Tagen?"),
+    el("div", { class: "tabs", style: "margin-bottom:6px;flex-wrap:wrap" }, dayBtns),
+    el("div", { class: "chips" },
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4]) }, "Mo–Fr"),
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4, 5]) }, "Mo–Sa"),
+      el("button", { type: "button", class: "btn small ghost", onclick: () => setDays([0, 1, 2, 3, 4, 5, 6]) }, "Jeden Tag")),
+    el("label", {}, "Wiederholen bis einschließlich"), until,
+    el("div", { class: "chips" },
+      [2, 4, 8, 12].map((w) => el("button", { type: "button", class: "btn small ghost", onclick: () => untilIn(w) }, `${w} Wochen`))));
+  return { node, setDate: (d) => { date.value = dateInput(d); setDays([weekdayIndex(d)]); refresh(); } };
 }
 
 async function openAdminSlot(slotId) {

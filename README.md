@@ -20,7 +20,9 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 **Fahrlehrer (Admin)**
 - Freie Termine anlegen: Datum, Uhrzeit, Dauer. Die Standarddauer von 90 Minuten ist vorausgefüllt.
 - Die Dauer pro Termin im 15-Minuten-Takt ändern (−15 / +15) oder per Schnellwahl auf 45, 60, 90 oder 135 Minuten setzen.
-- Viele Termine auf einmal anlegen: **Wochentage** ankreuzen (oder Mo–Fr, Mo–Sa, ganze Woche), **Uhrzeiten** festlegen (z. B. 3 Fahrstunden hintereinander mit 15 Min. Pause, dazu einzelne Uhrzeiten) und **für wie viele Wochen** das gelten soll.
+- **Einzelner Termin:** Datum und Uhrzeit wählen, fertig.
+- **🔁 Wiederholen (Haken):** Erst mit dem Haken erscheinen die **Wochentage** zum Antippen (vorausgewählt ist der Wochentag des gewählten Datums; dazu Mo–Fr, Mo–Sa, jeden Tag) und **„Wiederholen bis“** mit Schnellwahl 2, 4, 8 oder 12 Wochen.
+- **Uhrzeiten** festlegen, z. B. 3 Fahrstunden hintereinander mit 15 Min. Pause, dazu einzelne Uhrzeiten. Die Vorschau zeigt vorher, wie viele Termine entstehen.
 - **⧉ Woche kopieren:** Eine fertig geplante Woche mit einem Klick in die nächsten Wochen übernehmen. Termine, die es schon gibt, werden übersprungen.
 - Anfragen **bestätigen** (verbindlich) oder **ablehnen**. Dabei lassen sich die Uhrzeit anpassen und eine Antwort schreiben, etwa „Ausweis + Brille mitbringen, Treffpunkt Bahnhof“.
 - Nach der Fahrstunde **abhaken**: Die geplanten Minuten stehen schon drin. Bei kürzerer oder längerer Fahrt passt du sie mit −15/−5/+5/+15 an und setzt dann den Haken.
