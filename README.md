@@ -6,20 +6,22 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 
 **Fahrlehrer (Admin)**
 - Freie Termine anlegen: Datum, Uhrzeit, Dauer. Die Standarddauer von 90 Minuten ist vorausgefüllt.
-- Die Dauer pro Termin in 5- oder 15-Minuten-Schritten ändern oder per Schnellwahl auf 45, 60, 90 oder 135 Minuten setzen.
+- Die Dauer pro Termin im 15-Minuten-Takt ändern (−15 / +15) oder per Schnellwahl auf 45, 60, 90 oder 135 Minuten setzen.
 - Mehrere Termine hintereinander oder wöchentlich wiederholt auf einmal anlegen.
 - Anfragen **bestätigen** (verbindlich) oder **ablehnen**. Dabei lassen sich die Uhrzeit anpassen und eine Antwort schreiben, etwa „Ausweis + Brille mitbringen, Treffpunkt Bahnhof“.
-- Nach der Fahrstunde die **tatsächliche Fahrzeit** eintragen (Beginn und Ende, die Minuten werden berechnet).
+- Nach der Fahrstunde **abhaken**: Die geplanten Minuten stehen schon drin. Bei kürzerer oder längerer Fahrt passt du sie mit −15/−5/+5/+15 an und setzt dann den Haken.
+- Eine Fahrstunde als **„Abgesagt – krank“** markieren. Der Schüler sieht das, und ein zukünftiger Termin wird wieder frei.
+- Bei jedem Schüler siehst du **Klasse, 👓 Sehhilfe und Umschreiber**.
 - Übersicht pro Schüler: Anzahl gefahrener Stunden und Gesamtzeit.
 - **Neue Anmeldungen freischalten:** Wer sich registriert, sieht erst nach deiner Freischaltung den Kalender.
 - **Nach der Ausbildung:** Den Zugang **sperren** (die Fahrstunden-Historie bleibt bei dir) oder den Schüler **endgültig löschen** (Konto und alle Daten werden entfernt, z. B. für den Datenschutz).
 - Die Standarddauer unter „Einstellungen“ dauerhaft ändern.
 
 **Fahrschüler**
-- Einmal registrieren mit Vor- und Nachname, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
-- Wochenkalender mit den Zuständen **frei**, **angefragt (noch nicht bestätigt)** und **gebucht**. Fremde Namen sieht der Schüler nicht.
+- Einmal registrieren mit Vor- und Nachname, Führerscheinklasse (B, B197 oder B Automatik), Sehhilfe ja/nein, Umschreiber ja/nein, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
+- Der Wochenkalender zeigt nur **freie** Termine und die **eigenen** Termine. Buchungen anderer Schüler sind unsichtbar.
 - Freien Termin anfragen, mit einer kurzen Nachricht (max. 300 Zeichen).
-- Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers und die gefahrene Zeit sehen.
+- Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers, die **gefahrenen Minuten** und **„Abgesagt – krank“** sehen.
 - Eine noch unbestätigte Anfrage zurückziehen.
 
 ---
@@ -110,6 +112,6 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 
 ## Sicherheit in Kürze
 - Nicht freigeschaltete oder gesperrte Personen sehen **gar nichts**: keine Termine und keine Einstellungen. Das prüft die Datenbank selbst, nicht nur die Oberfläche.
-- Schüler sehen nur **eigene** Anfragen und Nachrichten. Bei fremden Terminen steht nur „angefragt“ oder „gebucht“.
+- Schüler sehen nur **eigene** Anfragen und Nachrichten. Belegte Termine anderer bekommen sie gar nicht erst geliefert.
 - Nur der Admin kann Termine anlegen, bestätigen, ablehnen und Fahrzeiten eintragen.
 - Ein Termin kann nie doppelt angefragt werden. Das prüft die Datenbank selbst.

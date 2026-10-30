@@ -11,7 +11,10 @@ create table if not exists public.profiles (
   first_name  text not null default '',
   last_name   text not null default '',
   email       text,
-  role        text not null default 'student' check (role in ('student','admin')),
+  license_class  text check (license_class in ('B','B197','B Automatik')),
+  needs_glasses  boolean not null default false,   -- Sehhilfe (Brille/Kontaktlinsen)
+  is_conversion  boolean not null default false,   -- Umschreiber (ausländischer Führerschein)
+  role       text not null default 'student' check (role in ('student','admin')),
   -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt (z. B. Ausbildung beendet)
   status      text not null default 'pending' check (status in ('pending','active','blocked')),
   created_at  timestamptz not null default now()
@@ -39,7 +42,8 @@ create table if not exists public.bookings (
   slot_id         uuid not null references public.slots(id) on delete cascade,
   student_id      uuid not null references public.profiles(id) on delete cascade,
   status          text not null default 'requested'
-                  check (status in ('requested','confirmed','rejected','cancelled')),
+                  -- sick = vom Fahrlehrer als „abgesagt – krank“ markiert (Termin wird wieder frei)
+                  check (status in ('requested','confirmed','rejected','cancelled','sick')),
   student_note    text check (char_length(student_note) <= 300),
   admin_reply     text check (char_length(admin_reply) <= 1000),
   actual_start    timestamptz,
@@ -81,12 +85,16 @@ end $$;
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into profiles (id, email, first_name, last_name)
+  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion)
   values (
     new.id,
     new.email,
     coalesce(trim(new.raw_user_meta_data->>'first_name'), ''),
-    coalesce(trim(new.raw_user_meta_data->>'last_name'), '')
+    coalesce(trim(new.raw_user_meta_data->>'last_name'), ''),
+    case when new.raw_user_meta_data->>'license_class' in ('B','B197','B Automatik')
+         then new.raw_user_meta_data->>'license_class' end,
+    coalesce((new.raw_user_meta_data->>'needs_glasses')::boolean, false),
+    coalesce((new.raw_user_meta_data->>'is_conversion')::boolean, false)
   );
   return new;
 end $$;
@@ -113,7 +121,7 @@ revoke execute on function public.make_admin(text) from public, anon, authentica
 
 -- ---------- Funktionen für Schüler -----------------------------------
 
--- Kalender für Schüler: zeigt Status aller Termine, aber KEINE fremden Namen
+-- Kalender für Schüler: nur freie Termine und die eigenen – fremde Buchungen bleiben unsichtbar
 create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
 returns table (
   slot_id       uuid,
@@ -130,6 +138,7 @@ language sql stable security definer set search_path = public as $$
   left join bookings b
     on b.slot_id = s.id and b.status in ('requested','confirmed')
   where s.starts_at >= p_from and s.starts_at < p_to
+    and (b.id is null or b.student_id = auth.uid())
     and is_active()
   order by s.starts_at;
 $$;
