@@ -78,7 +78,10 @@ details.nothere summary { cursor: pointer; font-weight: 600; color: var(--danger
 details.nothere input:not([type]) { margin-top: 10px; }
 .notice { border: 1px solid var(--req-bd); background: var(--req-bg); color: var(--req-fg); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
 .notice.danger { border-color: var(--danger); background: transparent; color: var(--danger); font-weight: 600; }
-.done-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.pick-list { display: grid; gap: 6px; margin-top: 8px; max-height: 260px; overflow-y: auto; }
+.pick { text-align: left; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit; cursor: pointer; }
+.pick.active { border-color: var(--free-fg); background: var(--free-bg); box-shadow: inset 4px 0 0 var(--free-fg); }
+.done-row {display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 12px; }
 
 .btn {

@@ -605,11 +605,13 @@ async function insertSlots(list) {
   if (e1) throw e1;
   const taken = new Set((existing || []).map((x) => new Date(x.starts_at).getTime()));
   const fresh = list.filter((x) => !taken.has(new Date(x.starts_at).getTime()));
+  let rows = [];
   if (fresh.length) {
-    const { error } = await sb.from("slots").insert(fresh);
+    const { data, error } = await sb.from("slots").insert(fresh).select("id,starts_at,duration_min");
     if (error) throw error;
+    rows = data || [];
   }
-  return { added: fresh.length, skipped: list.length - fresh.length };
+  return { added: fresh.length, skipped: list.length - fresh.length, rows };
 }
 const insertedMsg = ({ added, skipped }) =>
   `${added} Termin${added === 1 ? "" : "e"} freigegeben` + (skipped ? ` (${skipped} gab es schon)` : "") + ".";
@@ -620,6 +622,40 @@ function newSlotForm() {
   const weeks = el("input", { type: "number", min: 1, max: 26, value: 1 });
   const preview = el("p", { class: "small", style: "margin-top:12px" });
   const btn = el("button", { class: "btn" }, "Termine freigeben");
+
+  // Freigeben (für alle) oder direkt einem Schüler zuordnen
+  let mode = "free", student = null, students = null;
+  const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional), z. B. „Prüfungsvorbereitung – Treffpunkt Fahrschule“" });
+  const search = el("input", { type: "search", placeholder: "Schüler suchen …" });
+  const studentList = el("div", { class: "pick-list" });
+  const assignBox = el("div", { hidden: true },
+    el("label", {}, "Welchem Schüler zuordnen?"), search, studentList,
+    el("label", {}, "Hinweis an den Schüler"), reply);
+  const modeBtns = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"]].map(([m, text]) =>
+    el("button", { type: "button", class: "tab" + (m === mode ? " active" : ""), onclick: () => setMode(m) }, text));
+  async function setMode(m) {
+    mode = m;
+    modeBtns.forEach((b, i) => b.classList.toggle("active", ["free", "assign"][i] === m));
+    assignBox.hidden = m !== "assign";
+    if (m === "assign" && !students) {
+      studentList.replaceChildren(el("p", { class: "muted small" }, "Lädt …"));
+      const { data, error } = await sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
+        .eq("role", "student").eq("status", "active").order("last_name");
+      if (error) return fail(error);
+      students = data;
+    }
+    refresh();
+  }
+  function renderStudents() {
+    if (!students) return;
+    const q = search.value.trim().toLowerCase();
+    const list = students.filter((st) => !q || fullName(st).toLowerCase().includes(q));
+    studentList.replaceChildren(...(list.length ? list.map((st) => el("button", {
+      type: "button", class: "pick" + (student && student.id === st.id ? " active" : ""),
+      onclick: () => { student = st; refresh(); },
+    }, el("b", {}, fullName(st)), " ", studentTags(st))) : [el("p", { class: "muted small" }, students.length ? "Kein Treffer." : "Noch keine freigeschalteten Schüler.")]));
+  }
+  search.addEventListener("input", renderStudents);
 
   // Wochentage
   const days = new Set([weekdayIndex(new Date())]);
@@ -665,6 +701,9 @@ function newSlotForm() {
     return list;
   }
   function refresh() {
+    renderStudents();
+    btn.textContent = mode === "assign" ? (student ? `Für ${fullName(student)} eintragen` : "Schüler wählen …") : "Termine freigeben";
+    btn.className = "btn" + (mode === "assign" ? " ok" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
     timeChips.replaceChildren(...times.map((t) => el("span", { class: "tag", style: "font-size:14px;padding:4px 8px" },
       `${t} – ${fromMin(toMin(t) + dur.value)} `,
@@ -680,15 +719,28 @@ function newSlotForm() {
 
   btn.onclick = () => busy(btn, async () => {
     const list = build();
+    if (mode === "assign" && !student) throw new Error("Bitte einen Schüler auswählen");
     const res = await insertSlots(list);
-    toast(insertedMsg(res));
     state.weekStart = startOfWeek(new Date(list[0].starts_at));
-    render();
+    if (mode === "free") { toast(insertedMsg(res)); render(); return; }
+    // Zuordnen: gleich als bestätigte Fahrstunden für den Schüler eintragen
+    if (!res.rows.length) throw new Error("Alle diese Termine gibt es schon – nichts eingetragen.");
+    const note = reply.value.trim() || null;
+    const { error } = await sb.from("bookings").insert(res.rows.map((r) => ({
+      slot_id: r.id, student_id: student.id, status: "confirmed", admin_reply: note, decided_at: new Date().toISOString(),
+    })));
+    if (error) throw error;
+    const lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
+    const text = `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunden eingetragen:\n${lines}` + (note ? `\n${note}` : "") + "\n\nDein Fahrlehrer";
+    notifyStep(`${res.rows.length} Fahrstunde${res.rows.length === 1 ? "" : "n"} für ${fullName(student)} eingetragen` + (res.skipped ? ` (${res.skipped} gab es schon)` : ""),
+      student.phone, text);
   });
 
   refresh();
   const node = el("div", { class: "card" },
-    el("h3", {}, "Neue Fahrstunden freigeben"),
+    el("h3", {}, "Neue Fahrstunden anlegen"),
+    el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns),
+    assignBox,
     el("div", { class: "row" },
       el("div", {}, el("label", {}, "Ab Datum"), date),
       el("div", {}, el("label", {}, "Für … Wochen wiederholen (1 = nur diese Woche)"), weeks)),
@@ -956,7 +1008,7 @@ async function adminRequests() {
 
 async function adminStudents() {
   const [p, b] = await Promise.all([
-    sb.from("profiles").select("id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,role,status,created_at").order("last_name"),
+    sb.from("profiles").select("id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,created_at").order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
   ]);
   if (p.error) throw p.error;
@@ -980,14 +1032,15 @@ async function adminStudents() {
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."))),
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { class: "num" }, "Max. offen"))),
     el("tbody", {}, list.map((st) => {
       const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
         el("td", {}, fullName(st), st.needs_glasses ? " 👓" : "", st.is_conversion ? el("div", { class: "small muted" }, "Umschreiber") : null),
         el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
         el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
-        el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late));
+        el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late),
+        el("td", { class: "num" }, limitLabel(st.max_open)));
     }))));
 
   return el("div", {},
@@ -1030,6 +1083,33 @@ async function deleteStudent(st) {
   toast(`${fullName(st)} wurde gelöscht.`);
   closeModal();
   render();
+}
+
+// Höchstzahl offener Fahrstunden: null = Standard, 0 = unbegrenzt, sonst Zahl
+const limitLabel = (v) => (v === null || v === undefined ? `Standard (${state.settings.max_open || "∞"})` : v === 0 ? "∞ unbegrenzt" : String(v));
+function limitControl(st) {
+  const name = "limit-" + st.id;
+  const mk = (value, text) => { const r = el("input", { type: "radio", name, value }); return { r, node: el("label", { class: "check" }, r, text) }; };
+  const std = mk("std", `Standard für alle (${state.settings.max_open || "unbegrenzt"})`);
+  const own = mk("own", "Eigene Anzahl:");
+  const inf = mk("inf", "Unbegrenzt (z. B. Prüfungsvorbereitung)");
+  const num = el("input", { type: "number", min: 1, max: 50, value: st.max_open > 0 ? st.max_open : 5, style: "width:90px;margin-left:8px" });
+  own.node.append(num);
+  (st.max_open === null || st.max_open === undefined ? std : st.max_open === 0 ? inf : own).r.checked = true;
+  num.addEventListener("focus", () => (own.r.checked = true));
+  const save = el("button", { class: "btn small" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    const v = std.r.checked ? null : inf.r.checked ? 0 : Math.max(1, Math.min(50, +num.value || 1));
+    const { error } = await sb.from("profiles").update({ max_open: v }).eq("id", st.id);
+    if (error) throw error;
+    st.max_open = v;
+    state.renderOnClose = true;
+    toast(`${fullName(st)}: ${limitLabel(v)} offene Fahrstunden.`);
+  });
+  return el("div", {},
+    el("h3", {}, "Wie viele Fahrstunden darf dieser Schüler gleichzeitig anfragen?"),
+    el("p", { class: "muted small" }, "Zählt offene Anfragen + anstehende bestätigte Fahrstunden. Von dir eingetragene Fahrstunden sind nie begrenzt."),
+    std.node, own.node, inf.node, el("div", { class: "actions" }, save));
 }
 
 function openEditStudent(st) {
@@ -1078,6 +1158,8 @@ async function openStudent(st) {
       b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null,
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null))
       : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
+    el("hr"),
+    limitControl(st),
     el("hr"),
     el("h3", {}, "Zugang"),
     el("p", { class: "muted small" }, st.status === "blocked"

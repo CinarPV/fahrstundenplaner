@@ -15,6 +15,7 @@ create table if not exists public.profiles (
   needs_glasses  boolean not null default false,   -- Sehhilfe (Brille/Kontaktlinsen)
   is_conversion  boolean not null default false,   -- Umschreiber (ausländischer Führerschein)
   phone          text check (char_length(phone) <= 30),  -- für WhatsApp-Nachrichten
+  max_open       int check (max_open between 0 and 50),  -- eigene Höchstzahl: NULL = Standard aus Einstellungen, 0 = unbegrenzt
   role       text not null default 'student' check (role in ('student','admin')),
   -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt (z. B. Ausbildung beendet)
   status      text not null default 'pending' check (status in ('pending','active','blocked')),
@@ -164,7 +165,9 @@ declare v_id uuid; v_start timestamptz; v_max int; v_open int;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
   -- Obergrenze: offene Anfragen + anstehende bestätigte Fahrstunden
-  select max_open into v_max from settings where id = 1;
+  -- eigene Höchstzahl des Schülers, sonst Standard aus den Einstellungen
+  select coalesce(p.max_open, st.max_open) into v_max
+  from profiles p cross join settings st where p.id = auth.uid() and st.id = 1;
   if coalesce(v_max, 0) > 0 then
     select count(*) into v_open from bookings b join slots s on s.id = b.slot_id
     where b.student_id = auth.uid() and s.starts_at > now()
