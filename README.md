@@ -139,6 +139,23 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 
 ---
 
+## Rechtliches (Impressum, Datenschutz, AGB, Copyright)
+
+Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, **Datenschutz** und **Nutzungsbedingungen (AGB)**. Die Texte stehen in der Datei [`legal.js`](legal.js).
+
+**Vor dem Start erledigen:**
+1. In `legal.js` oben **Straße, PLZ/Ort und E-Mail** eintragen. Solange etwas fehlt, ist es im Text gelb markiert, und der Haupt-Admin sieht unter Einstellungen einen roten Hinweis.
+2. Die Texte von einer Anwältin/einem Anwalt oder einem Generator (z. B. eRecht24, Datenschutz-Generator.de) **prüfen lassen**. Sie sind eine auf die App zugeschnittene Vorlage, aber keine Rechtsberatung.
+3. Bei Supabase den **Auftragsverarbeitungsvertrag (DPA)** abschließen. Er lässt sich im Supabase-Dashboard bzw. auf der Supabase-Website anfordern bzw. unterzeichnen.
+4. Mit Fahrlehrer-Kollegen eine **Vereinbarung zur Auftragsverarbeitung** treffen (siehe oben).
+
+**In der App eingebaut:**
+- Bei der Registrierung müssen Schüler den **Nutzungsbedingungen zustimmen** und bestätigen, dass sie die **Datenschutzerklärung** gelesen haben. Der Zeitpunkt der Zustimmung wird gespeichert.
+- Die Angabe **„Sehhilfe“** ist ein Gesundheitsdatum. Sie wird nur mit **ausdrücklicher Einwilligung** gespeichert (eigener Haken). Widerrufen lässt sie sich jederzeit im Profil.
+- Die Datei `LICENSE` stellt klar: Der Code ist zwar öffentlich einsehbar, aber **urheberrechtlich geschützt, alle Rechte vorbehalten**.
+
+---
+
 ## Datensicherung
 
 **Wo liegen die Daten?** Alle laufenden Daten (Schüler, Termine, Fahrstunden) liegen in **Supabase**, auf einem Server in Frankfurt (Region eu-central-1).
@@ -174,6 +191,8 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 | `app.js` | Die ganze App-Logik (Kalender, Buchen, Bestätigen …) |
 | `style.css` | Aussehen (immer helles Layout, auch auf dem Handy) |
 | `logo.svg` | Logo für Kopfzeile und Browser-Tab (kann durch ein eigenes ersetzt werden) |
+| `legal.js` | Impressum, Datenschutzerklärung, Nutzungsbedingungen – oben Anschrift/E-Mail eintragen |
+| `LICENSE` | Urheberrecht: © Kürsat Cinar, alle Rechte vorbehalten |
 | `config.js` | Verbindung zu Supabase (die zwei Werte aus Schritt 4) |
 | `supabase/schema.sql` | Datenbank-Tabellen und Zugriffsregeln |
 

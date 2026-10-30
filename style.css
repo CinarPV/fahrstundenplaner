@@ -144,6 +144,18 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .close { border: none; background: none; font-size: 24px; cursor: pointer; color: var(--muted); line-height: 1; }
 hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
+.footer {
+  max-width: 1100px; margin: 24px auto 0; padding: 16px 16px 28px; border-top: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; align-items: center;
+  font-size: 13px; color: var(--muted);
+}
+.footer nav { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.footer button { border: none; background: none; padding: 0; font: inherit; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.footer button:hover { color: var(--accent); }
+.legal h4 { margin: 16px 0 6px; font-size: 15px; }
+.legal p { margin: 4px 0; font-size: 14px; }
+.legal .missing { background: #fff3cd; padding: 0 3px; border-radius: 3px; }
+.linkbtn { border: none; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
 .toast {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50;
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; max-width: calc(100vw - 32px);

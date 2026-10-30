@@ -19,11 +19,20 @@
   <main id="app" class="container">
     <p class="muted">Lädt …</p>
   </main>
+  <footer class="footer">
+    <span id="copyright"></span>
+    <nav>
+      <button type="button" data-legal="impressum">Impressum</button>
+      <button type="button" data-legal="datenschutz">Datenschutz</button>
+      <button type="button" data-legal="agb">Nutzungsbedingungen (AGB)</button>
+    </nav>
+  </footer>
   <dialog id="modal"><div id="modal-body"></div></dialog>
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
   <script src="config.js"></script>
+  <script src="legal.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

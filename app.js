@@ -292,6 +292,22 @@ async function busy(button, fn) {
   try { await fn(); } catch (e) { fail(e); } finally { if (button) button.disabled = false; }
 }
 
+/* ---------------- Rechtstexte (Impressum, Datenschutz, AGB) ---------------- */
+
+function openLegal(key) {
+  const t = (window.FSP_LEGAL_TEXTS || {})[key];
+  if (!t) return;
+  // "[bitte ergänzen]" gelb markieren, damit fehlende Angaben auffallen
+  const para = (text) => {
+    const parts = String(text).split(/(\[bitte ergänzen\])/);
+    return el("p", {}, parts.map((x) => (x === "[bitte ergänzen]" ? el("span", { class: "missing" }, x) : x)));
+  };
+  openModal(t.title, el("div", { class: "legal" }, t.sections.map((sec) => [el("h4", {}, sec.h), sec.p.map(para)])));
+}
+document.getElementById("copyright").textContent = window.FSP_COPYRIGHT || "";
+document.querySelectorAll("[data-legal]").forEach((b) => b.addEventListener("click", () => openLegal(b.dataset.legal)));
+const legalLink = (key, text) => el("button", { type: "button", class: "linkbtn", onclick: () => openLegal(key) }, text);
+
 /* ---------------- Start / Anmeldung ---------------- */
 
 function configMissing() {
@@ -420,6 +436,12 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
   const glasses = el("input", { type: "checkbox" });
   const conversion = el("input", { type: "checkbox" });
   const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "z. B. 0151 23456789", required: mode === "register" });
+  // Sehhilfe ist ein Gesundheitsdatum → nur mit ausdrücklicher Einwilligung (Art. 9 DSGVO)
+  const glassesConsent = el("input", { type: "checkbox" });
+  const glassesConsentRow = el("label", { class: "check", hidden: true }, glassesConsent,
+    el("span", { class: "small" }, "Ich willige ein, dass die Angabe „Sehhilfe“ gespeichert und meinem Fahrlehrer angezeigt wird. Widerruf jederzeit im Profil möglich."));
+  glasses.addEventListener("change", () => { glassesConsentRow.hidden = !glasses.checked; if (!glasses.checked) glassesConsent.checked = false; });
+  const terms = el("input", { type: "checkbox" });
   const submit = el("button", { class: "btn", type: "submit" }, mode === "login" ? "Anmelden" : "Registrieren");
 
   // Fahrlehrer aus dem Link (?l=kuersat) – sonst Auswahl
@@ -450,13 +472,15 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
           if (error) throw new Error(error.message === "Invalid login credentials" ? "E-Mail oder Passwort falsch" : error.message);
         } else {
           if (!waNumber(phone.value)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
+          if (glasses.checked && !glassesConsent.checked) throw new Error("Bitte die Einwilligung zur Angabe „Sehhilfe“ bestätigen – oder den Haken bei Sehhilfe entfernen.");
+          if (!terms.checked) throw new Error("Bitte den Nutzungsbedingungen zustimmen.");
           const { data, error } = await sb.auth.signUp({
             email: email.value.trim(), password: pw.value,
             options: {
               data: {
                 first_name: first.value.trim(), last_name: last.value.trim(),
-                license_class: licenseClass.value, needs_glasses: glasses.checked, is_conversion: conversion.checked,
-                phone: phone.value.trim(), teacher: teacherSel.value,
+                license_class: licenseClass.value, needs_glasses: glasses.checked && glassesConsent.checked, is_conversion: conversion.checked,
+                phone: phone.value.trim(), teacher: teacherSel.value, accepted_terms: true,
               },
               emailRedirectTo: location.origin + location.pathname },
           });
@@ -478,12 +502,17 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
       teacherInfo, teacherWrap,
       el("label", {}, "Führerscheinklasse"), licenseClass,
       el("label", { class: "check" }, glasses, "Ich brauche eine Sehhilfe (Brille / Kontaktlinsen)"),
+      glassesConsentRow,
       el("label", { class: "check" }, conversion, "Ich bin Umschreiber (habe schon einen ausländischen Führerschein)"),
       el("label", {}, "Deine WhatsApp-Nummer"), phone,
       el("p", { class: "muted small", style: "margin:4px 0 0" }, "Darüber schickt dir dein Fahrlehrer Angebote und Bestätigungen."),
     ] : null,
     el("label", {}, "E-Mail"), email,
     el("label", {}, "Passwort" + (mode === "register" ? " (mind. 6 Zeichen)" : "")), pw,
+    mode === "register" ? el("label", { class: "check" }, terms,
+      el("span", { class: "small" }, "Ich akzeptiere die ", legalLink("agb", "Nutzungsbedingungen"),
+        " (u. a.: Fahrstunden sind nach Bestätigung verbindlich, Absagen nach Vortag 18 Uhr kostenpflichtig) und habe die ",
+        legalLink("datenschutz", "Datenschutzerklärung"), " gelesen.")) : null,
     el("div", { class: "actions" }, submit),
   );
 
@@ -1645,6 +1674,10 @@ function adminSettings() {
     toast("Einstellungen gespeichert.");
   });
   return el("div", {},
+    isOwner() && (window.FSP_LEGAL_MISSING || []).length ? el("div", { class: "notice danger", style: "margin-bottom:16px" },
+      "Impressum/Datenschutz unvollständig: Bitte in der Datei legal.js deine Anschrift und E-Mail eintragen (",
+      (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
+      "). ", legalLink("impressum", "Impressum ansehen")) : null,
     el("div", { class: "card" },
       el("h3", {}, "Standarddauer für neue Termine"),
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
@@ -1734,6 +1767,8 @@ function studentProfile() {
   save.onclick = () => busy(save, async () => {
     const v = f.values();
     if (!waNumber(v.phone)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
+    if (v.needs_glasses && !state.profile.needs_glasses &&
+        !confirm("Einwilligung: Die Angabe „Sehhilfe“ ist ein Gesundheitsdatum. Ich willige ein, dass sie gespeichert und meinem Fahrlehrer angezeigt wird. Widerruf jederzeit durch Entfernen des Hakens.")) return;
     const { error } = await sb.rpc("update_my_profile", {
       p_first: v.first_name, p_last: v.last_name, p_class: v.license_class,
       p_glasses: v.needs_glasses, p_conversion: v.is_conversion, p_phone: v.phone,

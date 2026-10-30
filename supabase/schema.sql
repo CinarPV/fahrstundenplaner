@@ -23,6 +23,7 @@ create table if not exists public.profiles (
   role           text not null default 'student' check (role in ('student','teacher')),
   is_owner       boolean not null default false,   -- Haupt-Admin
   must_change_password boolean not null default false,  -- vom Haupt-Admin vergebenes Passwort → selbst neu festlegen
+  terms_accepted_at timestamptz,                    -- Zustimmung zu Nutzungsbedingungen/Datenschutz bei der Registrierung
   -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt
   status         text not null default 'pending' check (status in ('pending','active','blocked')),
   teacher_id     uuid references public.profiles(id) on delete cascade,  -- Schüler → sein Fahrlehrer
@@ -132,7 +133,7 @@ declare v_teacher uuid;
 begin
   select id into v_teacher from profiles
   where slug = lower(trim(coalesce(new.raw_user_meta_data->>'teacher', ''))) and role = 'teacher' and status = 'active';
-  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion, phone, teacher_id)
+  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion, phone, teacher_id, terms_accepted_at)
   values (
     new.id,
     new.email,
@@ -143,7 +144,8 @@ begin
     coalesce((new.raw_user_meta_data->>'needs_glasses')::boolean, false),
     coalesce((new.raw_user_meta_data->>'is_conversion')::boolean, false),
     nullif(left(trim(coalesce(new.raw_user_meta_data->>'phone', '')), 30), ''),
-    v_teacher
+    v_teacher,
+    case when coalesce((new.raw_user_meta_data->>'accepted_terms')::boolean, false) then now() end
   );
   return new;
 end $$;
