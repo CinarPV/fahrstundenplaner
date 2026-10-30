@@ -1,44 +1,53 @@
 -- =====================================================================
 -- Fahrstundenplaner – Datenbank-Schema für Supabase
 -- Einmal komplett im Supabase "SQL Editor" ausführen (Run).
+--
+-- Rollen:
+--   Haupt-Admin  = Fahrlehrer mit is_owner = true; legt weitere Fahrlehrer an
+--   Fahrlehrer   = role 'teacher'; sieht NUR eigene Schüler, Termine, Einstellungen
+--   Schüler      = role 'student'; gehört genau einem Fahrlehrer (teacher_id)
 -- =====================================================================
 
 -- ---------- Tabellen -------------------------------------------------
 
--- Ein Profil pro angemeldeter Person (Schüler oder Admin)
 create table if not exists public.profiles (
-  id          uuid primary key references auth.users(id) on delete cascade,
-  first_name  text not null default '',
-  last_name   text not null default '',
-  email       text,
+  id             uuid primary key references auth.users(id) on delete cascade,
+  first_name     text not null default '',
+  last_name      text not null default '',
+  email          text,
   license_class  text check (license_class in ('B','B197','B Automatik')),
   needs_glasses  boolean not null default false,   -- Sehhilfe (Brille/Kontaktlinsen)
   is_conversion  boolean not null default false,   -- Umschreiber (ausländischer Führerschein)
   phone          text check (char_length(phone) <= 30),  -- für WhatsApp-Nachrichten
-  max_open       int check (max_open between 0 and 50),  -- eigene Höchstzahl: NULL = Standard aus Einstellungen, 0 = unbegrenzt
-  role       text not null default 'student' check (role in ('student','admin')),
-  -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt (z. B. Ausbildung beendet)
-  status      text not null default 'pending' check (status in ('pending','active','blocked')),
-  created_at  timestamptz not null default now()
+  max_open       int check (max_open between 0 and 50),  -- eigene Höchstzahl: NULL = Standard, 0 = unbegrenzt
+  role           text not null default 'student' check (role in ('student','teacher')),
+  is_owner       boolean not null default false,   -- Haupt-Admin
+  -- pending = wartet auf Freischaltung, active = freigeschaltet, blocked = gesperrt
+  status         text not null default 'pending' check (status in ('pending','active','blocked')),
+  teacher_id     uuid references public.profiles(id) on delete cascade,  -- Schüler → sein Fahrlehrer
+  slug           text unique check (slug ~ '^[a-z0-9-]{2,30}$'),          -- Fahrlehrer: Kürzel für den Schüler-Link
+  created_at     timestamptz not null default now()
 );
+create index if not exists profiles_teacher_idx on public.profiles (teacher_id);
 
--- Einstellungen (genau eine Zeile)
+-- Einstellungen: eine Zeile pro Fahrlehrer
 create table if not exists public.settings (
-  id                int primary key default 1 check (id = 1),
+  teacher_id        uuid primary key references public.profiles(id) on delete cascade,
+  display_name      text not null default 'Fahrlehrer' check (char_length(display_name) <= 60),
   default_duration  int not null default 90 check (default_duration between 5 and 600),
-  max_open          int not null default 3 check (max_open between 0 and 50),  -- max. offene/anstehende Fahrstunden pro Schüler (0 = unbegrenzt)
-  admin_phone       text check (char_length(admin_phone) <= 30)               -- Handynummer des Fahrlehrers für WhatsApp
+  max_open          int not null default 3 check (max_open between 0 and 50),  -- 0 = unbegrenzt
+  admin_phone       text check (char_length(admin_phone) <= 30)
 );
-insert into public.settings (id) values (1) on conflict do nothing;
 
--- Freigegebene Termine
+-- Termine eines Fahrlehrers
 create table if not exists public.slots (
   id            uuid primary key default gen_random_uuid(),
+  teacher_id    uuid not null default auth.uid() references public.profiles(id) on delete cascade,
   starts_at     timestamptz not null,
   duration_min  int not null check (duration_min between 5 and 600),
   created_at    timestamptz not null default now()
 );
-create index if not exists slots_starts_at_idx on public.slots (starts_at);
+create index if not exists slots_teacher_start_idx on public.slots (teacher_id, starts_at);
 
 -- Anfragen / Buchungen eines Schülers für einen Termin
 create table if not exists public.bookings (
@@ -59,8 +68,6 @@ create table if not exists public.bookings (
                   check (lesson_type in ('normal','ueberland','autobahn','nacht')),  -- Sonderfahrten
   student_note    text check (char_length(student_note) <= 300),
   admin_reply     text check (char_length(admin_reply) <= 1000),
-  actual_start    timestamptz,
-  actual_end      timestamptz,
   actual_minutes  int check (actual_minutes between 0 and 1000),
   created_at      timestamptz not null default now(),
   decided_at      timestamptz
@@ -72,33 +79,57 @@ create index if not exists bookings_student_idx on public.bookings (student_id);
 
 -- ---------- Hilfsfunktionen ------------------------------------------
 
-create or replace function public.is_admin()
+-- Aktiver Fahrlehrer?
+create or replace function public.is_teacher()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from profiles where id = auth.uid() and role = 'admin');
+  select exists (select 1 from profiles where id = auth.uid() and role = 'teacher' and status = 'active');
 $$;
 
--- Freigeschaltet = Admin oder Schüler mit Status 'active'
+-- Haupt-Admin?
+create or replace function public.is_owner()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from profiles where id = auth.uid() and is_owner and status = 'active');
+$$;
+
+-- Zu welchem Fahrlehrer gehöre ich? (Fahrlehrer: ich selbst)
+create or replace function public.my_teacher_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select case when role = 'teacher' then id else teacher_id end from profiles where id = auth.uid();
+$$;
+
+-- Freigeschaltet = aktiver Fahrlehrer oder aktiver Schüler eines aktiven Fahrlehrers
 create or replace function public.is_active()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from profiles where id = auth.uid() and (role = 'admin' or status = 'active'));
+  select exists (
+    select 1 from profiles p
+    where p.id = auth.uid() and p.status = 'active'
+      and (p.role = 'teacher'
+           or exists (select 1 from profiles t where t.id = p.teacher_id and t.role = 'teacher' and t.status = 'active')));
 $$;
 
--- Schüler endgültig löschen (Konto, Profil und alle Buchungen) – nur Admin
-create or replace function public.delete_student(p_id uuid)
-returns void language plpgsql security definer set search_path = public as $$
-begin
-  if not is_admin() then raise exception 'Nur der Fahrlehrer darf Schüler löschen'; end if;
-  if exists (select 1 from profiles where id = p_id and role = 'admin') then
-    raise exception 'Admin-Konten können hier nicht gelöscht werden';
-  end if;
-  delete from auth.users where id = p_id;
-end $$;
+-- Hilfen für die Zugriffsregeln (ohne sich gegenseitig auszulösen)
+create or replace function public.slot_teacher(p_slot uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select teacher_id from slots where id = p_slot;
+$$;
+create or replace function public.student_teacher(p_student uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select teacher_id from profiles where id = p_student;
+$$;
+create or replace function public.has_own_booking(p_slot uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from bookings where slot_id = p_slot and student_id = auth.uid());
+$$;
 
--- Neues Profil automatisch anlegen, wenn sich jemand registriert
+-- Neues Profil automatisch anlegen, wenn sich jemand registriert.
+-- Schüler werden über das Link-Kürzel (Metadaten "teacher") ihrem Fahrlehrer zugeordnet.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare v_teacher uuid;
 begin
-  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion, phone)
+  select id into v_teacher from profiles
+  where slug = lower(trim(coalesce(new.raw_user_meta_data->>'teacher', ''))) and role = 'teacher' and status = 'active';
+  insert into profiles (id, email, first_name, last_name, license_class, needs_glasses, is_conversion, phone, teacher_id)
   values (
     new.id,
     new.email,
@@ -108,7 +139,8 @@ begin
          then new.raw_user_meta_data->>'license_class' end,
     coalesce((new.raw_user_meta_data->>'needs_glasses')::boolean, false),
     coalesce((new.raw_user_meta_data->>'is_conversion')::boolean, false),
-    nullif(left(trim(coalesce(new.raw_user_meta_data->>'phone', '')), 30), '')
+    nullif(left(trim(coalesce(new.raw_user_meta_data->>'phone', '')), 30), ''),
+    v_teacher
   );
   return new;
 end $$;
@@ -118,41 +150,108 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- Admin festlegen: nach der eigenen Registrierung im SQL Editor ausführen:
---   select public.make_admin('deine@email.de');
-create or replace function public.make_admin(p_email text)
+-- Sich selbst zum Haupt-Admin machen: nach der eigenen Registrierung im SQL Editor ausführen:
+--   select public.make_owner('deine@email.de', 'kuersat');     -- 2. Wert = Kürzel für deinen Schüler-Link
+create or replace function public.make_owner(p_email text, p_slug text)
 returns text language plpgsql security definer set search_path = public as $$
-declare v_id uuid;
+declare v_id uuid; v_first text;
 begin
   select id into v_id from auth.users where lower(email) = lower(p_email);
   if v_id is null then
     return 'Kein Benutzer mit dieser E-Mail gefunden – erst in der App registrieren.';
   end if;
-  update profiles set role = 'admin', status = 'active' where id = v_id;
-  return 'OK – ' || p_email || ' ist jetzt Admin.';
+  update profiles set role = 'teacher', is_owner = true, status = 'active', teacher_id = null,
+         slug = lower(trim(p_slug))
+  where id = v_id returning first_name into v_first;
+  insert into settings (teacher_id, display_name) values (v_id, coalesce(nullif(v_first, ''), 'Fahrlehrer'))
+  on conflict (teacher_id) do nothing;
+  return 'OK – ' || p_email || ' ist jetzt Haupt-Admin. Schüler-Link-Kürzel: ' || lower(trim(p_slug));
 end $$;
-revoke execute on function public.make_admin(text) from public, anon, authenticated;
+revoke execute on function public.make_owner(text, text) from public, anon, authenticated;
+
+-- ---------- Funktionen für den Haupt-Admin ----------------------------
+
+-- Frisch registriertes Konto zum Fahrlehrer machen (die App legt das Konto vorher mit E-Mail + Passwort an)
+create or replace function public.create_teacher(p_id uuid, p_slug text, p_first text, p_last text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_owner() then raise exception 'Nur der Haupt-Admin darf Fahrlehrer anlegen'; end if;
+  if lower(trim(p_slug)) !~ '^[a-z0-9-]{2,30}$' then
+    raise exception 'Link-Kürzel: nur Kleinbuchstaben, Zahlen und Bindestrich (2–30 Zeichen)';
+  end if;
+  if exists (select 1 from profiles where slug = lower(trim(p_slug)) and id <> p_id) then
+    raise exception 'Dieses Link-Kürzel ist schon vergeben';
+  end if;
+  if exists (select 1 from bookings where student_id = p_id) then
+    raise exception 'Dieses Konto ist bereits als Schüler aktiv';
+  end if;
+  update profiles set role = 'teacher', status = 'active', teacher_id = null, is_owner = false,
+         slug = lower(trim(p_slug)), first_name = trim(p_first), last_name = trim(p_last)
+  where id = p_id;
+  if not found then raise exception 'Konto nicht gefunden'; end if;
+  insert into settings (teacher_id, display_name) values (p_id, trim(p_first))
+  on conflict (teacher_id) do update set display_name = excluded.display_name;
+end $$;
+
+-- Fahrlehrer sperren / wieder freischalten
+create or replace function public.set_teacher_status(p_id uuid, p_status text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_owner() then raise exception 'Nur der Haupt-Admin'; end if;
+  if p_id = auth.uid() then raise exception 'Du kannst dich nicht selbst sperren'; end if;
+  if p_status not in ('active','blocked') then raise exception 'Ungültiger Status'; end if;
+  update profiles set status = p_status where id = p_id and role = 'teacher';
+end $$;
+
+-- Fahrlehrer endgültig löschen – mit ALLEN seinen Schülern, Terminen und Buchungen
+create or replace function public.delete_teacher(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_owner() then raise exception 'Nur der Haupt-Admin'; end if;
+  if p_id = auth.uid() then raise exception 'Du kannst dich nicht selbst löschen'; end if;
+  if not exists (select 1 from profiles where id = p_id and role = 'teacher') then
+    raise exception 'Kein Fahrlehrer';
+  end if;
+  delete from auth.users where id in (select id from profiles where teacher_id = p_id);
+  delete from auth.users where id = p_id;
+end $$;
+
+-- Für die Registrierungsseite: Namen + Kürzel der aktiven Fahrlehrer (ohne weitere Daten)
+create or replace function public.public_teachers()
+returns table (slug text, display_name text)
+language sql stable security definer set search_path = public as $$
+  select p.slug, s.display_name from profiles p join settings s on s.teacher_id = p.id
+  where p.role = 'teacher' and p.status = 'active' and p.slug is not null
+  order by s.display_name;
+$$;
+
+-- ---------- Funktionen für Fahrlehrer --------------------------------
+
+-- Eigenen Schüler endgültig löschen (Konto, Profil und alle Buchungen)
+create or replace function public.delete_student(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from profiles where id = p_id and role = 'student' and teacher_id = auth.uid())
+     or not is_teacher() then
+    raise exception 'Nur der eigene Fahrlehrer darf diesen Schüler löschen';
+  end if;
+  delete from auth.users where id = p_id;
+end $$;
 
 -- ---------- Funktionen für Schüler -----------------------------------
 
--- Kalender für Schüler: freie Termine, fremde UNBESTÄTIGTE Anfragen (ohne Namen) und die eigenen.
--- Fremde bestätigte Fahrstunden bleiben unsichtbar.
+-- Kalender: freie Termine des EIGENEN Fahrlehrers, fremde unbestätigte Anfragen (ohne Namen)
+-- und die eigenen Termine. Fremde bestätigte Fahrstunden bleiben unsichtbar.
 create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
-returns table (
-  slot_id       uuid,
-  starts_at     timestamptz,
-  duration_min  int,
-  status        text,      -- 'free' | 'requested' | 'confirmed'
-  mine          boolean
-)
+returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean)
 language sql stable security definer set search_path = public as $$
   select s.id, s.starts_at, s.duration_min,
          coalesce(b.status, 'free'),
          coalesce(b.student_id = auth.uid(), false)
   from slots s
-  left join bookings b
-    on b.slot_id = s.id and b.status in ('requested','confirmed')
+  left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed')
   where s.starts_at >= p_from and s.starts_at < p_to
+    and s.teacher_id = my_teacher_id()
     and (b.id is null or b.status = 'requested' or b.student_id = auth.uid())
     and is_active()
   order by s.starts_at;
@@ -164,10 +263,12 @@ returns uuid language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_start timestamptz; v_max int; v_open int;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
-  -- Obergrenze: offene Anfragen + anstehende bestätigte Fahrstunden
-  -- eigene Höchstzahl des Schülers, sonst Standard aus den Einstellungen
+  select starts_at into v_start from slots where id = p_slot and teacher_id = my_teacher_id();
+  if v_start is null then raise exception 'Termin nicht gefunden'; end if;
+  if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
+  -- Obergrenze: eigene Höchstzahl des Schülers, sonst Standard seines Fahrlehrers
   select coalesce(p.max_open, st.max_open) into v_max
-  from profiles p cross join settings st where p.id = auth.uid() and st.id = 1;
+  from profiles p join settings st on st.teacher_id = p.teacher_id where p.id = auth.uid();
   if coalesce(v_max, 0) > 0 then
     select count(*) into v_open from bookings b join slots s on s.id = b.slot_id
     where b.student_id = auth.uid() and s.starts_at > now()
@@ -176,9 +277,6 @@ begin
       raise exception 'Du hast schon % offene bzw. anstehende Fahrstunden – mehr sind gerade nicht möglich.', v_open;
     end if;
   end if;
-  select starts_at into v_start from slots where id = p_slot;
-  if v_start is null then raise exception 'Termin nicht gefunden'; end if;
-  if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
   begin
     insert into bookings (slot_id, student_id, student_note)
     values (p_slot, auth.uid(), nullif(left(trim(coalesce(p_note,'')), 300), ''))
@@ -214,7 +312,16 @@ begin
   return v_late;
 end $$;
 
--- Eigene Profildaten ändern (Rolle und Freischaltung bleiben unberührt)
+-- Eigene, noch nicht bestätigte Anfrage zurückziehen
+create or replace function public.cancel_request(p_booking uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update bookings set status = 'cancelled', decided_at = now()
+  where id = p_booking and student_id = auth.uid() and status = 'requested' and is_active();
+  if not found then raise exception 'Anfrage kann nicht zurückgezogen werden'; end if;
+end $$;
+
+-- Eigene Profildaten ändern (Rolle, Freischaltung und Fahrlehrer bleiben unberührt)
 create or replace function public.update_my_profile(
   p_first text, p_last text, p_class text, p_glasses boolean, p_conversion boolean, p_phone text)
 returns void language plpgsql security definer set search_path = public as $$
@@ -231,15 +338,6 @@ begin
   where id = auth.uid();
 end $$;
 
--- Eigene, noch nicht bestätigte Anfrage zurückziehen
-create or replace function public.cancel_request(p_booking uuid)
-returns void language plpgsql security definer set search_path = public as $$
-begin
-  update bookings set status = 'cancelled', decided_at = now()
-  where id = p_booking and student_id = auth.uid() and status = 'requested' and is_active();
-  if not found then raise exception 'Anfrage kann nicht zurückgezogen werden'; end if;
-end $$;
-
 -- ---------- Zugriffsregeln (Row Level Security) ----------------------
 
 alter table public.profiles enable row level security;
@@ -247,39 +345,45 @@ alter table public.settings enable row level security;
 alter table public.slots    enable row level security;
 alter table public.bookings enable row level security;
 
--- Profile: jeder sieht nur sich selbst, Admin sieht alle
+-- Profile: man sieht sich selbst; Fahrlehrer sehen ihre eigenen Schüler; Haupt-Admin sieht die Fahrlehrer
 drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles for select
-  using (id = auth.uid() or public.is_admin());
-drop policy if exists profiles_admin_update on public.profiles;
-create policy profiles_admin_update on public.profiles for update
-  using (public.is_admin()) with check (public.is_admin());
+  using (id = auth.uid()
+         or (public.is_teacher() and teacher_id = auth.uid())
+         or (public.is_owner() and role = 'teacher'));
+-- Fahrlehrer ändern nur eigene Schüler – und können sie nicht zu Fahrlehrern machen oder weitergeben
+drop policy if exists profiles_teacher_update on public.profiles;
+create policy profiles_teacher_update on public.profiles for update
+  using (public.is_teacher() and teacher_id = auth.uid() and role = 'student')
+  with check (teacher_id = auth.uid() and role = 'student' and not is_owner and slug is null);
 
--- Einstellungen: alle Freigeschalteten lesen, nur Admin ändert
+-- Einstellungen: Schüler lesen die ihres Fahrlehrers; Fahrlehrer ändern nur die eigenen
 drop policy if exists settings_select on public.settings;
 create policy settings_select on public.settings for select
-  using (public.is_active());
+  using (teacher_id = public.my_teacher_id());
 drop policy if exists settings_update on public.settings;
 create policy settings_update on public.settings for update
-  using (public.is_admin()) with check (public.is_admin());
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid());
 
--- Termine: direkt nur für Admin (Schüler nutzen get_calendar)
-drop policy if exists slots_admin on public.slots;
-create policy slots_admin on public.slots for all
-  using (public.is_admin()) with check (public.is_admin());
--- Schüler dürfen die Termine ihrer EIGENEN Buchungen lesen
+-- Termine: Fahrlehrer verwalten nur eigene; Schüler lesen die Termine ihrer eigenen Buchungen
+drop policy if exists slots_teacher on public.slots;
+create policy slots_teacher on public.slots for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
 drop policy if exists slots_own on public.slots;
 create policy slots_own on public.slots for select
-  using (public.is_active() and exists (select 1 from public.bookings b
-                 where b.slot_id = slots.id and b.student_id = auth.uid()));
+  using (public.is_active() and public.has_own_booking(id));
 
--- Buchungen: freigeschaltete Schüler sehen nur eigene; Admin alles
+-- Buchungen: Schüler sehen eigene; Fahrlehrer verwalten Buchungen auf eigenen Terminen für eigene Schüler
 drop policy if exists bookings_select on public.bookings;
 create policy bookings_select on public.bookings for select
-  using ((student_id = auth.uid() and public.is_active()) or public.is_admin());
-drop policy if exists bookings_admin on public.bookings;
-create policy bookings_admin on public.bookings for all
-  using (public.is_admin()) with check (public.is_admin());
+  using (student_id = auth.uid() and public.is_active());
+drop policy if exists bookings_teacher on public.bookings;
+create policy bookings_teacher on public.bookings for all
+  using (public.is_teacher() and public.slot_teacher(slot_id) = auth.uid())
+  with check (public.is_teacher() and public.slot_teacher(slot_id) = auth.uid()
+              and public.student_teacher(student_id) = auth.uid());
 
 -- Rechte für Funktionen
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
@@ -288,6 +392,15 @@ grant execute on function public.cancel_request(uuid) to authenticated;
 grant execute on function public.cancel_booking(uuid, text) to authenticated;
 grant execute on function public.update_my_profile(text, text, text, boolean, boolean, text) to authenticated;
 grant execute on function public.cancel_deadline(timestamptz) to authenticated;
-grant execute on function public.is_admin() to authenticated;
+grant execute on function public.is_teacher() to authenticated;
+grant execute on function public.is_owner() to authenticated;
 grant execute on function public.is_active() to authenticated;
+grant execute on function public.my_teacher_id() to authenticated;
+grant execute on function public.slot_teacher(uuid) to authenticated;
+grant execute on function public.student_teacher(uuid) to authenticated;
+grant execute on function public.has_own_booking(uuid) to authenticated;
 grant execute on function public.delete_student(uuid) to authenticated;
+grant execute on function public.create_teacher(uuid, text, text, text) to authenticated;
+grant execute on function public.set_teacher_status(uuid, text) to authenticated;
+grant execute on function public.delete_teacher(uuid) to authenticated;
+grant execute on function public.public_teachers() to anon, authenticated;

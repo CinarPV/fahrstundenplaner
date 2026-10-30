@@ -1,8 +1,21 @@
 # 🚗 Fahrstundenplaner
 
-Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Link anfragen.
+Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link anfragen. Mehrere Fahrlehrer können die App gemeinsam nutzen, und jeder hat seinen eigenen, getrennten Bereich.
 
 ## Was die App kann
+
+**Haupt-Admin (Betreiber der App)**
+- Ist selbst auch Fahrlehrer, mit allen Funktionen unten.
+- Tab **„Fahrlehrer“**: neue Fahrlehrer-Kollegen anlegen, mit Vorname, Nachname, E-Mail, **Passwort** (wird automatisch erzeugt oder selbst gewählt) und **Link-Kürzel** (z. B. `mehmet`).
+- Danach erscheinen fertige **Zugangsdaten zum Kopieren oder Verschicken per WhatsApp**: Anmelde-Adresse, E-Mail, Passwort und der Schüler-Link des Kollegen.
+- Fahrlehrer **sperren**, wieder freischalten oder **löschen** (mit allen ihren Schülern und Terminen; zur Sicherheit muss man dafür den Vornamen eintippen).
+- Sieht **nicht** die Schüler, Termine oder Nachrichten der anderen Fahrlehrer.
+
+**Jeder Fahrlehrer hat seinen eigenen Bereich**
+- Eigene Schüler, eigene Termine, eigene Einstellungen (Standarddauer, Höchstzahl, Name, Handynummer).
+- **Eigener Schüler-Link** (z. B. `…/fahrstundenplaner/?l=mehmet`). Wer sich darüber registriert, landet automatisch bei diesem Fahrlehrer.
+- Der Link ist jederzeit über den Knopf **„🔗 Schüler-Link“** oben erreichbar: Kopieren, **Teilen**, **per WhatsApp verschicken** oder als **QR-Code** zum Scannen.
+- Eigenes **Passwort ändern** unter Einstellungen.
 
 **Fahrlehrer (Admin)**
 - Freie Termine anlegen: Datum, Uhrzeit, Dauer. Die Standarddauer von 90 Minuten ist vorausgefüllt.
@@ -29,11 +42,11 @@ Web-App, mit der ein Fahrlehrer Fahrstunden freigibt und Fahrschüler sie per Li
 - Rote Zahlen an den Tabs zeigen offene Anfragen, neue Anmeldungen und neue Absagen.
 
 **Fahrschüler**
-- Einmal registrieren mit Vor- und Nachname, Führerscheinklasse (B, B197 oder B Automatik), Sehhilfe ja/nein, Umschreiber ja/nein, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
+- Über den Link des eigenen Fahrlehrers registrieren (der Fahrlehrer steht dann schon fest) mit Vor- und Nachname, Führerscheinklasse (B, B197 oder B Automatik), Sehhilfe ja/nein, Umschreiber ja/nein, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
 - Der Wochenkalender zeigt **freie** Termine, die **eigenen** Termine und Termine, die jemand anderes **angefragt** hat, die aber **noch nicht bestätigt** sind (ohne Namen). So lohnt es sich, wieder reinzuschauen. Bestätigte Fahrstunden anderer sind unsichtbar.
 - Freien Termin anfragen, mit einer kurzen Nachricht (max. 300 Zeichen). Ein Hinweis erklärt: Nach der Bestätigung ist die Fahrstunde verbindlich, und eine Absage nach dem Vortag 18:00 Uhr ist eine kostenpflichtige Fehlstunde.
 - Eine bestätigte Fahrstunde mit **„Fahrstunde absagen“** absagen. Dafür muss der Schüler einen kurzen Grund schreiben und einen Haken setzen. Nach der Frist erscheint eine deutliche Warnung, und die Absage wird automatisch als Fehlstunde vermerkt.
-- **Mein Profil:** eigene Daten (Name, Klasse, Sehhilfe, Umschreiber, Handynummer) selbst ändern.
+- **Profil:** eigene Daten (Name, Klasse, Sehhilfe, Umschreiber, Handynummer) selbst ändern, Passwort ändern.
 - **„Neu“-Markierung:** Eine rote Zahl am Tab „Meine Fahrstunden“ zeigt Bestätigungen, Ablehnungen oder abgehakte Stunden seit dem letzten Besuch.
 - Eigene Fahrstunden als **Excel-Datei (CSV)** speichern oder **drucken / als PDF** sichern, dazu eine Übersicht der Sonderfahrten.
 - Knopf **„💬 Fahrlehrer per WhatsApp“**. Nach einer Absage wird eine fertige Nachricht an den Fahrlehrer angeboten.
@@ -82,23 +95,29 @@ Der kostenlose Plan reicht für eine Fahrschule locker aus. Achtung: Ein kostenl
 2. Bei **Site URL** deine App-Adresse eintragen, z. B. `https://DEINNAME.github.io/fahrstundenplaner/`.
 3. Dieselbe Adresse auch unter **Redirect URLs** hinzufügen.
 
-Optional: Unter **Authentication → Providers → Email** lässt sich „Confirm email“ ausschalten. Dann müssen Schüler ihre E-Mail nicht erst bestätigen.
+**Empfohlen:** Unter **Authentication → Providers → Email** (bzw. **Sign In / Providers**) **„Confirm email“ ausschalten**. Dann müssen Schüler und neue Fahrlehrer ihre E-Mail nicht erst bestätigen. Das ist unproblematisch, weil jeder Schüler ohnehin erst vom Fahrlehrer freigeschaltet werden muss. Außerdem verschickt Supabase im kostenlosen Plan nur wenige Bestätigungs-E-Mails pro Stunde.
 
 ### 4. App mit Supabase verbinden
 1. In Supabase **Project Settings → API** öffnen (bzw. **Data API / API Keys**).
 2. Die **Project URL** und den **anon public** Key kopieren.
 3. Auf GitHub im Repo die Datei `config.js` öffnen, auf ✏️ klicken, beide Werte eintragen und **Commit changes** klicken.
 
-### 5. Dich selbst zum Admin machen
-1. Die App öffnen und dich unter „Neu registrieren“ wie ein Schüler registrieren.
-2. In Supabase im **SQL Editor** ausführen (mit deiner E-Mail):
+### 5. Dich selbst zum Haupt-Admin machen
+1. Die App öffnen und dich unter „Neu registrieren“ registrieren. Bei „Dein Fahrlehrer“ steht noch niemand, das ist beim allerersten Mal normal.
+2. In Supabase im **SQL Editor** ausführen, mit deiner E-Mail und deinem Wunsch-Kürzel für deinen Schüler-Link:
    ```sql
-   select public.make_admin('deine@email.de');
+   select public.make_owner('deine@email.de', 'kuersat');
    ```
-3. In der App ab- und wieder anmelden. Oben steht jetzt **Fahrlehrer**, und du siehst die Tabs „Anfragen“, „Schüler“ und „Einstellungen“.
+3. In der App ab- und wieder anmelden. Oben steht jetzt **Haupt-Admin**, und du siehst zusätzlich den Tab **„Fahrlehrer“**.
+4. Unter **Einstellungen** deinen Namen für Schüler und deine Handynummer eintragen.
 
 ### 6. Link an die Schüler schicken
-Unter **Einstellungen → Link für deine Schüler** auf **Kopieren** klicken und den Link per WhatsApp schicken.
+Oben auf **„🔗 Schüler-Link“** tippen, dann **Kopieren**, **Teilen**, **per WhatsApp verschicken** oder den **QR-Code** scannen lassen.
+
+### 6b. Weitere Fahrlehrer anlegen (optional)
+Im Tab **„Fahrlehrer“** Name, E-Mail und Link-Kürzel eintragen (das Passwort wird automatisch erzeugt) und auf **Fahrlehrer anlegen** tippen. Die fertigen Zugangsdaten schickst du dem Kollegen per WhatsApp. Er meldet sich an, ändert sein Passwort und verschickt dann **seinen eigenen** Schüler-Link.
+
+> **Datenschutz:** Als Betreiber speicherst du auch die Schülerdaten deiner Kollegen, selbst wenn du sie nicht sehen kannst. Mit den Kollegen sollte deshalb eine kurze Vereinbarung zur Auftragsverarbeitung (DSGVO) getroffen werden.
 
 ### 7. Schüler freischalten
 Neue Registrierungen erscheinen im Tab **Schüler** unter „Neue Anmeldungen“ (rote Zahl am Tab). Mit **✓ Freischalten** erhält die Person Zugang, mit **Ablehnen & löschen** wird sie entfernt.
@@ -130,5 +149,7 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 ## Sicherheit in Kürze
 - Nicht freigeschaltete oder gesperrte Personen sehen **gar nichts**: keine Termine und keine Einstellungen. Das prüft die Datenbank selbst, nicht nur die Oberfläche.
 - Schüler sehen nur **eigene** Anfragen und Nachrichten. Belegte Termine anderer bekommen sie gar nicht erst geliefert.
-- Nur der Admin kann Termine anlegen, bestätigen, ablehnen und Fahrzeiten eintragen.
+- Nur Fahrlehrer können Termine anlegen, bestätigen, ablehnen und Fahrzeiten eintragen, und zwar **nur für die eigenen Schüler und Termine**.
+- **Getrennte Bereiche:** Ein Fahrlehrer sieht niemals Schüler, Termine, Buchungen oder Einstellungen eines anderen Fahrlehrers, auch der Haupt-Admin nicht. Das ist in der Datenbank festgelegt und mit 36 automatischen Tests geprüft.
+- Wird ein Fahrlehrer gesperrt, sehen er und alle seine Schüler nichts mehr, bis er wieder freigeschaltet wird.
 - Ein Termin kann nie doppelt angefragt werden. Das prüft die Datenbank selbst.

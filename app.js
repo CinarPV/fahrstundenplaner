@@ -108,7 +108,11 @@ function studentTags(p) {
   if (p.is_conversion) tags.push(el("span", { class: "tag" }, "Umschreiber"));
   return tags.length ? el("span", { class: "tags" }, tags) : null;
 }
-const isAdmin = () => state.profile && state.profile.role === "admin";
+// "Admin" = Fahrlehrer (verwaltet eigene Schüler); "Owner" = Haupt-Admin (legt Fahrlehrer an)
+const isAdmin = () => !!state.profile && state.profile.role === "teacher" && state.profile.status === "active";
+const isOwner = () => isAdmin() && state.profile.is_owner;
+const teacherSignature = () => `Dein Fahrlehrer ${state.settings.display_name || ""}`.trim();
+const studentLink = () => location.origin + location.pathname + "?l=" + encodeURIComponent(state.profile.slug || "");
 
 // Sonderfahrten
 const LESSON_TYPES = { normal: "Übungsfahrt", ueberland: "Überlandfahrt", autobahn: "Autobahnfahrt", nacht: "Nachtfahrt" };
@@ -137,7 +141,7 @@ function waTextForStudent(kind, profile, slot, reply) {
     rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen. Schau gern nach einem anderen freien Termin.`,
     cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
   }[kind];
-  return body + (reply ? `\n${reply}` : "") + "\n\nDein Fahrlehrer";
+  return body + (reply ? `\n${reply}` : "") + "\n\n" + teacherSignature();
 }
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
 function notifyStep(msg, phone, text, who = "den Schüler") {
@@ -323,23 +327,35 @@ async function loadUserAndRender() {
     const { data: profile, error } = await sb.from("profiles").select("*").eq("id", state.session.user.id).single();
     if (error) throw error;
     state.profile = profile;
-    const { data: settings } = await sb.from("settings").select("*").eq("id", 1).maybeSingle();
-    if (settings) state.settings = settings;
+    const teacherId = profile.role === "teacher" ? profile.id : profile.teacher_id;
+    state.settings = { default_duration: 90, max_open: 3 };
+    if (teacherId) {
+      const { data: settings } = await sb.from("settings").select("*").eq("teacher_id", teacherId).maybeSingle();
+      if (settings) state.settings = settings;
+    }
+    // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
+    state.active = profile.role === "teacher" ? profile.status === "active" : !!(await sb.rpc("is_active")).data;
   } catch (e) { fail(e); }
   state.tab = "calendar";
   renderUserbox();
-  if (state.profile && !isAdmin() && state.profile.status !== "active") renderWaiting();
+  const p = state.profile;
+  if (p && !isAdmin() && !state.active) renderWaiting();
   else render();
 }
 
 // Schüler ist (noch) nicht freigeschaltet oder wurde gesperrt
 function renderWaiting() {
-  const blocked = state.profile.status === "blocked";
+  const p = state.profile;
+  const blocked = p.status !== "pending";
+  const noTeacher = p.role === "student" && !p.teacher_id;
   app.replaceChildren(el("div", { class: "card narrow" },
-    el("h2", {}, blocked ? "Zugang beendet" : "Fast geschafft – warte auf Freischaltung"),
-    el("p", {}, blocked
-      ? "Dein Zugang zum Fahrstundenplaner ist nicht mehr aktiv. Bei Fragen wende dich bitte direkt an deinen Fahrlehrer."
-      : `Hallo ${state.profile.first_name || ""}! Deine Anmeldung ist angekommen. Dein Fahrlehrer muss dich noch freischalten – danach siehst du hier den Kalender und kannst Fahrstunden anfragen.`),
+    el("h2", {}, noTeacher ? "Kein Fahrlehrer zugeordnet" : blocked ? "Zugang nicht aktiv" : "Fast geschafft – warte auf Freischaltung"),
+    el("p", {}, noTeacher
+      ? "Dein Konto ist keinem Fahrlehrer zugeordnet. Bitte registriere dich über den Link, den dir dein Fahrlehrer geschickt hat, oder sprich ihn direkt an."
+      : blocked
+      ? (p.role === "teacher" ? "Dein Fahrlehrer-Zugang ist gesperrt. Bitte wende dich an den Betreiber der App."
+        : "Dein Zugang zum Fahrstundenplaner ist nicht mehr aktiv. Bei Fragen wende dich bitte direkt an deinen Fahrlehrer.")
+      : `Hallo ${p.first_name || ""}! Deine Anmeldung ist angekommen. Dein Fahrlehrer muss dich noch freischalten – danach siehst du hier den Kalender und kannst Fahrstunden anfragen.`),
     blocked ? null : el("div", { class: "actions" },
       el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen")),
   ));
@@ -349,12 +365,23 @@ function renderUserbox() {
   if (!state.profile) { userbox.replaceChildren(); return; }
   userbox.replaceChildren(...[
     el("span", {}, fullName(state.profile)),
-    isAdmin() ? el("span", { class: "badge admin" }, "Fahrlehrer") : null,
+    isAdmin() ? el("span", { class: "badge admin" }, isOwner() ? "Haupt-Admin" : "Fahrlehrer") : null,
+    isAdmin() ? el("button", { class: "btn small", onclick: openLinkModal }, "🔗 Schüler-Link") : null,
+    !isAdmin() && state.settings.display_name ? el("span", { class: "small muted" }, "· Fahrlehrer " + state.settings.display_name) : null,
     el("button", { class: "btn small ghost", onclick: async () => { await sb.auth.signOut(); } }, "Abmelden"),
   ].filter(Boolean));
 }
 
-function renderAuth(mode = "login") {
+// Kürzel des Fahrlehrers aus dem Link (?l=…), auf diesem Gerät gemerkt
+function urlTeacherSlug() {
+  const fromUrl = new URLSearchParams(location.search).get("l");
+  try {
+    if (fromUrl) localStorage.setItem("fsp_teacher", fromUrl.toLowerCase());
+    return (fromUrl || localStorage.getItem("fsp_teacher") || "").toLowerCase();
+  } catch { return (fromUrl || "").toLowerCase(); }
+}
+
+function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.search).get("l") ? "register" : "login")) {
   const email = el("input", { type: "email", autocomplete: "email", required: true });
   const pw = el("input", { type: "password", autocomplete: mode === "login" ? "current-password" : "new-password", minlength: 6, required: true });
   const first = el("input", { autocomplete: "given-name", required: true });
@@ -366,6 +393,25 @@ function renderAuth(mode = "login") {
   const conversion = el("input", { type: "checkbox" });
   const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "z. B. 0151 23456789" });
   const submit = el("button", { class: "btn", type: "submit" }, mode === "login" ? "Anmelden" : "Registrieren");
+
+  // Fahrlehrer aus dem Link (?l=kuersat) – sonst Auswahl
+  const linkSlug = urlTeacherSlug();
+  const teacherSel = el("select", { required: true }, el("option", { value: "" }, "Lädt …"));
+  const teacherInfo = el("p", { class: "notice", hidden: true });
+  const teacherWrap = el("div", {}, el("label", {}, "Dein Fahrlehrer"), teacherSel);
+  if (mode === "register") sb.rpc("public_teachers").then(({ data, error }) => {
+    if (error) return fail(error);
+    const list = data || [];
+    teacherSel.replaceChildren(el("option", { value: "" }, list.length ? "Bitte wählen …" : "Noch kein Fahrlehrer angelegt"),
+      ...list.map((t) => el("option", { value: t.slug }, t.display_name)));
+    const match = list.find((t) => t.slug === linkSlug);
+    if (match) {
+      teacherSel.value = match.slug;
+      teacherWrap.hidden = true;
+      teacherInfo.hidden = false;
+      teacherInfo.replaceChildren("Anmeldung bei Fahrlehrer ", el("b", {}, match.display_name));
+    }
+  });
 
   const form = el("form", {
     onsubmit: (e) => {
@@ -381,7 +427,7 @@ function renderAuth(mode = "login") {
               data: {
                 first_name: first.value.trim(), last_name: last.value.trim(),
                 license_class: licenseClass.value, needs_glasses: glasses.checked, is_conversion: conversion.checked,
-                phone: phone.value.trim(),
+                phone: phone.value.trim(), teacher: teacherSel.value,
               },
               emailRedirectTo: location.origin + location.pathname },
           });
@@ -400,6 +446,7 @@ function renderAuth(mode = "login") {
       el("div", {}, el("label", {}, "Vorname"), first),
       el("div", {}, el("label", {}, "Nachname"), last)) : null,
     mode === "register" ? [
+      teacherInfo, teacherWrap,
       el("label", {}, "Führerscheinklasse"), licenseClass,
       el("label", { class: "check" }, glasses, "Ich brauche eine Sehhilfe (Brille / Kontaktlinsen)"),
       el("label", { class: "check" }, conversion, "Ich bin Umschreiber (habe schon einen ausländischen Führerschein)"),
@@ -448,6 +495,7 @@ async function render() {
   state.dirty = false;
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
+      .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Stunden"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
@@ -464,6 +512,7 @@ async function render() {
     else if (state.tab === "requests") view = await adminRequests();
     else if (state.tab === "students") view = await adminStudents();
     else if (state.tab === "settings") view = adminSettings();
+    else if (state.tab === "teachers") view = await ownerTeachers();
     else if (state.tab === "mine") view = await studentMine();
     else if (state.tab === "profile") view = studentProfile();
     content.replaceChildren(view);
@@ -731,7 +780,7 @@ function newSlotForm() {
     })));
     if (error) throw error;
     const lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
-    const text = `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunden eingetragen:\n${lines}` + (note ? `\n${note}` : "") + "\n\nDein Fahrlehrer";
+    const text = `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunden eingetragen:\n${lines}` + (note ? `\n${note}` : "") + "\n\n" + teacherSignature();
     notifyStep(`${res.rows.length} Fahrstunde${res.rows.length === 1 ? "" : "n"} für ${fullName(student)} eingetragen` + (res.skipped ? ` (${res.skipped} gab es schon)` : ""),
       student.phone, text);
   });
@@ -1185,22 +1234,185 @@ async function openStudent(st) {
     el("div", { class: "actions" }, st.status === "blocked" ? unblock : block, del));
 }
 
+/* ---------------- Haupt-Admin: Fahrlehrer verwalten ---------------- */
+
+const slugify = (t) => (t || "").toLowerCase()
+  .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30);
+function randomPassword() {
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+  const a = new Uint32Array(8);
+  crypto.getRandomValues(a);
+  return Array.from(a, (n) => chars[n % chars.length]).join("");
+}
+const appLink = () => location.origin + location.pathname;
+
+async function ownerTeachers() {
+  const { data: teachers, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,email,slug,status,is_owner,created_at").eq("role", "teacher").order("last_name");
+  if (error) throw error;
+
+  // Neuen Fahrlehrer anlegen
+  const first = el("input", { autocomplete: "off" });
+  const last = el("input", { autocomplete: "off" });
+  const email = el("input", { type: "email", autocomplete: "off" });
+  const pw = el("input", { value: randomPassword(), autocomplete: "off", minlength: 6 });
+  const slug = el("input", { placeholder: "z. B. mehmet", autocomplete: "off" });
+  let slugTouched = false;
+  slug.addEventListener("input", () => (slugTouched = true));
+  first.addEventListener("input", () => { if (!slugTouched) slug.value = slugify(first.value); });
+  const linkPreview = el("div", { class: "small muted" });
+  const updatePreview = () => (linkPreview.textContent = "Schüler-Link: " + appLink() + "?l=" + (slugify(slug.value) || "…"));
+  [first, slug].forEach((i) => i.addEventListener("input", updatePreview));
+  updatePreview();
+
+  const btn = el("button", { class: "btn ok" }, "Fahrlehrer anlegen");
+  btn.onclick = () => busy(btn, async () => {
+    const v = { first: first.value.trim(), last: last.value.trim(), email: email.value.trim(), pw: pw.value, slug: slugify(slug.value) };
+    if (!v.first || !v.last) throw new Error("Bitte Vor- und Nachnamen angeben");
+    if (!v.email.includes("@")) throw new Error("Bitte eine gültige E-Mail angeben");
+    if (v.pw.length < 6) throw new Error("Passwort: mindestens 6 Zeichen");
+    if (v.slug.length < 2) throw new Error("Link-Kürzel: mindestens 2 Zeichen");
+    if (teachers.some((t) => t.slug === v.slug)) throw new Error("Dieses Link-Kürzel ist schon vergeben");
+    // Konto mit einem zweiten, unabhängigen Zugang anlegen – deine eigene Anmeldung bleibt bestehen
+    const tmp = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY,
+      { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "fsp-tmp" } });
+    const { data: su, error: e1 } = await tmp.auth.signUp({ email: v.email, password: v.pw, options: { data: { first_name: v.first, last_name: v.last } } });
+    if (e1) throw e1;
+    if (!su.user || (su.user.identities && su.user.identities.length === 0)) throw new Error("Mit dieser E-Mail gibt es schon ein Konto.");
+    const { error: e2 } = await sb.rpc("create_teacher", { p_id: su.user.id, p_slug: v.slug, p_first: v.first, p_last: v.last });
+    if (e2) throw e2;
+    showTeacherCredentials(v, !su.session);
+  });
+
+  const row = (t) => {
+    const link = appLink() + "?l=" + t.slug;
+    const toggle = el("button", { class: "btn small " + (t.status === "active" ? "danger" : "ok") }, t.status === "active" ? "Sperren" : "Freischalten");
+    toggle.onclick = () => busy(toggle, async () => {
+      if (t.status === "active" && !confirm(`${fullName(t)} sperren? Er und alle seine Schüler sehen dann nichts mehr, bis du ihn wieder freischaltest.`)) return;
+      const { error } = await sb.rpc("set_teacher_status", { p_id: t.id, p_status: t.status === "active" ? "blocked" : "active" });
+      if (error) throw error;
+      render();
+    });
+    const del = el("button", { class: "btn small danger" }, "Löschen");
+    del.onclick = () => busy(del, async () => {
+      const typed = prompt(`ACHTUNG: ${fullName(t)} wird mit ALLEN seinen Schülern, Terminen und Fahrstunden endgültig gelöscht.\n\nZum Bestätigen den Vornamen „${t.first_name}“ eintippen:`);
+      if (typed === null) return;
+      if (typed.trim().toLowerCase() !== (t.first_name || "").toLowerCase()) throw new Error("Name stimmt nicht – nichts gelöscht.");
+      const { error } = await sb.rpc("delete_teacher", { p_id: t.id });
+      if (error) throw error;
+      toast(`${fullName(t)} wurde gelöscht.`);
+      render();
+    });
+    return el("div", { class: "list-item" },
+      el("div", { class: "head" },
+        el("div", {}, el("b", {}, fullName(t)), " ",
+          t.is_owner ? el("span", { class: "badge admin" }, "Haupt-Admin") : null,
+          t.status !== "active" ? el("span", { class: "badge rejected" }, "Gesperrt") : null,
+          el("div", { class: "small muted" }, t.email || "")),
+        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, toggle, del)),
+      el("div", { class: "done-row small" }, el("code", {}, link),
+        el("button", { class: "btn small ghost", onclick: () => copyText(link, "Link kopiert.") }, "Kopieren")));
+  };
+
+  return el("div", {},
+    el("div", { class: "card" },
+      el("h2", {}, "Neuen Fahrlehrer anlegen"),
+      el("p", { class: "muted small" }, "Der Fahrlehrer bekommt einen eigenen Bereich mit eigenen Schülern, Terminen und Einstellungen. Du siehst seine Schüler nicht – und er deine nicht."),
+      el("div", { class: "row" },
+        el("div", {}, el("label", {}, "Vorname"), first),
+        el("div", {}, el("label", {}, "Nachname"), last)),
+      el("label", {}, "E-Mail (zum Anmelden)"), email,
+      el("div", { class: "row" },
+        el("div", {}, el("label", {}, "Passwort (mind. 6 Zeichen)"),
+          el("div", { class: "linkbox" }, pw, el("button", { type: "button", class: "btn ghost", title: "Neues Passwort erzeugen", onclick: () => (pw.value = randomPassword()) }, "🎲"))),
+        el("div", {}, el("label", {}, "Link-Kürzel"), slug)),
+      linkPreview,
+      el("div", { class: "actions" }, btn)),
+    el("div", { class: "card" },
+      el("h2", {}, `Fahrlehrer (${teachers.length})`),
+      teachers.map(row)),
+  );
+}
+
+function showTeacherCredentials(v, needsConfirm) {
+  state.renderOnClose = true;
+  const link = appLink() + "?l=" + v.slug;
+  const text = `Hallo ${v.first}, hier sind deine Zugangsdaten für den Fahrstundenplaner:\n\n` +
+    `Anmelden: ${appLink()}\nE-Mail: ${v.email}\nPasswort: ${v.pw}\n\n` +
+    `Dein Link für deine Schüler:\n${link}\n\nBitte ändere dein Passwort nach der ersten Anmeldung unter „Einstellungen“.`;
+  openModal(`✓ ${v.first} ${v.last} angelegt`,
+    el("p", {}, "Schick ihm diese Zugangsdaten – z. B. per WhatsApp:"),
+    el("div", { class: "note", style: "white-space:pre-wrap" }, text),
+    needsConfirm ? el("div", { class: "notice" }, "Hinweis: In Supabase ist die E-Mail-Bestätigung aktiv. Er muss zuerst den Link in der Bestätigungs-E-Mail anklicken, bevor er sich anmelden kann.") : null,
+    el("div", { class: "actions" },
+      el("button", { class: "btn", onclick: () => copyText(text, "Zugangsdaten kopiert.") }, "📋 Alles kopieren"),
+      el("a", { class: "btn ok", href: "https://wa.me/?text=" + encodeURIComponent(text), target: "_blank", rel: "noopener" }, "💬 Per WhatsApp senden"),
+      el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+}
+
+/* ---------------- Fahrlehrer: Schüler-Link ---------------- */
+
+function loadQrLib() {
+  if (window.QRCode) return Promise.resolve();
+  return new Promise((ok, bad) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+    sc.onload = ok; sc.onerror = bad;
+    document.head.append(sc);
+  });
+}
+function copyText(text, what = "Kopiert.") {
+  return navigator.clipboard.writeText(text).then(() => toast(what), () => toast("Kopieren nicht möglich – bitte manuell markieren.", true));
+}
+function linkBox(link, shareText) {
+  const input = el("input", { readonly: true, value: link, onclick: (e) => e.target.select() });
+  const qr = el("div", { class: "qr" });
+  loadQrLib().then(() => new window.QRCode(qr, { text: link, width: 180, height: 180 })).catch(() => qr.remove());
+  return el("div", {},
+    el("div", { class: "linkbox" }, input, el("button", { class: "btn", onclick: () => copyText(link, "Link kopiert.") }, "Kopieren")),
+    el("div", { class: "actions" },
+      navigator.share ? el("button", { class: "btn ghost", onclick: () => navigator.share({ title: "Fahrstundenplaner", text: shareText, url: link }).catch(() => {}) }, "📤 Teilen") : null,
+      el("a", { class: "btn ok", href: "https://wa.me/?text=" + encodeURIComponent(shareText + "\n" + link), target: "_blank", rel: "noopener" }, "💬 Per WhatsApp verschicken")),
+    el("p", { class: "muted small", style: "margin-top:12px" }, "Oder den QR-Code mit dem Handy scannen lassen, z. B. direkt im Auto:"),
+    qr);
+}
+function openLinkModal() {
+  openModal("🔗 Dein Schüler-Link",
+    el("p", {}, "Diesen Link an deine Schüler schicken. Wer sich darüber registriert, landet automatisch bei dir."),
+    linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden bei mir (${state.settings.display_name || "deinem Fahrlehrer"}) anmelden:`));
+}
+
+// Eigenes Passwort ändern (Fahrlehrer und Schüler)
+function passwordCard() {
+  const pw = el("input", { type: "password", minlength: 6, autocomplete: "new-password", placeholder: "Neues Passwort (mind. 6 Zeichen)" });
+  const btn = el("button", { class: "btn ghost" }, "Passwort ändern");
+  btn.onclick = () => busy(btn, async () => {
+    if (pw.value.length < 6) throw new Error("Mindestens 6 Zeichen");
+    const { error } = await sb.auth.updateUser({ password: pw.value });
+    if (error) throw error;
+    pw.value = "";
+    toast("Passwort geändert.");
+  });
+  return el("div", { class: "card" }, el("h3", {}, "Passwort ändern"), pw, el("div", { class: "actions" }, btn));
+}
+
 /* ---------------- Admin: Einstellungen ---------------- */
 
 function adminSettings() {
   const dur = durationControl(state.settings.default_duration);
   const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3 });
   const phone = el("input", { type: "tel", value: state.settings.admin_phone || "", placeholder: "z. B. 0151 23456789" });
+  const display = el("input", { value: state.settings.display_name || "", maxlength: 60 });
   const save = el("button", { class: "btn" }, "Speichern");
   save.onclick = () => busy(save, async () => {
-    const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null };
-    const { error } = await sb.from("settings").update(v).eq("id", 1);
+    const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null,
+      display_name: display.value.trim() || "Fahrlehrer" };
+    const { error } = await sb.from("settings").update(v).eq("teacher_id", state.profile.id);
     if (error) throw error;
     Object.assign(state.settings, v);
     toast("Einstellungen gespeichert.");
   });
-  const link = location.origin + location.pathname;
-  const linkInput = el("input", { readonly: true, value: link });
   return el("div", {},
     el("div", { class: "card" },
       el("h3", {}, "Standarddauer für neue Termine"),
@@ -1209,15 +1421,18 @@ function adminSettings() {
       el("h3", { style: "margin-top:18px" }, "Höchstzahl offener Fahrstunden pro Schüler"),
       el("p", { class: "muted small" }, "So viele Anfragen + anstehende Fahrstunden darf ein Schüler gleichzeitig haben. 0 = unbegrenzt."),
       maxOpen,
+      el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler"),
+      el("p", { class: "muted small" }, "So erscheinst du bei der Registrierung und in Nachrichten, z. B. „Kürsat“."),
+      display,
       el("h3", { style: "margin-top:18px" }, "Deine Handynummer"),
       el("p", { class: "muted small" }, "Damit Schüler dich per WhatsApp-Knopf erreichen (z. B. nach einer Absage). Wird nur freigeschalteten Schülern angezeigt."),
       phone,
       el("div", { class: "actions" }, save)),
     el("div", { class: "card" },
-      el("h3", {}, "Link für deine Schüler"),
-      el("p", { class: "muted small" }, "Diesen Link per WhatsApp oder SMS schicken. Schüler registrieren sich dort einmal mit Vor- und Nachnamen."),
-      el("div", { class: "linkbox" }, linkInput,
-        el("button", { class: "btn", onclick: () => navigator.clipboard.writeText(link).then(() => toast("Link kopiert."), () => { linkInput.select(); }) }, "Kopieren"))),
+      el("h3", {}, "🔗 Dein Schüler-Link"),
+      el("p", { class: "muted small" }, "Wer sich über diesen Link registriert, landet automatisch bei dir. Den Link findest du auch jederzeit oben über „🔗 Schüler-Link“."),
+      linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden bei mir (${state.settings.display_name || "deinem Fahrlehrer"}) anmelden:`)),
+    passwordCard(),
   );
 }
 
@@ -1297,7 +1512,8 @@ function studentProfile() {
   return el("div", { class: "card narrow", style: "margin:0 auto" },
     el("h2", {}, "Mein Profil"),
     el("p", { class: "muted small" }, state.profile.email || ""),
-    f.node, el("div", { class: "actions" }, save));
+    f.node, el("div", { class: "actions" }, save),
+    el("hr"), passwordCard());
 }
 
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */
