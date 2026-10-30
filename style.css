@@ -1,5 +1,6 @@
 :root {
-  --bg: #f5f6f8;
+  color-scheme: light;  /* immer helles Layout, auch im Dunkelmodus des Geräts */
+  --bg: #f4f6fb;
   --card: #ffffff;
   --text: #1c1f24;
   --muted: #6b7280;
@@ -12,17 +13,6 @@
   --done-bg: #eeeef2;   --done-fg: #4b5060;   --done-bd: #cfd1d8;
   --danger: #c62828;
   --radius: 10px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121418; --card: #1b1e24; --text: #e8eaed; --muted: #9aa0a9; --border: #2c3038;
-    --accent: #5b8cff; --accent-text: #0b0d10;
-    --free-bg: #12301f; --free-fg: #7fdca4; --free-bd: #23583a;
-    --req-bg: #352a10;  --req-fg: #f3c96a;  --req-bd: #6a531d;
-    --conf-bg: #172647; --conf-fg: #9dbbff; --conf-bd: #2e4a85;
-    --done-bg: #24262c; --done-fg: #b5b9c2; --done-bd: #3a3d45;
-    --danger: #ff6b6b;
-  }
 }
 
 * { box-sizing: border-box; }
@@ -39,13 +29,16 @@ h3 { font-size: 16px; margin: 0 0 8px; }
 
 .topbar {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
-  padding: 12px 16px; background: var(--card); border-bottom: 1px solid var(--border);
+  padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 8px rgba(30, 64, 175, .06);
   position: sticky; top: 0; z-index: 5;
 }
-.brand { font-weight: 700; font-size: 17px; white-space: nowrap; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; white-space: nowrap; color: #1e3a8a; letter-spacing: -.01em; }
+.brand img { width: 36px; height: 36px; display: block; }
+.brand small { display: block; font-weight: 500; font-size: 11px; color: var(--muted); letter-spacing: .02em; }
 .userbox { display: flex; align-items: center; gap: 8px; font-size: 14px; flex-wrap: wrap; justify-content: flex-end; }
 
-.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(15, 23, 42, .04); }
 .narrow { max-width: 420px; margin: 24px auto; }
 
 .tabs { display: flex; gap: 6px; margin-bottom: 16px; overflow-x: auto; }
@@ -69,10 +62,6 @@ label.check input { width: 20px; height: 20px; margin: 0; flex: none; }
 .tag.warn { background: var(--req-bg); color: var(--req-fg); border-color: var(--req-bd); }
 .badge.sick, .badge.cancelled_student, .badge.cancelled_teacher, .badge.late { background: #fde8e8; color: #a61b1b; border-color: #f2b5b5; }
 .badge.late { background: #a61b1b; color: #fff; border-color: #a61b1b; }
-@media (prefers-color-scheme: dark) {
-  .badge.sick, .badge.cancelled_student, .badge.cancelled_teacher { background: #3a1616; color: #ff9b9b; border-color: #6b2a2a; }
-  .badge.late { background: #ff6b6b; color: #1b0b0b; border-color: #ff6b6b; }
-}
 details.nothere { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
 details.nothere summary { cursor: pointer; font-weight: 600; color: var(--danger); }
 details.nothere input:not([type]) { margin-top: 10px; }
@@ -171,7 +160,6 @@ details.fold .card { border: none; padding: 0; margin: 0 0 8px; }
 .qr img, .qr canvas { display: block; }
 code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2px 6px; border-radius: 4px; }
 :root { --off-bg: #f1eafe; --off-fg: #6b3fc9; --off-bd: #cdb8f5; }
-@media (prefers-color-scheme: dark) { :root { --off-bg: #2a1f45; --off-fg: #c4a8ff; --off-bd: #4e3a80; } }
 .slot.offered { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-bd); }
 .badge.offered { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-bd); }
 .badge.declined { background: var(--done-bg); color: var(--done-fg); border-color: var(--done-bd); }

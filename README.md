@@ -172,7 +172,8 @@ Wenn du später auf GitHub Pages umziehst, ergänzt du in Supabase (Schritt 3) d
 |---|---|
 | `index.html` | Grundgerüst der Seite |
 | `app.js` | Die ganze App-Logik (Kalender, Buchen, Bestätigen …) |
-| `style.css` | Aussehen (funktioniert auch im Dunkelmodus und auf dem Handy) |
+| `style.css` | Aussehen (immer helles Layout, auch auf dem Handy) |
+| `logo.svg` | Logo für Kopfzeile und Browser-Tab (kann durch ein eigenes ersetzt werden) |
 | `config.js` | Verbindung zu Supabase (die zwei Werte aus Schritt 4) |
 | `supabase/schema.sql` | Datenbank-Tabellen und Zugriffsregeln |
 
