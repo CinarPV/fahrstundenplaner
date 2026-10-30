@@ -42,8 +42,15 @@ create table if not exists public.bookings (
   slot_id         uuid not null references public.slots(id) on delete cascade,
   student_id      uuid not null references public.profiles(id) on delete cascade,
   status          text not null default 'requested'
-                  -- sick = vom Fahrlehrer als „abgesagt – krank“ markiert (Termin wird wieder frei)
-                  check (status in ('requested','confirmed','rejected','cancelled','sick')),
+                  -- requested  = angefragt, wartet auf Bestätigung
+                  -- confirmed  = bestätigt (verbindlich)
+                  -- rejected   = Anfrage vom Fahrlehrer abgelehnt
+                  -- cancelled  = unbestätigte Anfrage vom Schüler zurückgezogen
+                  -- sick / cancelled_student / cancelled_teacher = Fahrstunde nicht zustande gekommen
+                  check (status in ('requested','confirmed','rejected','cancelled',
+                                    'sick','cancelled_student','cancelled_teacher')),
+  cancel_reason   text check (char_length(cancel_reason) <= 300),
+  late_cancel     boolean not null default false,  -- Fehlstunde (kostenpflichtig)
   student_note    text check (char_length(student_note) <= 300),
   admin_reply     text check (char_length(admin_reply) <= 1000),
   actual_start    timestamptz,
@@ -121,7 +128,8 @@ revoke execute on function public.make_admin(text) from public, anon, authentica
 
 -- ---------- Funktionen für Schüler -----------------------------------
 
--- Kalender für Schüler: nur freie Termine und die eigenen – fremde Buchungen bleiben unsichtbar
+-- Kalender für Schüler: freie Termine, fremde UNBESTÄTIGTE Anfragen (ohne Namen) und die eigenen.
+-- Fremde bestätigte Fahrstunden bleiben unsichtbar.
 create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
 returns table (
   slot_id       uuid,
@@ -138,7 +146,7 @@ language sql stable security definer set search_path = public as $$
   left join bookings b
     on b.slot_id = s.id and b.status in ('requested','confirmed')
   where s.starts_at >= p_from and s.starts_at < p_to
-    and (b.id is null or b.student_id = auth.uid())
+    and (b.id is null or b.status = 'requested' or b.student_id = auth.uid())
     and is_active()
   order by s.starts_at;
 $$;
@@ -160,6 +168,31 @@ begin
     raise exception 'Dieser Termin ist leider schon vergeben';
   end;
   return v_id;
+end $$;
+
+-- Absagefrist: Vortag 18:00 Uhr (deutsche Zeit)
+create or replace function public.cancel_deadline(p_start timestamptz)
+returns timestamptz language sql stable set search_path = public as $$
+  select ((date_trunc('day', p_start at time zone 'Europe/Berlin') - interval '6 hours')
+          at time zone 'Europe/Berlin');
+$$;
+
+-- Bestätigte Fahrstunde absagen (Schüler). Nach der Frist = Fehlstunde (kostenpflichtig).
+create or replace function public.cancel_booking(p_booking uuid, p_reason text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_late boolean;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  if coalesce(trim(p_reason), '') = '' then raise exception 'Bitte kurz den Grund angeben'; end if;
+  select now() > cancel_deadline(s.starts_at) into v_late
+  from bookings b join slots s on s.id = b.slot_id
+  where b.id = p_booking and b.student_id = auth.uid() and b.status = 'confirmed'
+    and b.actual_minutes is null and s.starts_at > now();
+  if v_late is null then raise exception 'Diese Fahrstunde kann nicht mehr abgesagt werden'; end if;
+  update bookings set status = 'cancelled_student', cancel_reason = left(trim(p_reason), 300),
+         late_cancel = v_late, decided_at = now()
+  where id = p_booking;
+  return v_late;
 end $$;
 
 -- Eigene, noch nicht bestätigte Anfrage zurückziehen
@@ -216,6 +249,8 @@ create policy bookings_admin on public.bookings for all
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
 grant execute on function public.book_slot(uuid, text) to authenticated;
 grant execute on function public.cancel_request(uuid) to authenticated;
+grant execute on function public.cancel_booking(uuid, text) to authenticated;
+grant execute on function public.cancel_deadline(timestamptz) to authenticated;
 grant execute on function public.is_admin() to authenticated;
 grant execute on function public.is_active() to authenticated;
 grant execute on function public.delete_student(uuid) to authenticated;

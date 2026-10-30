@@ -67,8 +67,17 @@ label.check input { width: 20px; height: 20px; margin: 0; flex: none; }
 .tags { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
 .tag { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 12px; background: var(--bg); border: 1px solid var(--border); color: var(--text); }
 .tag.warn { background: var(--req-bg); color: var(--req-fg); border-color: var(--req-bd); }
-.badge.sick { background: #fde8e8; color: #a61b1b; border-color: #f2b5b5; }
-@media (prefers-color-scheme: dark) { .badge.sick { background: #3a1616; color: #ff9b9b; border-color: #6b2a2a; } }
+.badge.sick, .badge.cancelled_student, .badge.cancelled_teacher, .badge.late { background: #fde8e8; color: #a61b1b; border-color: #f2b5b5; }
+.badge.late { background: #a61b1b; color: #fff; border-color: #a61b1b; }
+@media (prefers-color-scheme: dark) {
+  .badge.sick, .badge.cancelled_student, .badge.cancelled_teacher { background: #3a1616; color: #ff9b9b; border-color: #6b2a2a; }
+  .badge.late { background: #ff6b6b; color: #1b0b0b; border-color: #ff6b6b; }
+}
+details.nothere { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+details.nothere summary { cursor: pointer; font-weight: 600; color: var(--danger); }
+details.nothere input:not([type]) { margin-top: 10px; }
+.notice { border: 1px solid var(--req-bd); background: var(--req-bg); color: var(--req-fg); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
+.notice.danger { border-color: var(--danger); background: transparent; color: var(--danger); font-weight: 600; }
 .done-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 12px; }
 
