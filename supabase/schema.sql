@@ -59,8 +59,10 @@ create table if not exists public.bookings (
                   -- confirmed  = bestätigt (verbindlich)
                   -- rejected   = Anfrage vom Fahrlehrer abgelehnt
                   -- cancelled  = unbestätigte Anfrage vom Schüler zurückgezogen
+                  -- offered    = vom Fahrlehrer angeboten, wartet auf Zusage des Schülers
+                  -- declined   = Angebot vom Schüler abgelehnt
                   -- sick / cancelled_student / cancelled_teacher = Fahrstunde nicht zustande gekommen
-                  check (status in ('requested','confirmed','rejected','cancelled',
+                  check (status in ('requested','confirmed','rejected','cancelled','offered','declined',
                                     'sick','cancelled_student','cancelled_teacher')),
   cancel_reason   text check (char_length(cancel_reason) <= 300),
   late_cancel     boolean not null default false,  -- Fehlstunde (kostenpflichtig)
@@ -72,9 +74,9 @@ create table if not exists public.bookings (
   created_at      timestamptz not null default now(),
   decided_at      timestamptz
 );
--- Pro Termin höchstens EINE offene oder bestätigte Buchung
+-- Pro Termin höchstens EINE offene, angebotene oder bestätigte Buchung
 create unique index if not exists bookings_one_active_per_slot
-  on public.bookings (slot_id) where status in ('requested','confirmed');
+  on public.bookings (slot_id) where status in ('requested','confirmed','offered');
 create index if not exists bookings_student_idx on public.bookings (student_id);
 
 -- ---------- Hilfsfunktionen ------------------------------------------
@@ -249,7 +251,7 @@ language sql stable security definer set search_path = public as $$
          coalesce(b.status, 'free'),
          coalesce(b.student_id = auth.uid(), false)
   from slots s
-  left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed')
+  left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed','offered')
   where s.starts_at >= p_from and s.starts_at < p_to
     and s.teacher_id = my_teacher_id()
     and (b.id is null or b.status = 'requested' or b.student_id = auth.uid())
@@ -310,6 +312,21 @@ begin
          late_cancel = v_late, decided_at = now()
   where id = p_booking;
   return v_late;
+end $$;
+
+-- Angebot des Fahrlehrers zusagen (→ bestätigt) oder absagen (→ Termin wieder frei)
+create or replace function public.respond_offer(p_booking uuid, p_accept boolean, p_note text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  update bookings b set
+    status = case when p_accept then 'confirmed' else 'declined' end,
+    student_note = coalesce(nullif(left(trim(coalesce(p_note, '')), 300), ''), b.student_note),
+    decided_at = now()
+  from slots s
+  where b.id = p_booking and s.id = b.slot_id and b.student_id = auth.uid()
+    and b.status = 'offered' and s.starts_at > now();
+  if not found then raise exception 'Dieses Angebot ist nicht mehr offen'; end if;
 end $$;
 
 -- Eigene, noch nicht bestätigte Anfrage zurückziehen
@@ -390,6 +407,7 @@ grant execute on function public.get_calendar(timestamptz, timestamptz) to authe
 grant execute on function public.book_slot(uuid, text) to authenticated;
 grant execute on function public.cancel_request(uuid) to authenticated;
 grant execute on function public.cancel_booking(uuid, text) to authenticated;
+grant execute on function public.respond_offer(uuid, boolean, text) to authenticated;
 grant execute on function public.update_my_profile(text, text, text, boolean, boolean, text) to authenticated;
 grant execute on function public.cancel_deadline(timestamptz) to authenticated;
 grant execute on function public.is_teacher() to authenticated;

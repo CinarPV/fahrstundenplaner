@@ -78,6 +78,7 @@ function fmtMinutes(m) {
 const fullName = (p) => (p ? `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unbekannt" : "Unbekannt");
 const STATUS_TEXT = {
   requested: "Angefragt", confirmed: "Bestätigt", rejected: "Abgelehnt", cancelled: "Anfrage zurückgezogen",
+  offered: "Angeboten – wartet auf Zusage", declined: "Angebot abgelehnt",
   sick: "Krank gemeldet", cancelled_student: "Vom Schüler abgesagt", cancelled_teacher: "Vom Fahrlehrer abgesagt",
 };
 // Gründe, warum eine bestätigte Fahrstunde nicht zustande kam
@@ -138,10 +139,11 @@ function waTextForStudent(kind, profile, slot, reply) {
   const hi = `Hallo ${(profile && profile.first_name) || ""},`;
   const body = {
     confirmed: `${hi} deine Fahrstunde am ${when} (${slot.duration_min} Min.) ist bestätigt.`,
+    offered: `${hi} ich biete dir eine Fahrstunde an: ${when} (${slot.duration_min} Min.). Bitte schau in die App und sag zu oder ab.`,
     rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen. Schau gern nach einem anderen freien Termin.`,
     cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
   }[kind];
-  return body + (reply ? `\n${reply}` : "") + "\n\n" + teacherSignature();
+  return body + (reply ? `\n${reply}` : "") + `\n\nZur App: ${appLink()}\n\n` + teacherSignature();
 }
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
 function notifyStep(msg, phone, text, who = "den Schüler") {
@@ -178,7 +180,7 @@ function profileFields(p) {
       el("label", {}, "Führerscheinklasse"), cls,
       el("label", { class: "check" }, glasses, "Sehhilfe (Brille / Kontaktlinsen)"),
       el("label", { class: "check" }, conversion, "Umschreiber"),
-      el("label", {}, "Handynummer (für WhatsApp-Nachrichten, freiwillig)"), phone),
+      el("label", {}, "WhatsApp-Nummer"), phone),
     values: () => ({
       first_name: first.value.trim(), last_name: last.value.trim(), license_class: cls.value || null,
       needs_glasses: glasses.checked, is_conversion: conversion.checked, phone: phone.value.trim() || null,
@@ -391,7 +393,7 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
     LICENSE_CLASSES.map((c) => el("option", { value: c }, c === "B" ? "B (Schaltwagen)" : c === "B197" ? "B197 (Automatik-Prüfung + Schalt-Schulung)" : c)));
   const glasses = el("input", { type: "checkbox" });
   const conversion = el("input", { type: "checkbox" });
-  const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "z. B. 0151 23456789" });
+  const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "z. B. 0151 23456789", required: mode === "register" });
   const submit = el("button", { class: "btn", type: "submit" }, mode === "login" ? "Anmelden" : "Registrieren");
 
   // Fahrlehrer aus dem Link (?l=kuersat) – sonst Auswahl
@@ -421,6 +423,7 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
           const { error } = await sb.auth.signInWithPassword({ email: email.value.trim(), password: pw.value });
           if (error) throw new Error(error.message === "Invalid login credentials" ? "E-Mail oder Passwort falsch" : error.message);
         } else {
+          if (!waNumber(phone.value)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
           const { data, error } = await sb.auth.signUp({
             email: email.value.trim(), password: pw.value,
             options: {
@@ -450,7 +453,8 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
       el("label", {}, "Führerscheinklasse"), licenseClass,
       el("label", { class: "check" }, glasses, "Ich brauche eine Sehhilfe (Brille / Kontaktlinsen)"),
       el("label", { class: "check" }, conversion, "Ich bin Umschreiber (habe schon einen ausländischen Führerschein)"),
-      el("label", {}, "Handynummer (freiwillig – für WhatsApp-Nachrichten deines Fahrlehrers)"), phone,
+      el("label", {}, "Deine WhatsApp-Nummer"), phone,
+      el("p", { class: "muted small", style: "margin:4px 0 0" }, "Darüber schickt dir dein Fahrlehrer Angebote und Bestätigungen."),
     ] : null,
     el("label", {}, "E-Mail"), email,
     el("label", {}, "Passwort" + (mode === "register" ? " (mind. 6 Zeichen)" : "")), pw,
@@ -535,7 +539,7 @@ async function updateRequestCount(tabbar) {
   const [req, pend, canc] = await Promise.all([
     sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
     sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending"),
-    sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "cancelled_student").gt("decided_at", getSeen("requests")),
+    sb.from("bookings").select("id", { count: "exact", head: true }).in("status", ["cancelled_student", "declined"]).gt("decided_at", getSeen("requests")),
   ]);
   const badge = (tab, count) => {
     const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
@@ -606,7 +610,7 @@ function weekGrid(slots, renderSlot, onAddDay) {
 
 /* ---------------- Admin: Kalender ---------------- */
 
-const activeBooking = (slot) => (slot.bookings || []).find((b) => b.status === "requested" || b.status === "confirmed");
+const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", "confirmed", "offered"].includes(b.status));
 
 async function adminCalendar() {
   const from = state.weekStart, to = addDays(state.weekStart, 7);
@@ -625,6 +629,7 @@ async function adminCalendar() {
     if (!b && notHeld) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
     if (b && b.status === "requested") { cls = "requested"; label = "Anfrage: " + fullName(b.profiles) + glasses(b.profiles); }
+    if (b && b.status === "offered") { cls = "offered"; label = "Angebot an " + fullName(b.profiles) + " – wartet"; }
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : "") + fullName(b.profiles) + glasses(b.profiles);
@@ -636,7 +641,7 @@ async function adminCalendar() {
   return el("div", {},
     form.node,
     weekBar(slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null),
-    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"]]),
+    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"]]),
     grid,
   );
 }
@@ -677,8 +682,10 @@ function newSlotForm() {
   const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional), z. B. „Prüfungsvorbereitung – Treffpunkt Fahrschule“" });
   const search = el("input", { type: "search", placeholder: "Schüler suchen …" });
   const studentList = el("div", { class: "pick-list" });
+  const how = assignHow();
+  how.onChange(() => refresh());
   const assignBox = el("div", { hidden: true },
-    el("label", {}, "Welchem Schüler zuordnen?"), search, studentList,
+    el("label", {}, "Welchem Schüler?"), search, studentList, how.node,
     el("label", {}, "Hinweis an den Schüler"), reply);
   const modeBtns = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"]].map(([m, text]) =>
     el("button", { type: "button", class: "tab" + (m === mode ? " active" : ""), onclick: () => setMode(m) }, text));
@@ -751,7 +758,7 @@ function newSlotForm() {
   }
   function refresh() {
     renderStudents();
-    btn.textContent = mode === "assign" ? (student ? `Für ${fullName(student)} eintragen` : "Schüler wählen …") : "Termine freigeben";
+    btn.textContent = mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
     timeChips.replaceChildren(...times.map((t) => el("span", { class: "tag", style: "font-size:14px;padding:4px 8px" },
@@ -772,16 +779,22 @@ function newSlotForm() {
     const res = await insertSlots(list);
     state.weekStart = startOfWeek(new Date(list[0].starts_at));
     if (mode === "free") { toast(insertedMsg(res)); render(); return; }
-    // Zuordnen: gleich als bestätigte Fahrstunden für den Schüler eintragen
+    // Zuordnen: dem Schüler anbieten (er sagt zu/ab) oder gleich fest eintragen
     if (!res.rows.length) throw new Error("Alle diese Termine gibt es schon – nichts eingetragen.");
     const note = reply.value.trim() || null;
+    const kind = how.offer() ? "offered" : "confirmed";
     const { error } = await sb.from("bookings").insert(res.rows.map((r) => ({
-      slot_id: r.id, student_id: student.id, status: "confirmed", admin_reply: note, decided_at: new Date().toISOString(),
+      slot_id: r.id, student_id: student.id, status: kind, admin_reply: note, decided_at: new Date().toISOString(),
     })));
     if (error) throw error;
     const lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
-    const text = `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunden eingetragen:\n${lines}` + (note ? `\n${note}` : "") + "\n\n" + teacherSignature();
-    notifyStep(`${res.rows.length} Fahrstunde${res.rows.length === 1 ? "" : "n"} für ${fullName(student)} eingetragen` + (res.skipped ? ` (${res.skipped} gab es schon)` : ""),
+    const n = res.rows.length, pl = n === 1 ? "" : "n";
+    const text = kind === "offered"
+      ? `Hallo ${student.first_name || ""}, ich biete dir folgende Fahrstunde${pl} an:\n${lines}` + (note ? `\n${note}` : "") +
+        `\n\nBitte schau in die App und sag zu oder ab: ${appLink()}\n\n` + teacherSignature()
+      : `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunde${pl} eingetragen:\n${lines}` + (note ? `\n${note}` : "") +
+        `\n\nZur App: ${appLink()}\n\n` + teacherSignature();
+    notifyStep(`${n} Fahrstunde${pl} ${kind === "offered" ? "angeboten" : "eingetragen"} – ${fullName(student)}` + (res.skipped ? ` (${res.skipped} gab es schon)` : ""),
       student.phone, text);
   });
 
@@ -867,7 +880,17 @@ async function openAdminSlot(slotId) {
       el("label", {}, "Deine Antwort / Hinweis an den Schüler"), reply,
     );
 
-    if (b.status === "requested") {
+    if (b.status === "offered") {
+      const remind = waButton(b.profiles && b.profiles.phone, waTextForStudent("offered", b.profiles, slot, reply.value.trim()), "💬 Erinnern per WhatsApp");
+      const withdraw = el("button", { class: "btn danger" }, "Angebot zurückziehen");
+      withdraw.onclick = () => busy(withdraw, async () => {
+        if (!confirm("Angebot zurückziehen? Der Termin wird wieder frei.")) return;
+        const { error } = await sb.from("bookings").delete().eq("id", b.id);
+        if (error) throw error;
+        done("Angebot zurückgezogen – Termin ist wieder frei.");
+      });
+      parts.push(el("div", { class: "notice" }, "Der Schüler muss in der App zusagen oder absagen."), el("div", { class: "actions" }, remind, withdraw));
+    } else if (b.status === "requested") {
       const ok = el("button", { class: "btn ok" }, "✓ Bestätigen");
       ok.onclick = () => busy(ok, async () => {
         await saveTime();
@@ -917,6 +940,21 @@ async function openAdminSlot(slotId) {
 }
 
 // Admin trägt einen Schüler direkt (bestätigt) in einen freien Termin ein – z. B. nach telefonischer Absprache
+// Auswahl: dem Schüler anbieten (er muss zusagen) oder direkt fest eintragen
+function assignHow() {
+  const name = "how-" + Math.random().toString(36).slice(2);
+  const offer = el("input", { type: "radio", name, value: "offer" });
+  const fix = el("input", { type: "radio", name, value: "fix" });
+  offer.checked = true;
+  return {
+    node: el("div", {},
+      el("label", { class: "check" }, offer, el("span", {}, el("b", {}, "Anbieten"), " – der Schüler sagt in der App zu oder ab")),
+      el("label", { class: "check" }, fix, el("span", {}, el("b", {}, "Fest eintragen"), " – sofort bestätigt (z. B. nach Telefonat)"))),
+    offer: () => offer.checked,
+    onChange: (fn) => [offer, fix].forEach((r) => r.addEventListener("change", fn)),
+  };
+}
+
 async function bookForStudentForm(slot, saveTime) {
   const { data: students, error } = await sb.from("profiles")
     .select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
@@ -926,23 +964,27 @@ async function bookForStudentForm(slot, saveTime) {
   const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
     students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
   const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional), z. B. Treffpunkt" });
-  const btn = el("button", { class: "btn ok" }, "✓ Eintragen & bestätigen");
+  const how = assignHow();
+  const btn = el("button", { class: "btn ok" }, "Senden");
+  const label = () => (btn.textContent = how.offer() ? "📨 Anbieten" : "✓ Fest eintragen");
+  how.onChange(label); label();
   btn.onclick = () => busy(btn, async () => {
     const st = students.find((x) => x.id === who.value);
     if (!st) throw new Error("Bitte einen Schüler wählen");
     await saveTime();
+    const kind = how.offer() ? "offered" : "confirmed";
     const { error } = await sb.from("bookings").insert({
-      slot_id: slot.id, student_id: st.id, status: "confirmed",
+      slot_id: slot.id, student_id: st.id, status: kind,
       admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString(),
     });
     if (error) throw new Error(error.code === "23505" ? "Der Termin wurde gerade schon vergeben." : error.message);
     const { data: fresh } = await sb.from("slots").select("starts_at,duration_min").eq("id", slot.id).single();
-    notifyStep(`${fullName(st)} eingetragen`, st.phone, waTextForStudent("confirmed", st, fresh || slot, reply.value.trim()));
+    notifyStep(kind === "offered" ? `Angebot an ${fullName(st)} gespeichert` : `${fullName(st)} eingetragen`,
+      st.phone, waTextForStudent(kind, st, fresh || slot, reply.value.trim()));
   });
   return el("div", {},
-    el("h3", {}, "Für einen Schüler eintragen"),
-    el("p", { class: "muted small" }, "Z. B. nach telefonischer Absprache. Die Fahrstunde ist dann sofort bestätigt."),
-    who, el("label", {}, "Hinweis"), reply, el("div", { class: "actions" }, btn));
+    el("h3", {}, "Einem Schüler anbieten oder eintragen"),
+    who, how.node, el("label", {}, "Hinweis"), reply, el("div", { class: "actions" }, btn));
 }
 
 // Ergebnis einer bestätigten Fahrstunde: gefahren (mit Minuten) – oder warum sie nicht zustande kam
@@ -1015,12 +1057,15 @@ function doneControls(slot, b, after, opts = {}) {
 
 async function adminRequests() {
   const weekAgo = addDays(new Date(), -7).toISOString();
-  const [req, open, cancels] = await Promise.all([
+  const [req, open, cancels, offers] = await Promise.all([
     sb.from("bookings").select("id,student_note,created_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
     sb.from("bookings").select("id,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
-      .eq("status", "cancelled_student").gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
+      .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
+    sb.from("bookings").select("id,admin_reply,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
+      .eq("status", "offered"),
   ]);
+  if (offers.error) throw offers.error;
   if (req.error) throw req.error;
   if (open.error) throw open.error;
   if (cancels.error) throw cancels.error;
@@ -1040,11 +1085,17 @@ async function adminRequests() {
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, b.student_note ? el("div", { class: "note" }, b.student_note) : null))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
     cancels.data.length ? [
-      el("h2", { style: "margin-top:24px" }, "Absagen von Schülern (letzte 7 Tage)"),
+      el("h2", { style: "margin-top:24px" }, "Absagen & abgelehnte Angebote (letzte 7 Tage)"),
       cancels.data.filter((b) => b.slots).map((b) => item(b, [
+        b.status === "declined" ? el("span", { class: "badge declined" }, "Angebot abgelehnt") :
         b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : el("span", { class: "badge rejected" }, "rechtzeitig"),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
       ])),
+    ] : null,
+    offers.data.length ? [
+      el("h2", { style: "margin-top:24px" }, "Angebote – warten auf Zusage"),
+      offers.data.filter((b) => b.slots).sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at)).map((b) =>
+        item(b, waButton(b.profiles && b.profiles.phone, waTextForStudent("offered", b.profiles, b.slots, b.admin_reply), "💬 Erinnern"))),
     ] : null,
     el("h2", { style: "margin-top:24px" }, "Noch abzuhaken"),
     el("p", { class: "muted small" }, "Vergangene Fahrstunden: Minuten prüfen und abhaken – oder als krank abgesagt markieren."),
@@ -1451,7 +1502,8 @@ async function studentCalendar() {
     const past = new Date(s.starts_at).getTime() < now;
     const cls = s.mine && past ? "past" : s.status;
     const label = s.mine
-      ? (s.status === "confirmed" ? (past ? "Deine Fahrstunde" : "✓ Deine Fahrstunde – bestätigt") : "Deine Anfrage – wartet auf Bestätigung")
+      ? (s.status === "confirmed" ? (past ? "Deine Fahrstunde" : "✓ Deine Fahrstunde – bestätigt")
+        : s.status === "offered" ? "📨 Angebot für dich – bitte zusagen" : "Deine Anfrage – wartet auf Bestätigung")
       : s.status === "requested" ? "Angefragt – noch nicht bestätigt (wird evtl. wieder frei)"
       : "Frei – jetzt anfragen";
     const clickable = s.mine || (s.status === "free" && !past);
@@ -1463,7 +1515,7 @@ async function studentCalendar() {
 
   return el("div", {},
     weekBar(),
-    legend([["free", "frei – antippen zum Anfragen"], ["requested", "von jemandem angefragt – schau später wieder rein"], ["confirmed mine", "deine Fahrstunden"]]),
+    legend([["free", "frei – antippen zum Anfragen"], ["offered", "Angebot für dich"], ["requested", "von jemandem angefragt – schau später wieder rein"], ["confirmed mine", "deine Fahrstunden"]]),
     grid,
     slots.length === 0 ? el("p", { class: "muted", style: "margin-top:12px" }, "In dieser Woche gibt es keine freien Termine. Schau in der nächsten Woche (›) nach.") : null,
   );
@@ -1500,6 +1552,7 @@ function studentProfile() {
   const save = el("button", { class: "btn" }, "Speichern");
   save.onclick = () => busy(save, async () => {
     const v = f.values();
+    if (!waNumber(v.phone)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
     const { error } = await sb.rpc("update_my_profile", {
       p_first: v.first_name, p_last: v.last_name, p_class: v.license_class,
       p_glasses: v.needs_glasses, p_conversion: v.is_conversion, p_phone: v.phone,
@@ -1538,6 +1591,27 @@ function doneList(rows, total) {
         el("th", { class: "num" }, `${total} Min. (${fmtMinutes(total)})`))))));
 }
 
+// Angebot zusagen oder absagen – danach Fahrlehrer per WhatsApp informieren
+function answerOffer(b, accept) {
+  const note = el("input", { maxlength: 300, placeholder: accept ? "Nachricht (optional)" : "Kurzer Grund (optional), z. B. „Da habe ich Schule.“" });
+  const btn = el("button", { class: "btn " + (accept ? "ok" : "danger") }, accept ? "✓ Verbindlich zusagen" : "✗ Absagen");
+  btn.onclick = () => busy(btn, async () => {
+    const { error } = await sb.rpc("respond_offer", { p_booking: b.id, p_accept: accept, p_note: note.value.trim() });
+    if (error) throw error;
+    const when = `${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr`;
+    const text = `Hallo, hier ist ${fullName(state.profile)}. ` + (accept ? `Ich sage die Fahrstunde am ${when} zu. 👍` : `Ich kann die Fahrstunde am ${when} leider nicht.`) +
+      (note.value.trim() ? `\n${note.value.trim()}` : "");
+    notifyStep(accept ? "Zugesagt – die Fahrstunde ist jetzt verbindlich" : "Abgesagt – der Termin ist wieder frei",
+      state.settings.admin_phone, text, "deinen Fahrlehrer");
+  });
+  openModal(accept ? "Fahrstunde zusagen" : "Angebot absagen",
+    el("p", {}, el("b", {}, fmtDate(b.slots.starts_at)), el("br"), fmtRange(b.slots.starts_at, b.slots.duration_min)),
+    accept ? el("div", { class: "notice" }, isLate(b.slots.starts_at)
+      ? "Mit der Zusage ist die Fahrstunde verbindlich. Eine spätere Absage ist kostenpflichtig (Frist schon abgelaufen)."
+      : `Mit der Zusage ist die Fahrstunde verbindlich. Kostenlos absagen bis ${fmtDeadline(b.slots.starts_at)}, danach kostenpflichtig.`) : null,
+    note, el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Zurück")));
+}
+
 function openStudentCancel(b) {
   const late = isLate(b.slots.starts_at);
   const reason = el("textarea", { maxlength: 150, placeholder: "Kurzer Satz, z. B. „Ich habe eine Klausur.“", style: "min-height:56px" });
@@ -1572,7 +1646,8 @@ async function studentMine() {
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
   const now = Date.now();
-  const upcoming = rows.filter((b) => (b.status === "requested" || (b.status === "confirmed" && b.actual_minutes === null)) && new Date(b.slots.starts_at).getTime() >= now - 3600000).reverse();
+  const upcoming = rows.filter((b) => (b.status === "requested" || b.status === "offered" || (b.status === "confirmed" && b.actual_minutes === null)) && new Date(b.slots.starts_at).getTime() >= now - 3600000).reverse();
+  const offers = upcoming.filter((b) => b.status === "offered" && new Date(b.slots.starts_at).getTime() > now);
   const rest = rows.filter((b) => !upcoming.includes(b));
   const total = rows.reduce((sum, b) => sum + (b.status === "confirmed" && b.actual_minutes ? b.actual_minutes : 0), 0);
   const doneCount = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null).length;
@@ -1593,11 +1668,15 @@ async function studentMine() {
     const future = new Date(b.slots.starts_at).getTime() > now;
     const canCancel = b.status === "confirmed" && b.actual_minutes === null && future;
     const cancelLesson = canCancel ? el("button", { class: "btn small danger", onclick: () => openStudentCancel(b) }, "Fahrstunde absagen") : null;
-    return el("div", { class: "list-item" },
+    const isOffer = b.status === "offered" && future;
+    const accept = isOffer ? el("button", { class: "btn ok", onclick: () => answerOffer(b, true) }, "✓ Zusagen") : null;
+    const decline = isOffer ? el("button", { class: "btn danger", onclick: () => answerOffer(b, false) }, "✗ Absagen") : null;
+    return el("div", { class: "list-item" + (isOffer ? " offer" : "") },
       el("div", { class: "head" },
         el("div", {}, el("b", {}, fmtDate(b.slots.starts_at)), el("div", {}, fmtRange(b.slots.starts_at, b.slots.duration_min))),
         b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null,
         el("span", { class: "badge " + b.status }, b.status === "requested" ? "Wartet auf Bestätigung"
+          : b.status === "offered" ? "📨 Angebot"
           : b.status === "confirmed" && b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
       b.student_note ? el("div", { class: "note" }, "Deine Nachricht: ", b.student_note) : null,
       b.admin_reply ? el("div", { class: "note reply" }, el("b", {}, "Fahrlehrer: "), b.admin_reply) : null,
@@ -1608,6 +1687,10 @@ async function studentMine() {
       canCancel ? el("div", { class: "small muted", style: "margin-top:8px" }, isLate(b.slots.starts_at)
         ? "Absagefrist abgelaufen – eine Absage ist jetzt kostenpflichtig."
         : `Kostenlos absagen bis ${fmtDeadline(b.slots.starts_at)}.`) : null,
+      isOffer ? el("div", { class: "small", style: "margin-top:8px" }, isLate(b.slots.starts_at)
+        ? "Mit der Zusage ist die Fahrstunde verbindlich. Die Absagefrist ist schon abgelaufen – eine spätere Absage ist kostenpflichtig."
+        : `Mit der Zusage ist die Fahrstunde verbindlich. Kostenlos absagen kannst du danach noch bis ${fmtDeadline(b.slots.starts_at)}.`) : null,
+      isOffer ? el("div", { class: "actions" }, accept, decline) : null,
       cancel || cancelLesson ? el("div", { class: "actions" }, cancel, cancelLesson) : null);
   };
 
@@ -1619,6 +1702,10 @@ async function studentMine() {
       el("span", {}, el("b", {}, `${doneCount} Fahrstunde${doneCount === 1 ? "" : "n"}`), ` gefahren · ${fmtMinutes(total)}`,
         lateCount ? el("span", { class: "badge late", style: "margin-left:6px" }, `${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}`) : null),
       wa),
+    !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin-bottom:12px" },
+      "Bitte trage unter „Profil“ deine WhatsApp-Nummer ein, damit dein Fahrlehrer dich erreichen kann.") : null,
+    offers.length ? el("div", { class: "notice", style: "margin-bottom:12px" },
+      el("b", {}, `📨 Du hast ${offers.length} Angebot${offers.length === 1 ? "" : "e"} von deinem Fahrlehrer.`), " Bitte unten zusagen oder absagen.") : null,
     el("h2", {}, "Anstehend"),
     upcoming.length ? upcoming.map(item) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
     doneCount ? el("details", { class: "fold" },

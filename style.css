@@ -170,3 +170,9 @@ details.fold .card { border: none; padding: 0; margin: 0 0 8px; }
 .qr { display: inline-block; padding: 10px; background: #fff; border-radius: 8px; margin-top: 6px; }
 .qr img, .qr canvas { display: block; }
 code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2px 6px; border-radius: 4px; }
+:root { --off-bg: #f1eafe; --off-fg: #6b3fc9; --off-bd: #cdb8f5; }
+@media (prefers-color-scheme: dark) { :root { --off-bg: #2a1f45; --off-fg: #c4a8ff; --off-bd: #4e3a80; } }
+.slot.offered { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-bd); }
+.badge.offered { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-bd); }
+.badge.declined { background: var(--done-bg); color: var(--done-fg); border-color: var(--done-bd); }
+.list-item.offer { border-color: var(--off-fg); box-shadow: inset 4px 0 0 var(--off-fg); }

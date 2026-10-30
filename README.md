@@ -33,12 +33,13 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - Die Standarddauer unter „Einstellungen“ dauerhaft ändern.
 - **Freigeben oder zuordnen:** Beim Anlegen wählst du **🟢 Freigeben**, dann können alle Schüler die Termine anfragen, oder **👤 Einem Schüler zuordnen**. Beim Zuordnen tippst du den Schüler in der Liste an, und alle Termine werden direkt bestätigt für ihn eingetragen, z. B. für die Prüfungsvorbereitung die ganze Woche.
 - **Höchstzahl pro Schüler:** Standard für alle (Einstellungen). In der Schülerliste setzt ein **Häkchen „Mehr erlauben“** einen Schüler mit einem Klick auf unbegrenzt. Im Schüler-Fenster geht auch eine eigene Anzahl (z. B. 5).
+- **Einem Schüler anbieten:** Termine einzeln oder mehrere auf einmal einem bestimmten Schüler **anbieten**. Der Schüler sagt in der App **zu** (dann ist die Fahrstunde verbindlich) oder **ab** (dann ist der Termin wieder frei). Alternativ lassen sie sich direkt **fest eintragen**. Offene Angebote stehen im Tab „Anfragen“, mit einem Knopf zum Erinnern per WhatsApp.
 - **Schüler direkt eintragen:** In einem freien Termin einen Schüler auswählen, z. B. nach telefonischer Absprache. Die Fahrstunde ist dann sofort bestätigt.
 - **Sonderfahrten:** Beim Abhaken die Art wählen (Übungsfahrt, 🌳 Überland, 🛣️ Autobahn, 🌙 Nacht). Die Zahlen erscheinen pro Schüler in der Übersicht.
 - **Schülerdaten bearbeiten** (Name, Klasse, Sehhilfe, Umschreiber, Handynummer).
 - **Export** der Fahrstunden eines Schülers als Excel-Datei (CSV) oder zum Drucken bzw. als PDF.
 - **Höchstzahl offener Fahrstunden** pro Schüler festlegen (Einstellungen, Standard 3, 0 = unbegrenzt).
-- **WhatsApp-Benachrichtigung:** Nach Bestätigen, Ablehnen, Absagen oder Eintragen erscheint ein Knopf mit fertigem Nachrichtentext (wenn der Schüler eine Handynummer hinterlegt hat).
+- **WhatsApp-Benachrichtigung:** Nach Anbieten, Bestätigen, Ablehnen, Absagen oder Eintragen erscheint ein Knopf mit fertigem Nachrichtentext und Link zur App. Ein Tippen öffnet WhatsApp, dann nur noch auf Senden drücken. (Vollautomatischer Versand wäre nur über die kostenpflichtige WhatsApp Business Platform möglich.)
 - Rote Zahlen an den Tabs zeigen offene Anfragen, neue Anmeldungen und neue Absagen.
 
 **Fahrschüler**
@@ -53,6 +54,8 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - Unter „Meine Fahrstunden“ eine **nummerierte Liste aller gefahrenen Fahrstunden** (Datum, Uhrzeit, Minuten, Gesamtsumme) sehen.
 - Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers, die **gefahrenen Minuten** und **„Abgesagt – krank“** sehen.
 - Eine noch unbestätigte Anfrage zurückziehen.
+- **Angebote vom Fahrlehrer** erscheinen lila und ganz oben. Der Schüler tippt auf **✓ Zusagen** oder **✗ Absagen**, optional mit kurzer Nachricht. Danach erscheint ein Knopf, mit dem er den Fahrlehrer per WhatsApp informiert.
+- Die **WhatsApp-Nummer ist bei der Registrierung Pflicht**, damit der Fahrlehrer den Schüler erreichen kann.
 
 ---
 
