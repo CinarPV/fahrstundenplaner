@@ -1,4 +1,4 @@
-# 🚗 Fahrstundenplaner
+# 🚗 Easy Fahrstundenplaner
 
 Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link anfragen. Mehrere Fahrlehrer können die App gemeinsam nutzen, und jeder hat seinen eigenen, getrennten Bereich.
 
@@ -155,7 +155,7 @@ Die App ist für **Handy und Tablet** gebaut und in Hoch- und Querformat geprüf
 - **iPhone (Safari):** Teilen-Knopf antippen, dann **„Zum Home-Bildschirm“** wählen.
 - **Android (Chrome):** Menü ⋮ antippen, dann **„App installieren“** bzw. **„Zum Startbildschirm hinzufügen“**.
 
-Die App öffnet sich dann ohne Browser-Leiste, mit eigenem Symbol und dem Namen „Fahrstunden“.
+Die App öffnet sich dann ohne Browser-Leiste, mit eigenem Symbol und dem Namen „Easy Fahrstunden“.
 
 **Nach einem Update:** In `index.html` stehen hinter den Dateien Versionsnummern (`?v=2026-10-31`). Bei jeder Änderung das Datum hochsetzen. Dann laden alle Handys sicher die neue Version.
 
@@ -183,7 +183,7 @@ Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, *
 **Wo liegen die Daten?** Alle laufenden Daten (Schüler, Termine, Fahrstunden) liegen in **Supabase**, auf einem Server in Frankfurt (Region eu-central-1).
 
 **Sichern per Knopfdruck:** Unter **Einstellungen → 💾 Datensicherung**:
-- **„Komplette Sicherung herunterladen“** lädt eine Datei `Sicherung_Fahrstundenplaner_JJJJ-MM-TT.json` mit **allen deinen Daten** herunter: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen.
+- **„Komplette Sicherung herunterladen“** lädt eine Datei `Sicherung_Easy_Fahrstundenplaner_JJJJ-MM-TT.json` mit **allen deinen Daten** herunter: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen.
 - **„Alle Fahrstunden als Excel-Liste“** lädt eine Datei `Alle_Fahrstunden_JJJJ-MM-TT.csv` zum Anschauen und Abrechnen herunter.
 - Die Dateien landen auf **dem Gerät, auf dem du den Knopf drückst**: am Mac im Ordner „Downloads“, am iPhone in der App „Dateien“. Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren.
 - Ist die letzte Sicherung auf diesem Gerät **älter als 30 Tage**, erscheint ein rotes **„!“** am Tab „Einstellungen“.

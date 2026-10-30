@@ -1,4 +1,4 @@
-/* Fahrstundenplaner – Web-App für Fahrlehrer (Admin) und Fahrschüler */
+/* Easy Fahrstundenplaner – Web-App für Fahrlehrer (Admin) und Fahrschüler */
 "use strict";
 
 const cfg = window.FSP_CONFIG || {};
@@ -1553,7 +1553,7 @@ function openTeacherPassword(t) {
     if (pw.value.length < 6) throw new Error("Mindestens 6 Zeichen");
     const { error } = await sb.rpc("owner_set_teacher_password", { p_id: t.id, p_password: pw.value });
     if (error) throw error;
-    const text = `Hallo ${t.first_name}, dein Passwort für den Fahrstundenplaner wurde zurückgesetzt.\n\n` +
+    const text = `Hallo ${t.first_name}, dein Passwort für den Easy Fahrstundenplaner wurde zurückgesetzt.\n\n` +
       `Anmelden: ${appLink()}\nE-Mail: ${t.email}\nNeues Passwort: ${pw.value}\n\nBitte ändere es nach der Anmeldung unter „Einstellungen“.`;
     openModal(`✓ Neues Passwort für ${fullName(t)}`,
       el("div", { class: "note", style: "white-space:pre-wrap" }, text),
@@ -1572,7 +1572,7 @@ function openTeacherPassword(t) {
 function showTeacherCredentials(v, needsConfirm) {
   state.renderOnClose = true;
   const link = appLink() + "?l=" + v.slug;
-  const text = `Hallo ${v.first}, hier sind deine Zugangsdaten für den Fahrstundenplaner:\n\n` +
+  const text = `Hallo ${v.first}, hier sind deine Zugangsdaten für den Easy Fahrstundenplaner:\n\n` +
     `Anmelden: ${appLink()}\nE-Mail: ${v.email}\nPasswort: ${v.pw}\n\n` +
     `Dein Link für deine Schüler:\n${link}\n\nBitte ändere dein Passwort nach der ersten Anmeldung unter „Einstellungen“.`;
   openModal(`✓ ${v.first} ${v.last} angelegt`,
@@ -1606,7 +1606,7 @@ function linkBox(link, shareText) {
   return el("div", {},
     el("div", { class: "linkbox" }, input, el("button", { class: "btn", onclick: () => copyText(link, "Link kopiert.") }, "Kopieren")),
     el("div", { class: "actions" },
-      navigator.share ? el("button", { class: "btn ghost", onclick: () => navigator.share({ title: "Fahrstundenplaner", text: shareText, url: link }).catch(() => {}) }, "📤 Teilen") : null,
+      navigator.share ? el("button", { class: "btn ghost", onclick: () => navigator.share({ title: "Easy Fahrstundenplaner", text: shareText, url: link }).catch(() => {}) }, "📤 Teilen") : null,
       el("a", { class: "btn ok", href: "https://wa.me/?text=" + encodeURIComponent(shareText + "\n" + link), target: "_blank", rel: "noopener" }, "💬 Per WhatsApp verschicken")),
     el("p", { class: "muted small", style: "margin-top:12px" }, "Oder den QR-Code mit dem Handy scannen lassen, z. B. direkt im Auto:"),
     qr);
@@ -1650,12 +1650,12 @@ async function makeBackup() {
   const d = await loadOwnData();
   const { id, email, first_name, last_name, slug } = state.profile;
   const backup = {
-    app: "Fahrstundenplaner", format: 1, created_at: new Date().toISOString(),
+    app: "Fahrstundenplaner", format: 1, name: "Easy Fahrstundenplaner", // "app" = interne Kennung, nicht ändern created_at: new Date().toISOString(),
     teacher: { id, email, first_name, last_name, slug },
     counts: { students: d.students.length, slots: d.slots.length, bookings: d.bookings.length, progress: d.progress.length },
     ...d,
   };
-  downloadFile(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), `Sicherung_Fahrstundenplaner_${today()}.json`);
+  downloadFile(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), `Sicherung_Easy_Fahrstundenplaner_${today()}.json`);
   try { localStorage.setItem(backupKey(), new Date().toISOString()); } catch { /* egal */ }
   return backup.counts;
 }
@@ -1683,7 +1683,7 @@ async function openRestore(f) {
   let data;
   try { data = JSON.parse(await f.text()); } catch { return toast("Diese Datei ist keine gültige Sicherung (.json).", true); }
   if (!data || data.app !== "Fahrstundenplaner" || !Array.isArray(data.slots) || !Array.isArray(data.bookings)) {
-    return toast("Diese Datei ist keine Fahrstundenplaner-Sicherung.", true);
+    return toast("Diese Datei ist keine Sicherung vom Easy Fahrstundenplaner.", true);
   }
   if (!data.teacher || data.teacher.id !== state.profile.id) {
     return toast("Diese Sicherung gehört zu einem anderen Fahrlehrer-Konto und kann hier nicht eingespielt werden.", true);

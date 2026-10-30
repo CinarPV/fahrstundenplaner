@@ -30,7 +30,7 @@ window.FSP_LEGAL = {
         { h: "Verantwortlich für den Inhalt", p: [v(L.name) + ", Anschrift wie oben."] },
         { h: "Urheberrecht", p: [
           `© ${year} ${v(L.name)}. Alle Rechte vorbehalten.`,
-          "Die App „Fahrstundenplaner“ – Programmcode, Gestaltung, Logo und Texte – ist urheberrechtlich geschützt. Vervielfältigung, Bearbeitung, Verbreitung oder jede Verwertung außerhalb der bestimmungsgemäßen Nutzung bedürfen der vorherigen schriftlichen Zustimmung des Urhebers. Das gilt auch dann, wenn der Programmcode öffentlich einsehbar ist.",
+          "Die App „Easy Fahrstundenplaner“ – Programmcode, Gestaltung, Logo und Texte – ist urheberrechtlich geschützt. Vervielfältigung, Bearbeitung, Verbreitung oder jede Verwertung außerhalb der bestimmungsgemäßen Nutzung bedürfen der vorherigen schriftlichen Zustimmung des Urhebers. Das gilt auch dann, wenn der Programmcode öffentlich einsehbar ist.",
         ] },
         { h: "Haftung für Links", p: ["Die App enthält Links zu externen Diensten (z. B. WhatsApp). Für deren Inhalte sind ausschließlich die jeweiligen Anbieter verantwortlich."] },
       ],
@@ -40,7 +40,7 @@ window.FSP_LEGAL = {
       title: "Datenschutzerklärung",
       sections: [
         { h: "1. Überblick", p: [
-          "Der „Fahrstundenplaner“ ist eine Web-App, mit der Fahrlehrerinnen und Fahrlehrer Fahrstunden anbieten und verwalten und Fahrschülerinnen und Fahrschüler Fahrstunden anfragen. Wir verarbeiten nur die Daten, die dafür nötig sind. Es gibt keine Werbung, kein Tracking und keine Analyse-Cookies.",
+          "Der „Easy Fahrstundenplaner“ ist eine Web-App, mit der Fahrlehrerinnen und Fahrlehrer Fahrstunden anbieten und verwalten und Fahrschülerinnen und Fahrschüler Fahrstunden anfragen. Wir verarbeiten nur die Daten, die dafür nötig sind. Es gibt keine Werbung, kein Tracking und keine Analyse-Cookies.",
         ] },
         { h: "2. Verantwortliche", p: [
           `Betreiber der App: ${v(L.name)}, ${v(L.street)}, ${v(L.city)}, E-Mail: ${v(L.email)}.`,
@@ -93,7 +93,7 @@ window.FSP_LEGAL = {
       title: "Nutzungsbedingungen (AGB)",
       sections: [
         { h: "1. Geltungsbereich", p: [
-          `Diese Bedingungen gelten für die Nutzung der Web-App „Fahrstundenplaner“, betrieben von ${v(L.name)}. Sie regeln die Nutzung der App. Der Ausbildungsvertrag, Preise und Zahlungsbedingungen ergeben sich aus dem Vertrag mit der jeweiligen Fahrschule bzw. dem jeweiligen Fahrlehrer.`,
+          `Diese Bedingungen gelten für die Nutzung der Web-App „Easy Fahrstundenplaner“, betrieben von ${v(L.name)}. Sie regeln die Nutzung der App. Der Ausbildungsvertrag, Preise und Zahlungsbedingungen ergeben sich aus dem Vertrag mit der jeweiligen Fahrschule bzw. dem jeweiligen Fahrlehrer.`,
         ] },
         { h: "2. Registrierung und Freischaltung", p: [
           "• Fahrschülerinnen und Fahrschüler registrieren sich über den Link ihres Fahrlehrers mit wahrheitsgemäßen Angaben.",

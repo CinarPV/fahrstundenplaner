@@ -268,3 +268,9 @@ input, select, textarea { font-size: 16px; }
   .week { grid-template-columns: repeat(4, 1fr); }
   dialog { width: min(640px, calc(100vw - 48px)); }
 }
+.brand .easy { color: #16a34a; font-weight: 800; }
+@media (max-width: 600px) {
+  /* „Easy“ klein über „Fahrstundenplaner“, damit der Name auf schmalen Handys ganz sichtbar bleibt */
+  .brand span { white-space: normal; line-height: 1.05; }
+  .brand .easy { display: block; font-size: 12px; letter-spacing: .04em; }
+}

@@ -1,6 +1,6 @@
 {
-  "name": "Fahrstundenplaner",
-  "short_name": "Fahrstunden",
+  "name": "Easy Fahrstundenplaner",
+  "short_name": "Easy Fahrstunden",
   "description": "Fahrstunden einfach planen, anfragen und bestätigen",
   "lang": "de",
   "start_url": "./",
