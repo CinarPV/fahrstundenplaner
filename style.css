@@ -1,15 +1,20 @@
 :root {
   color-scheme: light;  /* immer helles Layout, auch im Dunkelmodus des Geräts */
-  --bg: #f4f6fb;
+  /* Hausfarben (aus dem Logo): Petrolblau #05679A, Türkis #28B5B9 */
+  --brand: #05679A;          /* Petrolblau – Knöpfe, Überschriften */
+  --brand-dark: #04507a;
+  --teal: #28B5B9;           /* Türkis – Flächen, Linien, Akzente */
+  --teal-text: #11797d;      /* dunkleres Türkis für Schrift (gut lesbar auf Weiß) */
+  --bg: #f2f8fa;
   --card: #ffffff;
-  --text: #1c1f24;
-  --muted: #6b7280;
-  --border: #e3e5e9;
-  --accent: #2563eb;
+  --text: #13303f;
+  --muted: #5f7480;
+  --border: #dbe7ec;
+  --accent: var(--brand);
   --accent-text: #ffffff;
-  --free-bg: #e8f7ee;   --free-fg: #157a3c;   --free-bd: #9fd9b5;
+  --free-bg: #e7f7f7;   --free-fg: var(--teal-text);   --free-bd: #9ddcde;
   --req-bg: #fff6e0;    --req-fg: #8a5a00;    --req-bd: #f1cf7a;
-  --conf-bg: #e7efff;   --conf-fg: #1d4ed8;   --conf-bd: #a9c1f5;
+  --conf-bg: #e6f0f6;   --conf-fg: var(--brand);   --conf-bd: #a9c9dd;
   --done-bg: #eeeef2;   --done-fg: #4b5060;   --done-bd: #cfd1d8;
   --danger: #c62828;
   --radius: 10px;
@@ -30,10 +35,10 @@ h3 { font-size: 16px; margin: 0 0 8px; }
 .topbar {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--border);
-  box-shadow: 0 1px 8px rgba(30, 64, 175, .06);
+  box-shadow: 0 1px 8px rgba(5, 103, 154, .08);
   position: sticky; top: 0; z-index: 5;
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; white-space: nowrap; color: #1e3a8a; letter-spacing: -.01em; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; white-space: nowrap; color: var(--brand); letter-spacing: -.01em; }
 .brand img { width: 36px; height: 36px; display: block; }
 .brand small { display: block; font-weight: 500; font-size: 11px; color: var(--muted); letter-spacing: .02em; }
 .userbox { display: flex; align-items: center; gap: 8px; font-size: 14px; flex-wrap: wrap; justify-content: flex-end; }
@@ -81,7 +86,7 @@ details.nothere input:not([type]) { margin-top: 10px; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.ghost { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
 .btn.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
-.btn.ok { background: var(--free-fg); border-color: var(--free-fg); color: #fff; }
+.btn.ok { background: var(--teal-text); border-color: var(--teal-text); color: #fff; }
 .btn.small { padding: 5px 10px; font-size: 13px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 
@@ -179,10 +184,10 @@ code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2
 /* Ausbildungsstand */
 .training .bar { height: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 6px 0 12px; }
 .training .bar.small { height: 6px; margin: 0; width: 120px; flex: none; }
-.training .bar i { display: block; height: 100%; background: linear-gradient(90deg, #60a5fa, #16a34a); }
+.training .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--brand)); }
 .stage { margin-top: 14px; }
 .stage-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 2px solid var(--border); padding-bottom: 4px; margin-bottom: 4px; }
-.stage-head h4 { margin: 0; font-size: 15px; color: #1e3a8a; }
+.stage-head h4 { margin: 0; font-size: 15px; color: var(--brand); }
 .topic { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 6px; border: none; border-bottom: 1px solid var(--border); background: none; font: inherit; color: var(--text); text-align: left; }
 .topic.editable { cursor: pointer; border-radius: 6px; }
 .topic.editable:hover { background: var(--bg); }
@@ -192,13 +197,13 @@ code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2
 .lv { display: inline-flex; gap: 3px; vertical-align: middle; }
 .lv i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); background: #fff; display: inline-block; }
 .lv i.on.l1 { background: #fde68a; border-color: #f59e0b; }
-.lv i.on.l2 { background: #93c5fd; border-color: #2563eb; }
-.lv i.on.l3 { background: #4ade80; border-color: #16a34a; }
+.lv i.on.l2 { background: #8fd3d6; border-color: var(--teal); }
+.lv i.on.l3 { background: var(--brand); border-color: var(--brand-dark); }
 .lv-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 4px; }
 
 /* ================= Handy & Tablet ================= */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-body { -webkit-tap-highlight-color: rgba(37, 99, 235, .12); overflow-x: hidden; }
+body { -webkit-tap-highlight-color: rgba(40, 181, 185, .18); overflow-x: hidden; }
 /* Mind. 16 px in Eingabefeldern – sonst zoomt das iPhone beim Antippen hinein */
 input, select, textarea { font-size: 16px; }
 /* Notch / abgerundete Ecken (iPhone quer, App auf dem Startbildschirm) */
@@ -268,9 +273,22 @@ input, select, textarea { font-size: 16px; }
   .week { grid-template-columns: repeat(4, 1fr); }
   dialog { width: min(640px, calc(100vw - 48px)); }
 }
-.brand .easy { color: #16a34a; font-weight: 800; }
+.brand .easy { color: var(--teal-text); font-weight: 800; }
 @media (max-width: 600px) {
   /* „Easy“ klein über „Fahrstundenplaner“, damit der Name auf schmalen Handys ganz sichtbar bleibt */
   .brand span { white-space: normal; line-height: 1.05; }
   .brand .easy { display: block; font-size: 12px; letter-spacing: .04em; }
 }
+
+/* Hausfarben: Feinschliff */
+.topbar { border-bottom: 3px solid var(--teal); }
+h2, h3 { color: var(--brand); }
+.btn:hover:not(:disabled) { filter: brightness(1.06); }
+.btn.ghost:hover { border-color: var(--teal); }
+.tab.active { background: var(--brand); border-color: var(--brand); }
+.tab:not(.active):hover { border-color: var(--teal); }
+.day.today { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal); }
+.day-head .plus { color: var(--teal-text); }
+.note.reply { border-left-color: var(--teal); }
+.footer button:hover, .linkbtn { color: var(--brand); }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outline-offset: 0; border-color: var(--teal); }
