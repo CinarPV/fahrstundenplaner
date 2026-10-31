@@ -782,15 +782,48 @@ function openCopyWeek(slots) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
+// Handy: statt Mo–So eine fortlaufende Liste ab vorgestern (8 Tage) – heute steht oben, nicht unten.
+// Ältere oder spätere Tage über ‹ › oder „📅 Datum“ wählen.
+const PHONE_MQ = matchMedia("(max-width: 600px)");
+const isPhone = () => PHONE_MQ.matches;
+const PHONE_DAYS = 8;
+const dayStart = (d) => { d = new Date(d); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); };
+function viewRange() {
+  if (!isPhone()) return { from: state.weekStart, days: 7 };
+  if (!state.listStart) state.listStart = addDays(dayStart(new Date()), -2);
+  return { from: state.listStart, days: PHONE_DAYS };
+}
+// Kalender auf ein Datum springen lassen (z. B. nach dem Anlegen)
+function showDate(d) {
+  state.weekStart = startOfWeek(d);
+  const r = viewRange(), day = dayStart(d);
+  if (isPhone() && (day < r.from || day >= addDays(r.from, r.days))) state.listStart = addDays(day, -2);
+}
+// Beim Drehen/Umschalten zwischen Handy- und Tablet-Breite neu zeichnen (nicht mitten in einem Fenster)
+PHONE_MQ.addEventListener("change", () => { if (state.profile && !document.querySelector("dialog[open]")) render(); });
+
 function weekBar(extra) {
-  const end = addDays(state.weekStart, 6);
-  const go = (n) => { state.weekStart = addDays(state.weekStart, n); render(); };
+  const r = viewRange(), end = addDays(r.from, r.days - 1);
+  const go = (n) => {
+    if (isPhone()) state.listStart = addDays(r.from, n); else state.weekStart = addDays(state.weekStart, n);
+    render();
+  };
+  const pick = el("input", { type: "date", value: dateInput(isPhone() ? addDays(r.from, 2) : r.from), "aria-label": "Datum wählen", class: "date-jump" });
+  pick.addEventListener("change", () => {
+    if (!pick.value) return;
+    const d = fromInputs(pick.value, "00:00");
+    state.weekStart = startOfWeek(d);
+    state.listStart = addDays(d, -2);
+    render();
+  });
   return el("div", { class: "weekbar" },
     el("div", { class: "actions", style: "margin:0" },
-      el("button", { class: "btn small ghost", onclick: () => go(-7), "aria-label": "Vorherige Woche" }, "‹"),
-      el("button", { class: "btn small ghost", onclick: () => { state.weekStart = startOfWeek(new Date()); render(); } }, "Heute"),
-      el("button", { class: "btn small ghost", onclick: () => go(7), "aria-label": "Nächste Woche" }, "›")),
-    el("span", { class: "title" }, `${fmtDay(state.weekStart)} – ${fmtDay(end)} ${end.getFullYear()}`),
+      el("button", { class: "btn small ghost", onclick: () => go(-7), "aria-label": "Früher" }, "‹"),
+      el("button", { class: "btn small ghost", onclick: () => { state.weekStart = startOfWeek(new Date()); state.listStart = null; render(); } }, "Heute"),
+      el("button", { class: "btn small ghost", onclick: () => go(7), "aria-label": "Später" }, "›"),
+      el("label", { class: "btn small ghost date-pick", title: "Datum wählen",
+        onclick: () => { try { pick.showPicker(); } catch { /* ältere Browser: Feld öffnet sich selbst */ } } }, "📅 Datum", pick)),
+    el("span", { class: "title" }, `${fmtDay(r.from)} – ${fmtDay(end)} ${end.getFullYear()}`),
     el("div", { class: "actions", style: "margin:0" }, extra,
       el("button", { class: "btn small ghost", onclick: () => render() }, "↻ Aktualisieren")),
   );
@@ -814,8 +847,9 @@ const offRange = (t) => (t.from_day === t.to_day ? fmtDayStr(t.from_day) : `${fm
 // Kalender-Einträge „Urlaub“ für jeden gesperrten Tag der angezeigten Woche
 function offExtras(onClick) {
   const list = [];
-  for (let i = 0; i < 7; i++) {
-    const day = addDays(state.weekStart, i), t = offOn(day);
+  const r = viewRange();
+  for (let i = 0; i < r.days; i++) {
+    const day = addDays(r.from, i), t = offOn(day);
     if (t) list.push({ at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0).toISOString(),
       node: el(onClick ? "button" : "div", { class: "slot off", onclick: onClick ? (e) => { e.stopPropagation(); onClick(); } : null },
         el("b", {}, "🏖️ " + (t.note || "Frei")), onClick ? "Tag gesperrt" : "Fahrlehrer nicht verfügbar") });
@@ -880,8 +914,9 @@ async function openTimeOff() {
 function weekGrid(slots, renderSlot, onAddDay, extras = []) {
   const today = new Date();
   const days = [];
-  for (let i = 0; i < 7; i++) {
-    const day = addDays(state.weekStart, i);
+  const r = viewRange();
+  for (let i = 0; i < r.days; i++) {
+    const day = addDays(r.from, i);
     const daySlots = slots.filter((s) => sameDay(new Date(s.starts_at), day));
     const dayExtras = extras.filter((x) => sameDay(new Date(x.at), day)).map((x) => x.node);
     days.push(el("div", {
@@ -948,7 +983,7 @@ async function nextLessonsCard() {
 const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", "confirmed", "offered"].includes(b.status));
 
 async function adminCalendar() {
-  const from = state.weekStart, to = addDays(state.weekStart, 7);
+  const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
     .select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
@@ -986,7 +1021,7 @@ async function adminCalendar() {
     el("div", { class: "actions", style: "margin:0 0 12px" },
       el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunden anlegen / freigeben")),
     weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
-      slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
+      slots.length && !isPhone() ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
     legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"], ["exam", "🎓 Prüfung"], ["off", "🏖️ gesperrt"]]),
     grid,
   );
@@ -1175,7 +1210,7 @@ function newSlotForm(opts = {}) {
       const note = examNote.value.trim() || null;
       const { error } = await sb.from("exams").insert({ student_id: student.id, kind: examKind.value, exam_at: at.toISOString(), duration_min: examDur.value, note });
       if (error) throw error;
-      state.weekStart = startOfWeek(at);
+      showDate(at);
       const text = `Hallo ${student.first_name || ""}, deine ${EXAM_KIND[examKind.value]} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
         + (note ? `\n📍 ${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App: ${appLink()}\n\n` + teacherSignature();
       notifyStep(`Prüfung für ${fullName(student)} eingetragen`, student.phone, text);
@@ -1185,7 +1220,7 @@ function newSlotForm(opts = {}) {
     if (mode === "assign" && !student) throw new Error("Bitte einen Schüler auswählen");
     await meetSlot.commit();
     const res = await insertSlots(list);
-    state.weekStart = startOfWeek(new Date(list[0].starts_at));
+    showDate(new Date(list[0].starts_at));
     if (mode === "free") { toast(insertedMsg(res)); closeModal(); render(); return; }
     // Zuordnen: dem Schüler anbieten (er sagt zu/ab) oder gleich fest eintragen
     if (!res.rows.length) throw new Error("Alle diese Termine gibt es schon – nichts eingetragen.");
@@ -2236,7 +2271,7 @@ function adminSettings() {
 /* ---------------- Schüler: Kalender ---------------- */
 
 async function studentCalendar() {
-  const from = state.weekStart, to = addDays(state.weekStart, 7);
+  const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
     sb.from("bookings").select("status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
