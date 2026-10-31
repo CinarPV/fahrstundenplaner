@@ -704,6 +704,50 @@ function installHint() {
   return el("p", { class: "small", style: "margin-top:12px" },
     el("a", { href: "#", onclick: (e) => { e.preventDefault(); openInstallHelp(); } }, "📲 Als App auf dem Handy installieren"));
 }
+// Passwortfelder: Auge-Knopf zum Anzeigen/Verbergen – gilt automatisch für jedes Passwortfeld der App
+function addPasswordEye(input) {
+  if (input.dataset.eye) return;
+  input.dataset.eye = "1";
+  const wrap = el("div", { class: "pw-wrap" });
+  const eye = el("button", { type: "button", class: "pw-eye", "aria-label": "Passwort anzeigen", title: "Passwort anzeigen" }, "👁️");
+  eye.onclick = () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    eye.textContent = show ? "🙈" : "👁️";
+    eye.setAttribute("aria-label", show ? "Passwort verbergen" : "Passwort anzeigen");
+    eye.title = eye.getAttribute("aria-label");
+    input.focus();
+  };
+  input.replaceWith(wrap);
+  wrap.append(input, eye);
+}
+new MutationObserver(() => document.querySelectorAll('input[type="password"]:not([data-eye])').forEach(addPasswordEye))
+  .observe(document.body, { childList: true, subtree: true });
+
+// Logo zum Ausprobieren: Lenkrad (Standard) oder Führerschein (Schwarz-Weiß) – nur auf diesem Gerät gespeichert
+const LOGOS = { wheel: ["logo.svg", "Lenkrad (Standard)"], license: ["logo-license.svg", "Führerschein (Schwarz-Weiß)"] };
+function currentLogo() { try { return LOGOS[localStorage.getItem("fsp_logo")] ? localStorage.getItem("fsp_logo") : "wheel"; } catch { return "wheel"; } }
+function applyLogo() {
+  const src = LOGOS[currentLogo()][0];
+  document.querySelectorAll(".topbar .brand img").forEach((i) => (i.src = src));
+  const icon = document.querySelector('link[rel="icon"]');
+  if (icon) icon.href = src;
+}
+applyLogo();
+function logoCard() {
+  const box = el("div", { class: "chips" });
+  const draw = () => box.replaceChildren(...Object.entries(LOGOS).map(([k, [src, label]]) =>
+    el("button", { type: "button", class: "logo-pick" + (currentLogo() === k ? " active" : ""), onclick: () => {
+      try { localStorage.setItem("fsp_logo", k); } catch { /* privater Modus */ }
+      applyLogo(); draw();
+    } }, el("img", { src, alt: "" }), label)));
+  draw();
+  return el("div", { class: "card" },
+    el("h3", {}, "🎨 Logo (zum Ausprobieren)"),
+    el("p", { class: "muted small" }, "Ändert nur das Logo oben in der App – nur auf diesem Gerät. Jederzeit wieder auf „Lenkrad“ zurückstellbar. Das Symbol auf dem Startbildschirm bleibt vorerst das Lenkrad."),
+    box);
+}
+
 function installCard() {
   if (isInstalled()) return null;
   return el("div", { class: "card" },
@@ -2331,6 +2375,7 @@ function adminSettings() {
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
     installCard(),
+    logoCard(),
     passwordCard(),
   );
 }

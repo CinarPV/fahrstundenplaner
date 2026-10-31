@@ -450,3 +450,14 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 /* Anlegen-Fenster: oben groß „Fahrstunde“ oder „Prüfung“ */
 .kind-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
 .kind-tabs .tab { padding: 12px 8px; font-size: 16px; font-weight: 700; text-align: center; }
+
+/* Passwort anzeigen (Auge-Knopf im Feld) */
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 52px; width: 100%; }
+.pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: none; background: none; font-size: 20px;
+  min-width: 44px; min-height: 40px; cursor: pointer; line-height: 1; }
+/* Logo-Auswahl in den Einstellungen */
+.logo-pick { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border: 2px solid var(--border); border-radius: 12px;
+  background: var(--card); font: inherit; cursor: pointer; }
+.logo-pick img { width: 40px; height: 40px; border-radius: 9px; }
+.logo-pick.active { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal); font-weight: 700; }
