@@ -140,13 +140,45 @@ function waButton(phone, text, label = "💬 Per WhatsApp schreiben") {
   const n = waNumber(phone);
   return n ? el("a", { class: "btn ok", href: `https://wa.me/${n}?text=${encodeURIComponent(text)}`, target: "_blank", rel: "noopener" }, label) : null;
 }
+// Treffpunkt einer Fahrstunde: eigener Eintrag, sonst Standard-Treffpunkt des Fahrlehrers
+const meetingOf = (b) => (b && b.meeting_point) || state.settings.meeting_point || "";
+const otherPoints = () => (state.settings.meeting_points || "").split("\n").map((x) => x.trim()).filter(Boolean);
+// Auswahl für den Fahrlehrer: Standard, weitere gespeicherte oder anderer Treffpunkt.
+// value() = null bedeutet „Standard-Treffpunkt“.
+function meetingPicker(current) {
+  const std = state.settings.meeting_point || "";
+  const others = otherPoints().filter((x) => x !== std);
+  const OTHER = "__other";
+  const sel = el("select", {},
+    el("option", { value: "" }, std ? `Standard: ${std}` : "Kein Treffpunkt (Standard in den Einstellungen festlegen)"),
+    others.map((x) => el("option", { value: x }, x)),
+    el("option", { value: OTHER }, "Anderer Treffpunkt …"));
+  const custom = el("input", { maxlength: 200, placeholder: "z. B. Bahnhof, Haupteingang" });
+  if (current && current !== std) {
+    if (others.includes(current)) sel.value = current;
+    else { sel.value = OTHER; custom.value = current; }
+  }
+  const sync = () => { custom.hidden = sel.value !== OTHER; };
+  sel.addEventListener("change", () => { sync(); if (!custom.hidden) custom.focus(); });
+  sync();
+  return {
+    node: el("div", {}, el("label", {}, "📍 Treffpunkt"), sel, custom),
+    value: () => (sel.value === OTHER ? custom.value.trim() || null : sel.value || null),
+  };
+}
+// Treffpunkt für Schüler anzeigen – mit Link zur Karte
+function meetingBox(point) {
+  if (!point) return null;
+  return el("div", { class: "note meeting" }, "📍 ", el("b", {}, "Treffpunkt: "), point, " ",
+    el("a", { href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(point), target: "_blank", rel: "noopener" }, "Karte öffnen"));
+}
 // Nachrichtentext vom Fahrlehrer an den Schüler
-function waTextForStudent(kind, profile, slot, reply) {
+function waTextForStudent(kind, profile, slot, reply, meeting) {
   const when = `${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr`;
   const hi = `Hallo ${(profile && profile.first_name) || ""},`;
   const body = {
-    confirmed: `${hi} deine Fahrstunde am ${when} (${slot.duration_min} Min.) ist bestätigt.`,
-    offered: `${hi} ich biete dir eine Fahrstunde an: ${when} (${slot.duration_min} Min.). Bitte schau in die App und sag zu oder ab.`,
+    confirmed: `${hi} deine Fahrstunde am ${when} (${slot.duration_min} Min.) ist bestätigt.` + (meeting ? `\n📍 Treffpunkt: ${meeting}` : ""),
+    offered: `${hi} ich biete dir eine Fahrstunde an: ${when} (${slot.duration_min} Min.).` + (meeting ? ` Treffpunkt: ${meeting}.` : "") + " Bitte schau in die App und sag zu oder ab.",
     rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen. Schau gern nach einem anderen freien Termin.`,
     cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
   }[kind];
@@ -849,13 +881,14 @@ function newSlotForm(opts = {}) {
   // Freigeben (für alle) oder direkt einem Schüler zuordnen
   let mode = "free", student = null, students = null;
   const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional), z. B. „Prüfungsvorbereitung – Treffpunkt Fahrschule“" });
+  const meetSlot = meetingPicker(null);
   const search = el("input", { type: "search", placeholder: "Schüler suchen …" });
   const studentList = el("div", { class: "pick-list" });
   const how = assignHow();
   how.onChange(() => refresh());
   const assignBox = el("div", { hidden: true },
     el("label", {}, "Welchem Schüler?"), search, studentList, how.node,
-    el("label", {}, "Hinweis an den Schüler"), reply);
+    el("label", {}, "Hinweis an den Schüler"), reply, meetSlot.node);
   const modeBtns = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"]].map(([m, text]) =>
     el("button", { type: "button", class: "tab" + (m === mode ? " active" : ""), onclick: () => setMode(m) }, text));
   async function setMode(m) {
@@ -966,11 +999,13 @@ function newSlotForm(opts = {}) {
     const note = reply.value.trim() || null;
     const kind = how.offer() ? "offered" : "confirmed";
     const { error } = await sb.from("bookings").insert(res.rows.map((r) => ({
-      slot_id: r.id, student_id: student.id, status: kind, admin_reply: note, decided_at: new Date().toISOString(),
+      slot_id: r.id, student_id: student.id, status: kind, admin_reply: note, meeting_point: meetSlot.value(), decided_at: new Date().toISOString(),
     })));
     if (error) throw error;
-    const lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
+    let lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
     const n = res.rows.length, pl = n === 1 ? "" : "n";
+    const meet = meetingOf({ meeting_point: meetSlot.value() });
+    if (meet) lines += `\n📍 Treffpunkt: ${meet}`;
     const text = kind === "offered"
       ? `Hallo ${student.first_name || ""}, ich biete dir folgende Fahrstunde${pl} an:\n${lines}` + (note ? `\n${note}` : "") +
         `\n\nBitte schau in die App und sag zu oder ab: ${appLink()}\n\n` + teacherSignature()
@@ -1054,7 +1089,8 @@ async function openAdminSlot(slotId) {
     parts.push(el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
       timeFields, el("div", { class: "actions" }, save, del), el("hr"), await bookForStudentForm(slot, saveTime));
   } else {
-    const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen. Treffpunkt: Bahnhof Haupteingang." }, b.admin_reply || "");
+    const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen." }, b.admin_reply || "");
+    const meet = meetingPicker(b.meeting_point);
     parts.push(
       el("p", {}, el("b", {}, fullName(b.profiles)), " ", el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status]), " ", studentTags(b.profiles)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
@@ -1063,10 +1099,11 @@ async function openAdminSlot(slotId) {
     parts.push(
       timeFields,
       el("label", {}, "Deine Antwort / Hinweis an den Schüler"), reply,
+      b.status === "rejected" ? null : meet.node,
     );
 
     if (b.status === "offered") {
-      const remind = waButton(b.profiles && b.profiles.phone, waTextForStudent("offered", b.profiles, slot, reply.value.trim()), "💬 Erinnern per WhatsApp");
+      const remind = waButton(b.profiles && b.profiles.phone, waTextForStudent("offered", b.profiles, slot, reply.value.trim(), meetingOf(b)), "💬 Erinnern per WhatsApp");
       const withdraw = el("button", { class: "btn danger" }, "Angebot zurückziehen");
       withdraw.onclick = () => busy(withdraw, async () => {
         if (!confirm("Angebot zurückziehen? Der Termin wird wieder frei.")) return;
@@ -1079,10 +1116,10 @@ async function openAdminSlot(slotId) {
       const ok = el("button", { class: "btn ok" }, "✓ Bestätigen");
       ok.onclick = () => busy(ok, async () => {
         await saveTime();
-        const { error } = await sb.from("bookings").update({ status: "confirmed", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
+        const { error } = await sb.from("bookings").update({ status: "confirmed", admin_reply: reply.value.trim() || null, meeting_point: meet.value(), decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
         const newSlot = { starts_at: fromInputs(date.value, time.value).toISOString(), duration_min: dur.value };
-        notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, reply.value.trim()));
+        notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, reply.value.trim(), meetingOf({ meeting_point: meet.value() })));
       });
       const no = el("button", { class: "btn danger" }, "Ablehnen");
       no.onclick = () => busy(no, async () => {
@@ -1096,7 +1133,7 @@ async function openAdminSlot(slotId) {
       const save = el("button", { class: "btn" }, "Änderungen speichern");
       save.onclick = () => busy(save, async () => {
         await saveTime();
-        const { error } = await sb.from("bookings").update({ admin_reply: reply.value.trim() || null }).eq("id", b.id);
+        const { error } = await sb.from("bookings").update({ admin_reply: reply.value.trim() || null, meeting_point: meet.value() }).eq("id", b.id);
         if (error) throw error;
         done("Gespeichert.");
       });
@@ -1148,7 +1185,8 @@ async function bookForStudentForm(slot, saveTime) {
   if (!students.length) return el("p", { class: "muted small" }, "Noch keine freigeschalteten Schüler zum Eintragen.");
   const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
     students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
-  const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional), z. B. Treffpunkt" });
+  const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional)" });
+  const meet = meetingPicker(null);
   const how = assignHow();
   const btn = el("button", { class: "btn ok" }, "Senden");
   const label = () => (btn.textContent = how.offer() ? "📨 Anbieten" : "✓ Fest eintragen");
@@ -1160,16 +1198,16 @@ async function bookForStudentForm(slot, saveTime) {
     const kind = how.offer() ? "offered" : "confirmed";
     const { error } = await sb.from("bookings").insert({
       slot_id: slot.id, student_id: st.id, status: kind,
-      admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString(),
+      admin_reply: reply.value.trim() || null, meeting_point: meet.value(), decided_at: new Date().toISOString(),
     });
     if (error) throw new Error(error.code === "23505" ? "Der Termin wurde gerade schon vergeben." : error.message);
     const { data: fresh } = await sb.from("slots").select("starts_at,duration_min").eq("id", slot.id).single();
     notifyStep(kind === "offered" ? `Angebot an ${fullName(st)} gespeichert` : `${fullName(st)} eingetragen`,
-      st.phone, waTextForStudent(kind, st, fresh || slot, reply.value.trim()));
+      st.phone, waTextForStudent(kind, st, fresh || slot, reply.value.trim(), meetingOf({ meeting_point: meet.value() })));
   });
   return el("div", {},
     el("h3", {}, "Einem Schüler anbieten oder eintragen"),
-    who, how.node, el("label", {}, "Hinweis"), reply, el("div", { class: "actions" }, btn));
+    who, how.node, el("label", {}, "Hinweis"), reply, meet.node, el("div", { class: "actions" }, btn));
 }
 
 // Ergebnis einer bestätigten Fahrstunde: gefahren (mit Minuten) – oder warum sie nicht zustande kam
@@ -1527,7 +1565,7 @@ function openEditStudent(st) {
 
 async function openStudent(st) {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,lesson_type,slots(id,starts_at,duration_min)").eq("student_id", st.id);
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,slots(id,starts_at,duration_min)").eq("student_id", st.id);
   if (error) return fail(error);
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
 
@@ -1885,10 +1923,14 @@ function adminSettings() {
   const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3 });
   const phone = el("input", { type: "tel", value: state.settings.admin_phone || "", placeholder: "z. B. 0151 23456789" });
   const display = el("input", { value: state.settings.display_name || "", maxlength: 60 });
+  const meetStd = el("input", { value: state.settings.meeting_point || "", maxlength: 200, placeholder: "z. B. Fahrschule, Hauptstraße 1" });
+  const meetMore = el("textarea", { maxlength: 2000, rows: 3, placeholder: "z. B.\nBahnhof, Haupteingang\nSchule am Markt" }, state.settings.meeting_points || "");
   const save = el("button", { class: "btn" }, "Speichern");
   save.onclick = () => busy(save, async () => {
     const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null,
-      display_name: display.value.trim() || "Fahrlehrer" };
+      display_name: display.value.trim() || "Fahrlehrer",
+      meeting_point: meetStd.value.trim() || null,
+      meeting_points: meetMore.value.split("\n").map((x) => x.trim()).filter(Boolean).join("\n") || null };
     const { error } = await sb.from("settings").update(v).eq("teacher_id", state.profile.id);
     if (error) throw error;
     Object.assign(state.settings, v);
@@ -1912,6 +1954,12 @@ function adminSettings() {
       el("h3", { style: "margin-top:18px" }, "Deine Handynummer"),
       el("p", { class: "muted small" }, "Damit Schüler dich per WhatsApp-Knopf erreichen (z. B. nach einer Absage). Wird nur freigeschalteten Schülern angezeigt."),
       phone,
+      el("h3", { style: "margin-top:18px" }, "📍 Standard-Treffpunkt"),
+      el("p", { class: "muted small" }, "Gilt für jede Fahrstunde, solange du beim Bestätigen keinen anderen auswählst. Schüler sehen ihn nach der Bestätigung."),
+      meetStd,
+      el("h3", { style: "margin-top:18px" }, "Weitere Treffpunkte (Ausweich)"),
+      el("p", { class: "muted small" }, "Einer pro Zeile. Diese kannst du beim Bestätigen oder Eintragen schnell auswählen."),
+      meetMore,
       el("div", { class: "actions" }, save)),
     el("div", { class: "card" },
       el("h3", {}, "🔗 Link für Schüler"),
@@ -1928,7 +1976,7 @@ async function studentCalendar() {
   const from = state.weekStart, to = addDays(state.weekStart, 7);
   const [{ data, error }, own] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
-    sb.from("bookings").select("status,actual_minutes,slots(starts_at,duration_min)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+    sb.from("bookings").select("status,actual_minutes,meeting_point,slots(starts_at,duration_min)").eq("student_id", state.profile.id).eq("status", "confirmed"),
   ]);
   if (error) throw error;
   // Nächste eigene Fahrstunde mit Countdown
@@ -1958,7 +2006,8 @@ async function studentCalendar() {
     nextOwn ? el("div", { class: "card next-card" },
       el("div", { class: "next-row first", style: "cursor:default" },
         countdownEl(nextOwn.slots.starts_at, nextOwn.slots.duration_min),
-        el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`))) : null,
+        el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`)),
+      meetingBox(meetingOf(nextOwn))) : null,
     weekBar(),
     legend([["free", "frei – antippen zum Anfragen"], ["offered", "Angebot für dich"], ["requested", "von jemandem angefragt – schau später wieder rein"], ["confirmed mine", "deine Fahrstunden"]]),
     grid,
@@ -2121,7 +2170,7 @@ function openStudentCancel(b) {
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,slots(starts_at,duration_min)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,slots(starts_at,duration_min)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -2160,6 +2209,7 @@ async function studentMine() {
           : b.status === "confirmed" && b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
       b.student_note ? el("div", { class: "note" }, "Deine Nachricht: ", b.student_note) : null,
       b.admin_reply ? el("div", { class: "note reply" }, el("b", {}, "Fahrlehrer: "), b.admin_reply) : null,
+      b.status === "confirmed" && b.actual_minutes === null ? meetingBox(meetingOf(b)) : null,
       b.actual_minutes !== null ? el("div", { class: "small", style: "margin-top:8px" }, `${typeLabel(b.lesson_type)} · gefahren: `, el("b", {}, fmtMinutes(b.actual_minutes)),
         b.actual_minutes !== b.slots.duration_min ? ` (geplant waren ${b.slots.duration_min} Min.)` : "") : null,
       b.cancel_reason ? el("div", { class: "note" }, "Grund der Absage: ", b.cancel_reason) : null,

@@ -373,3 +373,7 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 .countdown { display: inline-block; background: var(--brand); color: #fff; border-radius: 999px; padding: 4px 10px; font-size: 13px; font-weight: 700; white-space: nowrap; }
 .next-row.first .countdown { background: var(--teal-text); font-size: 14px; padding: 6px 12px; }
 .countdown.small { padding: 1px 8px; font-size: 11px; margin-top: 4px; background: var(--brand); }
+
+/* Treffpunkt für Schüler */
+.note.meeting { border-left-color: var(--brand); background: #eef6fa; }
+.note.meeting a { color: var(--brand); font-weight: 600; white-space: nowrap; }

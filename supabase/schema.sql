@@ -81,6 +81,11 @@ create unique index if not exists bookings_one_active_per_slot
   on public.bookings (slot_id) where status in ('requested','confirmed','offered');
 create index if not exists bookings_student_idx on public.bookings (student_id);
 
+-- Treffpunkte: Standard + weitere (eine pro Zeile) je Fahrlehrer; pro Fahrstunde optional abweichend
+alter table public.settings add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
+alter table public.settings add column if not exists meeting_points text check (char_length(meeting_points) <= 2000);
+alter table public.bookings add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
+
 -- Ausbildungsthemen (eigene Formulierung, angelehnt an den gesetzlichen Ausbildungsplan).
 -- teacher_id NULL = Standardthemen für alle; später können Fahrlehrer eigene Themen/Strecken ergänzen.
 create table if not exists public.training_topics (
@@ -394,15 +399,15 @@ begin
         continue;
       end if;
       insert into bookings (id, slot_id, student_id, status, cancel_reason, late_cancel, lesson_type,
-                            student_note, admin_reply, actual_minutes, created_at, decided_at)
+                            student_note, admin_reply, meeting_point, actual_minutes, created_at, decided_at)
       values ((r->>'id')::uuid, (r->>'slot_id')::uuid, (r->>'student_id')::uuid, r->>'status',
               r->>'cancel_reason', coalesce((r->>'late_cancel')::boolean, false), coalesce(r->>'lesson_type', 'normal'),
-              r->>'student_note', r->>'admin_reply', (r->>'actual_minutes')::int,
+              r->>'student_note', r->>'admin_reply', r->>'meeting_point', (r->>'actual_minutes')::int,
               coalesce((r->>'created_at')::timestamptz, now()), (r->>'decided_at')::timestamptz)
       on conflict (id) do update set
         status = excluded.status, cancel_reason = excluded.cancel_reason, late_cancel = excluded.late_cancel,
         lesson_type = excluded.lesson_type, student_note = excluded.student_note, admin_reply = excluded.admin_reply,
-        actual_minutes = excluded.actual_minutes, decided_at = excluded.decided_at
+        meeting_point = excluded.meeting_point, actual_minutes = excluded.actual_minutes, decided_at = excluded.decided_at
         where slot_teacher(bookings.slot_id) = me;
       if found then n_bookings := n_bookings + 1; else n_skipped := n_skipped + 1; end if;
     exception when others then n_skipped := n_skipped + 1;  -- z. B. Termin inzwischen anders vergeben
