@@ -730,7 +730,6 @@ const LOGOS = {
   license: ["logo-license.svg", "1 · Führerschein s/w"],
   plain: ["logo-license-plain.svg", "2 · s/w ohne Haken"],
   licwheel: ["logo-license-wheel.svg", "3 · Führerschein + Lenkrad"],
-  dark: ["logo-license-dark.svg", "4 · Schwarz"],
   blue: ["logo-license-blue.svg", "5 · Führerschein in Blau"],
   roadcheck: ["logo-road-check.svg", "6 · Haken als Straße"],
   wheelclock: ["logo-wheel-clock.svg", "7 · Lenkrad-Uhr"],
@@ -743,6 +742,12 @@ const LOGOS = {
   wcheck: ["logo-w-road-check.svg", "14 · Haken als Straße (weiß)"],
   wclock: ["logo-w-wheel-clock.svg", "15 · Lenkrad-Uhr (weiß)"],
   wseal: ["logo-w-seal.svg", "16 · Siegel (weiß)"],
+  narrow: ["logo-n-e-arrow.svg", "17 · „E“ mit Pfeil"],
+  ntraffic: ["logo-n-traffic-e.svg", "18 · Ampel-„E“"],
+  npin: ["logo-n-pin.svg", "19 · Treffpunkt-Pin"],
+  ncal: ["logo-n-cal-wheel.svg", "20 · Kalender + Lenkrad"],
+  nsign: ["logo-n-sign.svg", "21 · Verkehrsschild „E“"],
+  ngeo: ["logo-n-e-geo.svg", "22 · „E“ Dunkelblau"],
 };
 function currentLogo() { try { return LOGOS[localStorage.getItem("fsp_logo")] ? localStorage.getItem("fsp_logo") : "wheel"; } catch { return "wheel"; } }
 function applyLogo() {
