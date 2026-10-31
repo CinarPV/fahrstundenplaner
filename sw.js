@@ -3,7 +3,7 @@
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
    Daten (Supabase) werden NIE zwischengespeichert. */
-const CACHE = "fsp-v4";
+const CACHE = "fsp-v5";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
@@ -21,7 +21,8 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return; // Supabase & CDN: normal laden
-  e.respondWith(fetch(req).then((res) => {
+  // „no-cache“: immer beim Server nachfragen, ob es eine neuere Version gibt (sonst bis zu 10 Min. alt)
+  e.respondWith(fetch(req, { cache: "no-cache" }).then((res) => {
     if (res.ok) {
       const copy = res.clone();
       caches.open(CACHE).then((c) => c.put(req, copy));

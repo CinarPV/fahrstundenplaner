@@ -640,7 +640,18 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
 let installPrompt = null;  // Android/Chrome: Installations-Dialog, den wir auf Knopfdruck zeigen
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; });
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
-  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  // Neue Version übernommen → Seite einmal neu laden, damit sie sofort gilt (nicht beim allerersten Start)
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloading || document.querySelector("dialog[open]") || state.dirty) return;
+    reloading = true;
+    location.reload();
+  });
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
+    // Beim Zurückkehren in die App nach Updates schauen
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
+  }).catch(() => {}));
 }
 const isInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
