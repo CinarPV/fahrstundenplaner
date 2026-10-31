@@ -725,7 +725,14 @@ new MutationObserver(() => document.querySelectorAll('input[type="password"]:not
   .observe(document.body, { childList: true, subtree: true });
 
 // Logo zum Ausprobieren: Lenkrad (Standard) oder Führerschein (Schwarz-Weiß) – nur auf diesem Gerät gespeichert
-const LOGOS = { wheel: ["logo.svg", "Lenkrad (Standard)"], license: ["logo-license.svg", "Führerschein (Schwarz-Weiß)"] };
+const LOGOS = {
+  wheel: ["logo.svg", "Lenkrad (Standard)"],
+  license: ["logo-license.svg", "1 · Führerschein s/w"],
+  plain: ["logo-license-plain.svg", "2 · s/w ohne Haken"],
+  licwheel: ["logo-license-wheel.svg", "3 · Führerschein + Lenkrad"],
+  dark: ["logo-license-dark.svg", "4 · Schwarz"],
+  blue: ["logo-license-blue.svg", "5 · Führerschein in Blau"],
+};
 function currentLogo() { try { return LOGOS[localStorage.getItem("fsp_logo")] ? localStorage.getItem("fsp_logo") : "wheel"; } catch { return "wheel"; } }
 function applyLogo() {
   const src = LOGOS[currentLogo()][0];

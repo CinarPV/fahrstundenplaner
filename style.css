@@ -236,7 +236,8 @@ input, select, textarea { font-size: 16px; }
   .userbox { gap: 6px; font-size: 13px; }
   .userbox > span.small { display: none; }        /* „· Fahrlehrer …“ ausblenden, Platz sparen */
   /* Kopfzeile kompakt in einer Zeile: Name und Rollen-Abzeichen ausblenden, nicht mitscrollen */
-  .topbar { position: static; padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 8px; }
+  /* oben mehr Platz: die Unschärfe von iOS unter der Uhrzeit reicht nur noch leicht in den blauen Balken */
+  .topbar { position: static; padding-top: calc(max(8px, env(safe-area-inset-top)) + 18px); padding-bottom: 8px; }
   .userbox { flex-wrap: nowrap; }
   .userbox > span:first-child, .userbox .badge { display: none; }
   .userbox .btn { padding: 6px 10px; font-size: 13px; }
