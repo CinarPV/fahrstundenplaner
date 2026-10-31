@@ -75,6 +75,12 @@ function fmtMinutes(m) {
   const h = Math.floor(m / 60), r = m % 60;
   return h ? `${h} Std. ${r ? r + " Min." : ""}`.trim() : `${r} Min.`;
 }
+// Eine Fahrstunde = 45 Minuten; z. B. 90 Min. → „2 Fahrstunden“, 60 Min. → „1,3 Fahrstunden“
+const LESSON_MIN = 45;
+function fmtLessons(m) {
+  const n = Math.round(((+m || 0) / LESSON_MIN) * 10) / 10;
+  return `${n.toLocaleString("de-DE")} Fahrstunde${n === 1 ? "" : "n"}`;
+}
 const fullName = (p) => (p ? `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unbekannt" : "Unbekannt");
 const STATUS_TEXT = {
   requested: "Angefragt", confirmed: "Bestätigt", rejected: "Abgelehnt", cancelled: "Anfrage zurückgezogen",
@@ -236,7 +242,7 @@ function exportPrint(p, rows) {
   const counts = SPECIAL_TYPES.map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
   d.body.append(tag("h1", "Fahrstunden – " + fullName(p)),
     tag("div", [p.license_class ? "Klasse " + p.license_class : "", `Stand: ${new Date().toLocaleDateString("de-DE")}`].filter(Boolean).join(" · ")),
-    tag("p", `Gefahren: ${done.length} Termine, ${total} Min. (${fmtMinutes(total)}) · ${counts}`),
+    tag("p", `Gefahren: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termine · ${total} Min. (${fmtMinutes(total)}) · ${counts}`),
     table);
   setTimeout(() => w.print(), 300);
 }
@@ -1407,12 +1413,12 @@ async function adminStudents() {
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Termine"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"))),
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Termine"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num", title: "1 Fahrstunde = 45 Min." }, "Fahrstd."), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"))),
     el("tbody", {}, list.map((st) => {
       const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
         el("td", {}, fullName(st), st.needs_glasses ? " 👓" : "", st.is_conversion ? el("div", { class: "small muted" }, "Umschreiber") : null),
-        el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)),
+        el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)), el("td", { class: "num" }, fmtLessons(s.minutes).split(" ")[0]),
         el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
         el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late),
         el("td", { onclick: (e) => e.stopPropagation() }, moreToggle(st)));
@@ -2061,7 +2067,7 @@ function doneList(rows, total) {
         el("td", {}, typeLabel(b.lesson_type)),
         el("td", { class: "num" }, b.actual_minutes)))),
       el("tfoot", {}, el("tr", {},
-        el("th", { colspan: 4 }, `Gesamt: ${done.length} Termin${done.length === 1 ? "" : "e"}`),
+        el("th", { colspan: 4 }, `Gesamt: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termin${done.length === 1 ? "" : "e"}`),
         el("th", { class: "num" }, `${total} Min. (${fmtMinutes(total)})`))))));
 }
 
@@ -2173,7 +2179,7 @@ async function studentMine() {
   if (wa) wa.className = "btn small ghost";
   return el("div", {},
     el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 12px" },
-      el("span", {}, el("b", {}, `${doneCount} Termin${doneCount === 1 ? "" : "e"}`), ` gefahren · ${total} Min. (${fmtMinutes(total)})`,
+      el("span", {}, el("b", {}, fmtLessons(total)), ` gefahren (à 45 Min.) · ${doneCount} Termin${doneCount === 1 ? "" : "e"} · ${total} Min.`,
         lateCount ? el("span", { class: "badge late", style: "margin-left:6px" }, `${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}`) : null),
       wa),
     !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin-bottom:12px" },
