@@ -899,9 +899,9 @@ function weekBar(extra) {
   );
 }
 
-function legend(items) {
-  return el("div", { class: "legend" }, items.map(([cls, text]) => el("span", {}, el("i", { class: "slot " + cls, style: "padding:0;margin:0" }), text)));
-}
+// Kopfzeile eines Kalender-Eintrags: Uhrzeit links, Status-Wort rechts (statt Legende über dem Kalender)
+const slotHead = (time, tag) => el("div", { class: "slot-head" }, el("b", {}, time), tag ? el("span", { class: "slot-tag" }, tag) : null);
+
 
 /* ---------------- Urlaub / freie Tage ---------------- */
 
@@ -922,7 +922,7 @@ function offExtras(onClick) {
     const day = addDays(r.from, i), t = offOn(day);
     if (t) list.push({ at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0).toISOString(),
       node: el(onClick ? "button" : "div", { class: "slot off", onclick: onClick ? (e) => { e.stopPropagation(); onClick(); } : null },
-        el("b", {}, "🏖️ " + (t.note || "Frei")), onClick ? "Tag gesperrt" : "Fahrlehrer nicht verfügbar") });
+        slotHead("🏖️ Ganzer Tag", "gesperrt / " + (t.note || "Urlaub")), onClick ? null : "Fahrlehrer nicht verfügbar") });
   }
   return list;
 }
@@ -1075,7 +1075,7 @@ async function adminCalendar() {
     .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at");
   const examExtras = (weekExams || []).map((e) => ({ at: e.exam_at,
     node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openExamModal(e.profiles || { id: e.student_id }); } },
-      el("b", {}, `🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`), `${EXAM_KIND[e.kind]} · ${fullName(e.profiles)}`,
+      slotHead(`🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`, "Prüfung"), fullName(e.profiles),
       e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
 
   const grid = weekGrid(slots, (s) => {
@@ -1083,18 +1083,20 @@ async function adminCalendar() {
     const notHeld = (s.bookings || []).filter((x) => NOT_HELD_ICON[x.status]).pop();
     const past = new Date(s.starts_at).getTime() < Date.now();
     const glasses = (p) => (p && p.needs_glasses ? " 👓" : "");
-    let cls = past ? "past" : "free", label = past ? "Nicht gebucht" : "Frei";
+    let cls = past ? "past" : "free", label = past ? "Nicht gebucht" : "", tag = past ? "vergangen" : "frei";
     if (!b && notHeld) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
-    if (b && b.status === "requested") { cls = "requested"; label = "Anfrage: " + fullName(b.profiles) + glasses(b.profiles); }
-    if (b && b.status === "offered") { cls = "offered"; label = "Angebot an " + fullName(b.profiles) + " – wartet"; }
+    if (!b && notHeld && past) tag = "abgesagt";
+    if (b && b.status === "requested") { cls = "requested"; tag = "angefragt"; label = fullName(b.profiles) + glasses(b.profiles); }
+    if (b && b.status === "offered") { cls = "offered"; tag = "angeboten"; label = fullName(b.profiles) + " – wartet auf Zusage"; }
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
+      tag = b.actual_minutes !== null ? "gefahren" : "bestätigt";
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
     const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && !past;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
-      el("b", {}, fmtRange(s.starts_at, s.duration_min)), label,
+      slotHead(fmtRange(s.starts_at, s.duration_min), tag), label || null,
       upcoming ? el("div", {}, countdownEl(s.starts_at, s.duration_min, "small")) : null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras));
 
@@ -1104,7 +1106,6 @@ async function adminCalendar() {
       el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunde / Prüfung anlegen")),
     weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
       slots.length && !isPhone() ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
-    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"], ["exam", "🎓 Prüfung"], ["off", "🏖️ gesperrt"]]),
     grid,
   );
 }
@@ -2384,7 +2385,7 @@ async function studentCalendar() {
   const nextExam = exams.find((e) => !e.result && new Date(e.exam_at).getTime() > Date.now() - 6 * 3600000);
   const examExtras = exams.map((e) => ({ at: e.exam_at,
     node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); goTab("training"); } },
-      el("b", {}, `🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`), "Deine " + examIn(e.kind), e.meeting_point || e.note ? el("div", { class: "small" }, "📍 " + (e.meeting_point || e.note)) : null,
+      slotHead(`🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`, "Prüfung"), "Deine " + examIn(e.kind), e.meeting_point || e.note ? el("div", { class: "small" }, "📍 " + (e.meeting_point || e.note)) : null,
       e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
   if (error) throw error;
   // Nächste eigene Fahrstunde mit Countdown
@@ -2399,15 +2400,17 @@ async function studentCalendar() {
     const past = new Date(s.starts_at).getTime() < now;
     const cls = s.mine && past ? "past" : s.status;
     const label = s.mine
-      ? (s.status === "confirmed" ? (past ? "Deine Fahrstunde" : "✓ Deine Fahrstunde – bestätigt")
-        : s.status === "offered" ? "📨 Angebot für dich – bitte zusagen" : "Deine Anfrage – wartet auf Bestätigung")
-      : s.status === "requested" ? "Angefragt – noch nicht bestätigt (wird evtl. wieder frei)"
-      : "Frei – jetzt anfragen";
+      ? (s.status === "confirmed" ? "Deine Fahrstunde"
+        : s.status === "offered" ? "📨 Für dich – bitte zusagen" : "Deine Anfrage – wartet")
+      : s.status === "requested" ? "Von jemandem angefragt"
+      : "Antippen zum Anfragen";
+    const tag = s.mine && past ? "gefahren"
+      : { free: "frei", requested: "angefragt", offered: "angeboten", confirmed: "bestätigt" }[s.status] || "";
     const clickable = s.mine || (s.status === "free" && !past);
     return el("button", {
       class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
       onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
-    }, el("b", {}, fmtRange(s.starts_at, s.duration_min)), label);
+    }, slotHead(fmtRange(s.starts_at, s.duration_min), tag), label);
   }, null, offExtras(null).concat(examExtras));
 
   return el("div", {},
@@ -2425,7 +2428,6 @@ async function studentCalendar() {
         el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`)),
       meetingBox(meetingOf(nextOwn))) : null,
     weekBar(),
-    legend([["free", "frei – antippen zum Anfragen"], ["offered", "Angebot für dich"], ["requested", "von jemandem angefragt – schau später wieder rein"], ["confirmed mine", "deine Fahrstunden"]]),
     grid,
     slots.length === 0 ? el("p", { class: "muted", style: "margin-top:12px" }, "In dieser Woche gibt es keine freien Termine. Schau in der nächsten Woche (›) nach.") : null,
   );

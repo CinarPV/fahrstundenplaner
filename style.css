@@ -116,9 +116,6 @@ details.nothere input:not([type]) { margin-top: 10px; }
 .slot.mine { box-shadow: inset 4px 0 0 currentColor; }
 .slot[disabled] { cursor: default; }
 
-.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; margin-bottom: 12px; }
-.legend span { display: inline-flex; align-items: center; gap: 5px; }
-.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid; }
 .badge.requested { background: var(--req-bg); color: var(--req-fg); border-color: var(--req-bd); }
@@ -394,7 +391,6 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 /* Prüfungen – auffällig in Gold/Orange */
 :root { --exam-bg: #fff4d6; --exam-fg: #7a4b00; --exam-bd: #f0b429; }
 .slot.exam { background: var(--exam-bg); color: var(--exam-fg); border: 2px solid var(--exam-bd); font-weight: 600; }
-.legend .slot.exam { border-width: 1px; }
 .exam-card { border: 2px solid var(--exam-bd); background: linear-gradient(180deg, var(--exam-bg), #fff 120px); }
 .exam-card h2, .exam-card h3 { color: var(--exam-fg); }
 .exam-banner { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; cursor: pointer;
@@ -481,3 +477,7 @@ html.no-splash #splash { display: none; }
 @keyframes sp-on { 0% { opacity: .18; transform: scale(.8); } 60% { opacity: 1; transform: scale(1.18); } 100% { opacity: 1; transform: scale(1); } }
 @keyframes sp-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #splash *, #splash { animation: none !important; } .sp-light { opacity: 1; } }
+
+/* Kalender-Eintrag: Uhrzeit links, Status-Wort rechts */
+.slot-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.slot-tag { font-size: 12px; font-weight: 700; white-space: nowrap; opacity: .85; }
