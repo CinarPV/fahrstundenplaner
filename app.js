@@ -1083,10 +1083,9 @@ async function adminCalendar() {
     const notHeld = (s.bookings || []).filter((x) => NOT_HELD_ICON[x.status]).pop();
     const past = new Date(s.starts_at).getTime() < Date.now();
     const glasses = (p) => (p && p.needs_glasses ? " 👓" : "");
-    let cls = past ? "past" : "free", label = past ? "Nicht gebucht" : "", tag = past ? "vergangen" : "frei";
+    let cls = past ? "past" : "free", label = past ? "Nicht gebucht" : "", tag = past ? "nicht stattgefunden" : "frei";
     if (!b && notHeld) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
-    if (!b && notHeld && past) tag = "abgesagt";
     if (b && b.status === "requested") { cls = "requested"; tag = "angefragt"; label = fullName(b.profiles) + glasses(b.profiles); }
     if (b && b.status === "offered") { cls = "offered"; tag = "angeboten"; label = fullName(b.profiles) + " – wartet auf Zusage"; }
     if (b && b.status === "confirmed") {
