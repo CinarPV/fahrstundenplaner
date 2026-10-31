@@ -7,9 +7,9 @@
  */
 window.FSP_LEGAL = {
   name: "Kürsat Cinar",
-  street: "",            // z. B. "Musterstraße 1"
-  city: "",              // z. B. "12345 Musterstadt"
-  email: "",             // Kontakt-E-Mail für Impressum und Datenschutz
+  street: "Hagener Strasse 20",
+  city: "57078 Siegen",
+  email: "ehfy@web.de",  // Kontakt-E-Mail für Impressum und Datenschutz
   phone: "",             // optional
   stand: "31.10.2026",   // Datum der letzten Änderung der Texte
 };
