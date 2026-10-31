@@ -793,44 +793,46 @@ function openCopyWeek(slots) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
-// Handy: statt Mo–So eine fortlaufende Liste ab vorgestern (8 Tage) – heute steht oben, nicht unten.
+// Handy: statt Mo–So eine fortlaufende Liste ab heute (7 Tage) – heute steht oben.
+// Die 5 Tage davor werden mitgeladen, liegen aber versteckt unter einem Balken („▲ Letzte 5 Tage“).
 // Ältere oder spätere Tage über ‹ › oder „📅 Datum“ wählen.
 const PHONE_MQ = matchMedia("(max-width: 600px)");
 const isPhone = () => PHONE_MQ.matches;
-const PHONE_DAYS = 8;
+const PHONE_DAYS = 7, PAST_DAYS = 5;
 const dayStart = (d) => { d = new Date(d); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); };
+// state.listStart = erster sichtbarer Tag (Standard: heute)
+const listAnchor = () => state.listStart || (state.listStart = dayStart(new Date()));
 function viewRange() {
   if (!isPhone()) return { from: state.weekStart, days: 7 };
-  if (!state.listStart) state.listStart = addDays(dayStart(new Date()), -2);
-  return { from: state.listStart, days: PHONE_DAYS };
+  return { from: addDays(listAnchor(), -PAST_DAYS), days: PAST_DAYS + PHONE_DAYS };
 }
 // Kalender auf ein Datum springen lassen (z. B. nach dem Anlegen)
 function showDate(d) {
   state.weekStart = startOfWeek(d);
-  const r = viewRange(), day = dayStart(d);
-  if (isPhone() && (day < r.from || day >= addDays(r.from, r.days))) state.listStart = addDays(day, -2);
+  const a = listAnchor(), day = dayStart(d);
+  if (isPhone() && (day < a || day >= addDays(a, PHONE_DAYS))) state.listStart = day;
 }
 // Beim Drehen/Umschalten zwischen Handy- und Tablet-Breite neu zeichnen (nicht mitten in einem Fenster)
 PHONE_MQ.addEventListener("change", () => { if (state.profile && !document.querySelector("dialog[open]")) render(); });
 
 function weekBar(extra) {
-  const r = viewRange(), end = addDays(r.from, r.days - 1);
+  const r = isPhone() ? { from: listAnchor(), days: PHONE_DAYS } : viewRange(), end = addDays(r.from, r.days - 1);
   const go = (n) => {
     if (isPhone()) state.listStart = addDays(r.from, n); else state.weekStart = addDays(state.weekStart, n);
     render();
   };
-  const pick = el("input", { type: "date", value: dateInput(isPhone() ? addDays(r.from, 2) : r.from), "aria-label": "Datum wählen", class: "date-jump" });
+  const pick = el("input", { type: "date", value: dateInput(r.from), "aria-label": "Datum wählen", class: "date-jump" });
   pick.addEventListener("change", () => {
     if (!pick.value) return;
     const d = fromInputs(pick.value, "00:00");
     state.weekStart = startOfWeek(d);
-    state.listStart = addDays(d, -2);
+    state.listStart = dayStart(d);
     render();
   });
   return el("div", { class: "weekbar" },
     el("div", { class: "actions", style: "margin:0" },
       el("button", { class: "btn small ghost", onclick: () => go(-7), "aria-label": "Früher" }, "‹"),
-      el("button", { class: "btn small ghost", onclick: () => { state.weekStart = startOfWeek(new Date()); state.listStart = null; render(); } }, "Heute"),
+      el("button", { class: "btn small ghost", onclick: () => { state.weekStart = startOfWeek(new Date()); state.listStart = null; state.showPast = false; render(); } }, "Heute"),
       el("button", { class: "btn small ghost", onclick: () => go(7), "aria-label": "Später" }, "›"),
       el("label", { class: "btn small ghost date-pick", title: "Datum wählen",
         onclick: () => { try { pick.showPicker(); } catch { /* ältere Browser: Feld öffnet sich selbst */ } } }, "📅 Datum", pick)),
@@ -940,7 +942,19 @@ function weekGrid(slots, renderSlot, onAddDay, extras = []) {
       daySlots.length ? daySlots.map(renderSlot) : dayExtras.length ? null : el("div", { class: "empty" }, "—"),
     ));
   }
-  return el("div", { class: "week" }, days);
+  if (!isPhone()) return el("div", { class: "week" }, days);
+  // Handy: die Tage vor dem ersten sichtbaren Tag hinter einem Balken verstecken (beim App-Start immer zu)
+  const past = el("div", { class: "past-days", hidden: !state.showPast }, days.slice(0, PAST_DAYS));
+  const label = sameDay(listAnchor(), today) ? `Letzte ${PAST_DAYS} Tage` : `${PAST_DAYS} Tage davor`;
+  const bar = el("button", { type: "button", class: "past-bar", "aria-expanded": String(!!state.showPast) });
+  const paint = () => {
+    bar.textContent = state.showPast ? `▼ ${label} ausblenden` : `▲ ${label} anzeigen`;
+    bar.setAttribute("aria-expanded", String(!!state.showPast));
+    past.hidden = !state.showPast;
+  };
+  bar.onclick = () => { state.showPast = !state.showPast; paint(); };
+  paint();
+  return el("div", { class: "week" }, bar, past, days.slice(PAST_DAYS));
 }
 
 /* ---------------- Admin: Kalender ---------------- */
