@@ -3,8 +3,8 @@
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
    Daten (Supabase) werden NIE zwischengespeichert. */
-const CACHE = "fsp-v12";
-const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "logo-license.svg", "logo-license-plain.svg", "logo-license-wheel.svg", "logo-license-dark.svg", "logo-license-blue.svg", "manifest.webmanifest",
+const CACHE = "fsp-v13";
+const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "logo-license.svg", "logo-license-plain.svg", "logo-license-wheel.svg", "logo-license-dark.svg", "logo-license-blue.svg", "logo-road-check.svg", "logo-wheel-clock.svg", "logo-calendar-road.svg", "logo-e-lanes.svg", "logo-curve.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

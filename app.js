@@ -732,6 +732,11 @@ const LOGOS = {
   licwheel: ["logo-license-wheel.svg", "3 · Führerschein + Lenkrad"],
   dark: ["logo-license-dark.svg", "4 · Schwarz"],
   blue: ["logo-license-blue.svg", "5 · Führerschein in Blau"],
+  roadcheck: ["logo-road-check.svg", "6 · Haken als Straße"],
+  wheelclock: ["logo-wheel-clock.svg", "7 · Lenkrad-Uhr"],
+  calroad: ["logo-calendar-road.svg", "8 · Kalender + Straße"],
+  elanes: ["logo-e-lanes.svg", "9 · „E“ aus Fahrbahnen"],
+  curve: ["logo-curve.svg", "10 · Kurve"],
 };
 function currentLogo() { try { return LOGOS[localStorage.getItem("fsp_logo")] ? localStorage.getItem("fsp_logo") : "wheel"; } catch { return "wheel"; } }
 function applyLogo() {
