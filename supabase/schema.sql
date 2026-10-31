@@ -85,6 +85,7 @@ create index if not exists bookings_student_idx on public.bookings (student_id);
 alter table public.settings add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
 alter table public.settings add column if not exists meeting_points text check (char_length(meeting_points) <= 2000);
 alter table public.bookings add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
+alter table public.slots    add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
 
 -- Ausbildungsthemen (eigene Formulierung, angelehnt an den gesetzlichen Ausbildungsplan).
 -- teacher_id NULL = Standardthemen für alle; später können Fahrlehrer eigene Themen/Strecken ergänzen.
@@ -380,10 +381,11 @@ begin
   -- Termine
   for r in select * from jsonb_array_elements(coalesce(p_data->'slots', '[]'::jsonb)) loop
     begin
-      insert into slots (id, teacher_id, starts_at, duration_min, created_at)
-      values ((r->>'id')::uuid, me, (r->>'starts_at')::timestamptz, (r->>'duration_min')::int,
+      insert into slots (id, teacher_id, starts_at, duration_min, meeting_point, created_at)
+      values ((r->>'id')::uuid, me, (r->>'starts_at')::timestamptz, (r->>'duration_min')::int, r->>'meeting_point',
               coalesce((r->>'created_at')::timestamptz, now()))
-      on conflict (id) do update set starts_at = excluded.starts_at, duration_min = excluded.duration_min
+      on conflict (id) do update set starts_at = excluded.starts_at, duration_min = excluded.duration_min,
+        meeting_point = excluded.meeting_point
         where slots.teacher_id = me;
       if found then n_slots := n_slots + 1; else n_skipped := n_skipped + 1; end if;
     exception when others then n_skipped := n_skipped + 1;
@@ -436,12 +438,14 @@ end $$;
 
 -- Kalender: freie Termine des EIGENEN Fahrlehrers, fremde unbestätigte Anfragen (ohne Namen)
 -- und die eigenen Termine. Fremde bestätigte Fahrstunden bleiben unsichtbar.
+drop function if exists public.get_calendar(timestamptz, timestamptz);  -- Rückgabe hat sich geändert (Treffpunkt)
 create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
-returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean)
+returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean, meeting_point text)
 language sql stable security definer set search_path = public as $$
   select s.id, s.starts_at, s.duration_min,
          coalesce(b.status, 'free'),
-         coalesce(b.student_id = auth.uid(), false)
+         coalesce(b.student_id = auth.uid(), false),
+         coalesce(b.meeting_point, s.meeting_point)
   from slots s
   left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed','offered')
   where s.starts_at >= p_from and s.starts_at < p_to
