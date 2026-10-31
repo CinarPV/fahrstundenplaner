@@ -140,6 +140,14 @@ function waButton(phone, text, label = "💬 Per WhatsApp schreiben") {
   const n = waNumber(phone);
   return n ? el("a", { class: "btn ok", href: `https://wa.me/${n}?text=${encodeURIComponent(text)}`, target: "_blank", rel: "noopener" }, label) : null;
 }
+// Angeheftete Uhrzeiten des Fahrlehrers (Einstellungen), z. B. "08:00,09:45,11:30"
+const timePresets = () => (state.settings.time_presets ?? "08:00").split(",").map((x) => x.trim()).filter((x) => /^\d\d:\d\d$/.test(x)).sort();
+async function saveTimePresets(list) {
+  const v = list.join(",");
+  state.settings.time_presets = v;
+  const { error } = await sb.from("settings").update({ time_presets: v }).eq("teacher_id", state.profile.id);
+  if (error) toast("Uhrzeiten konnten nicht gespeichert werden: " + error.message, true);
+}
 // Treffpunkt einer Fahrstunde: beim Termin gewählt, sonst Standard-Treffpunkt des Fahrlehrers
 const meetingOf = (b) => (b && (b.meeting_point || (b.slots && b.slots.meeting_point))) || state.settings.meeting_point || "";
 const otherPoints = () => (state.settings.meeting_points || "").split("\n").map((x) => x.trim()).filter(Boolean);
@@ -930,26 +938,32 @@ function newSlotForm(opts = {}) {
   const dayBtns = WEEKDAYS.map((name, i) => el("button", { type: "button", class: "tab", onclick: () => { days.has(i) ? days.delete(i) : days.add(i); refresh(); } }, name));
   const setDays = (list) => { days.clear(); list.forEach((i) => days.add(i)); refresh(); };
 
-  // Uhrzeiten: eine Reihe erzeugen (Beginn + Anzahl + Pause) und einzeln ergänzen/entfernen
-  let times = ["08:00"];
-  const first = el("input", { type: "time", value: "08:00", step: 300 });
+  // Uhrzeiten: angeheftete Lieblings-Uhrzeiten (gespeichert) antippen = auswählen; × = Uhrzeit entfernen.
+  // Neue Uhrzeiten (einzeln oder als Reihe) werden automatisch angeheftet.
+  let pinned = timePresets();
+  let times = [];
+  const first = el("input", { type: "time", value: pinned[0] || "08:00", step: 300 });
   const count = el("input", { type: "number", min: 1, max: 10, value: 1 });
   const pause = el("input", { type: "number", min: 0, max: 240, step: 5, value: 0 });
   const extra = el("input", { type: "time", step: 300 });
   const timeChips = el("div", { class: "chips" });
   const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
   const fromMin = (m) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
-  function makeRow() {
+  const uniq = (list) => [...new Set(list)].sort();
+  function pinTimes(list) {
+    const next = uniq(pinned.concat(list));
+    if (next.join() !== pinned.join()) { pinned = next; saveTimePresets(pinned); }
+  }
+  const makeRow = el("button", { type: "button", class: "btn small ghost", onclick: () => {
     if (!first.value) return;
     const n = Math.max(1, Math.min(10, +count.value || 1)), p = Math.max(0, +pause.value || 0);
-    times = Array.from({ length: n }, (_, i) => fromMin(toMin(first.value) + i * (dur.value + p)));
-    refresh();
-  }
-  [first, count, pause].forEach((i) => i.addEventListener("input", makeRow));
-  dur.input.addEventListener("input", () => { if (+count.value > 1) makeRow(); });
+    const row = Array.from({ length: n }, (_, i) => fromMin(toMin(first.value) + i * (dur.value + p)));
+    pinTimes(row); times = uniq(times.concat(row)); refresh();
+  } }, "Reihe übernehmen");
   const addTime = el("button", { type: "button", class: "btn small ghost", onclick: () => {
-    if (extra.value && !times.includes(extra.value)) { times.push(extra.value); times.sort(); extra.value = ""; refresh(); }
-  } }, "+ Uhrzeit hinzufügen");
+    if (!extra.value) return;
+    pinTimes([extra.value]); times = uniq(times.concat(extra.value)); extra.value = ""; refresh();
+  } }, "+ Uhrzeit anheften");
 
   function build() {
     const start = fromInputs(date.value, "00:00");
@@ -976,16 +990,22 @@ function newSlotForm(opts = {}) {
     btn.textContent = mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
-    timeChips.replaceChildren(...times.map((t) => el("span", { class: "tag", style: "font-size:14px;padding:4px 8px" },
-      `${t} – ${fromMin(toMin(t) + dur.value)} `,
-      el("button", { type: "button", class: "close", style: "font-size:16px", "aria-label": "Uhrzeit entfernen", onclick: () => { times = times.filter((x) => x !== t); refresh(); } }, "×"))));
+    timeChips.replaceChildren(...(pinned.length ? pinned.map((t) => {
+      const on = times.includes(t);
+      return el("span", { class: "time-chip" + (on ? " on" : "") },
+        el("button", { type: "button", class: "pick", "aria-pressed": String(on),
+          onclick: () => { times = on ? times.filter((x) => x !== t) : uniq(times.concat(t)); refresh(); } },
+          (on ? "✓ " : "") + `${t} – ${fromMin(toMin(t) + dur.value)}`),
+        el("button", { type: "button", class: "unpin", "aria-label": `Uhrzeit ${t} entfernen`, title: "Uhrzeit entfernen",
+          onclick: () => { pinned = pinned.filter((x) => x !== t); times = times.filter((x) => x !== t); saveTimePresets(pinned); refresh(); } }, "×"));
+    }) : [el("span", { class: "muted small" }, "Noch keine Uhrzeiten angeheftet – unten eine Uhrzeit hinzufügen.")]));
     const list = build();
     preview.replaceChildren(list.length
       ? el("span", {}, el("b", {}, `${list.length} Termin${list.length > 1 ? "e" : ""}`),
         repeat.checked
           ? ` · jeden ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
           : ` · ${fmtDate(list[0].starts_at)} · ${times.map((t) => t + " Uhr").join(", ")}`)
-      : el("span", { class: "muted" }, "Noch keine Termine – Wochentage und Uhrzeiten wählen."));
+      : el("span", { class: "muted" }, times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen."));
   }
   [date, until].forEach((i) => i.addEventListener("input", refresh));
   date.addEventListener("input", () => { if (!repeat.checked) { days.clear(); days.add(weekdayIndex(fromInputs(date.value, "00:00"))); } });
@@ -1035,13 +1055,16 @@ function newSlotForm(opts = {}) {
     el("label", { class: "check repeat-toggle" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
     repeatBox,
     el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,
-    el("label", {}, "Uhrzeiten pro Tag"),
-    el("div", { class: "row" },
-      el("div", {}, el("label", {}, "Erster Termin um"), first),
-      el("div", {}, el("label", {}, "Termine hintereinander"), count),
-      el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause)),
+    el("label", {}, "Uhrzeiten – antippen zum Auswählen"),
     timeChips,
     el("div", { class: "done-row" }, el("span", { style: "width:130px" }, extra), addTime),
+    el("details", { class: "fold" },
+      el("summary", {}, "Mehrere Termine hintereinander anheften …"),
+      el("div", { class: "row" },
+        el("div", {}, el("label", {}, "Erster Termin um"), first),
+        el("div", {}, el("label", {}, "Termine hintereinander"), count),
+        el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause)),
+      el("div", { class: "actions" }, makeRow)),
     meetSlot.node,
     preview,
     el("div", { class: "actions" }, btn),
@@ -1602,6 +1625,7 @@ async function openStudent(st) {
     el("p", { class: "muted small" }, [st.email, st.phone].filter(Boolean).join(" · ")),
     el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
     el("p", { class: "small" }, specialSummary(data)),
+    await examCard(st, true),
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
         el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
@@ -1808,14 +1832,15 @@ async function fetchAll(makeQuery) {
 }
 async function loadOwnData() {
   const tid = state.profile.id;
-  const [settings, students, slots, bookings, progress] = await Promise.all([
+  const [settings, students, slots, bookings, progress, exams] = await Promise.all([
     sb.from("settings").select("*").eq("teacher_id", tid).maybeSingle().then(({ data, error }) => { if (error) throw error; return data; }),
     fetchAll(() => sb.from("profiles").select("*").eq("teacher_id", tid).order("last_name")),
     fetchAll(() => sb.from("slots").select("*").eq("teacher_id", tid).order("starts_at")),
     fetchAll(() => sb.from("bookings").select("*").order("created_at")), // Zugriffsregeln: nur Buchungen auf eigenen Terminen
     fetchAll(() => sb.from("training_progress").select("*").order("student_id")), // nur eigene Schüler
+    fetchAll(() => sb.from("exams").select("*").order("exam_at")), // nur eigene Schüler
   ]);
-  return { settings, students, slots, bookings, progress };
+  return { settings, students, slots, bookings, progress, exams };
 }
 const today = () => dateInput(new Date());
 const backupKey = () => `fsp_backup_${state.profile && state.profile.id}`;
@@ -1827,9 +1852,10 @@ async function makeBackup() {
   const d = await loadOwnData();
   const { id, email, first_name, last_name, slug } = state.profile;
   const backup = {
-    app: "Fahrstundenplaner", format: 1, name: "Easy Fahrstundenplaner", // "app" = interne Kennung, nicht ändern created_at: new Date().toISOString(),
+    app: "Fahrstundenplaner", format: 1, name: "Easy Fahrstundenplaner", // "app" = interne Kennung, nicht ändern
+    created_at: new Date().toISOString(),
     teacher: { id, email, first_name, last_name, slug },
-    counts: { students: d.students.length, slots: d.slots.length, bookings: d.bookings.length, progress: d.progress.length },
+    counts: { students: d.students.length, slots: d.slots.length, bookings: d.bookings.length, progress: d.progress.length, exams: d.exams.length },
     ...d,
   };
   downloadFile(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), `Sicherung_Easy_Fahrstundenplaner_${today()}.json`);
@@ -2056,6 +2082,86 @@ function openBooking(s) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
+/* ---------------- Prüfungen (Theorie/Praxis): Termin, bestanden ja/nein, ggf. neuer Termin ---------------- */
+
+const EXAM_KIND = { praxis: "Praktische Prüfung", theorie: "Theorieprüfung" };
+async function examCard(student, editable) {
+  const box = el("div", { class: "card exam-card" });
+  async function draw() {
+    const { data, error } = await sb.from("exams").select("id,kind,exam_at,result,note").eq("student_id", student.id).order("exam_at");
+    if (error) return box.replaceChildren(el("p", { class: "muted small" }, "Prüfungen konnten nicht geladen werden."));
+    const exams = data || [];
+    if (!editable && !exams.length) { box.hidden = true; return; }
+    const passed = (k) => exams.some((e) => e.kind === k && e.result === "passed");
+    // Nach „nicht bestanden“ (und noch kein offener neuer Termin) gleich das Formular für den nächsten Termin zeigen
+    const needsNext = Object.keys(EXAM_KIND).find((k) => {
+      const ofKind = exams.filter((e) => e.kind === k);
+      return ofKind.length && ofKind[ofKind.length - 1].result === "failed" && !passed(k);
+    });
+    const setResult = (e, result) => async () => {
+      const { error } = await sb.from("exams").update({ result }).eq("id", e.id);
+      if (error) return fail(error);
+      toast(result === "passed" ? "🎉 Bestanden eingetragen!" : result === "failed" ? "Nicht bestanden – trag gleich den nächsten Termin ein." : "Ergebnis zurückgesetzt.");
+      draw();
+    };
+    const row = (e, i) => {
+      const nr = exams.filter((x, j) => x.kind === e.kind && j <= i).length;
+      const future = new Date(e.exam_at).getTime() > Date.now();
+      const del = el("button", { type: "button", class: "btn small ghost", onclick: async () => {
+        if (!confirm("Diesen Prüfungstermin löschen?")) return;
+        const { error } = await sb.from("exams").delete().eq("id", e.id);
+        if (error) return fail(error);
+        draw();
+      } }, "Löschen");
+      return el("div", { class: "list-item" + (e.result === "passed" ? " exam-passed" : "") },
+        el("div", { class: "head" },
+          el("div", {}, el("b", {}, `${EXAM_KIND[e.kind]}${nr > 1 ? ` (${nr}. Versuch)` : ""}`),
+            el("div", {}, `${fmtDate(e.exam_at)} um ${fmtTime(e.exam_at)} Uhr`)),
+          e.result === "passed" ? el("span", { class: "badge confirmed" }, "🎉 Bestanden")
+            : e.result === "failed" ? el("span", { class: "badge rejected" }, "Nicht bestanden")
+            : el("span", { class: "badge requested" }, future ? countdownText(e.exam_at, 0) || "Anstehend" : "Ergebnis offen")),
+        e.note ? el("div", { class: "note" }, e.note) : null,
+        editable ? el("div", { class: "actions" },
+          e.result ? el("button", { type: "button", class: "btn small ghost", onclick: setResult(e, null) }, "Ergebnis ändern")
+            : [el("button", { type: "button", class: "btn small ok", onclick: setResult(e, "passed") }, "✓ Bestanden"),
+               el("button", { type: "button", class: "btn small danger", onclick: setResult(e, "failed") }, "✗ Nicht bestanden")],
+          del) : null);
+    };
+    let form = null;
+    if (editable) {
+      const kind = el("select", {}, Object.entries(EXAM_KIND).map(([k, t]) => el("option", { value: k }, t)));
+      kind.value = needsNext || (passed("theorie") ? "praxis" : "theorie");
+      const date = el("input", { type: "date", value: dateInput(addDays(new Date(), 14)) });
+      const time = el("input", { type: "time", value: "08:00", step: 300 });
+      const note = el("input", { maxlength: 300, placeholder: "Optional, z. B. „TÜV-Station Musterstadt“" });
+      const save = el("button", { class: "btn" }, "Prüfungstermin speichern");
+      save.onclick = () => busy(save, async () => {
+        const at = fromInputs(date.value, time.value);
+        if (isNaN(at)) throw new Error("Bitte Datum und Uhrzeit angeben");
+        const { error } = await sb.from("exams").insert({ student_id: student.id, kind: kind.value, exam_at: at.toISOString(), note: note.value.trim() || null });
+        if (error) throw error;
+        toast("Prüfungstermin eingetragen.");
+        draw();
+      });
+      const fields = el("div", {},
+        el("label", {}, "Art"), kind,
+        el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Uhrzeit"), time)),
+        el("label", {}, "Hinweis"), note, el("div", { class: "actions" }, save));
+      form = needsNext
+        ? el("div", { class: "notice", style: "margin-top:12px" }, el("b", {}, `Nicht bestanden – nächster Termin für die ${EXAM_KIND[needsNext]}:`), fields)
+        : el("details", { class: "fold" }, el("summary", {}, "➕ Prüfungstermin eintragen"), fields);
+    }
+    box.hidden = false;
+    box.replaceChildren(el("div", {},
+      el("h3", {}, editable ? "🎓 Prüfungen" : "🎓 Meine Prüfungen"),
+      exams.length ? exams.map(row) : el("p", { class: "muted small" }, "Noch kein Prüfungstermin eingetragen."),
+      passed("praxis") ? el("p", { class: "small" }, "🎉 Führerscheinprüfung bestanden – herzlichen Glückwunsch!") : null,
+      form));
+  }
+  await draw();
+  return box;
+}
+
 /* ---------------- Fahrlehrer: Ausbildungsstand (Schüler wählen → abhaken) ---------------- */
 
 async function adminTraining() {
@@ -2075,6 +2181,7 @@ async function adminTraining() {
     el("h2", {}, "📈 Ausbildungsstand"),
     el("label", {}, "Schüler wählen"), sel,
     el("div", { class: "done-row", style: "margin:8px 0 4px" }, studentTags(chosen)),
+    await examCard(chosen, true),
     await trainingView(chosen, true, lessons || []));
 }
 
@@ -2086,6 +2193,7 @@ async function studentTraining() {
   return el("div", { class: "card" },
     el("h2", {}, "📈 Mein Ausbildungsstand"),
     el("p", { class: "muted small" }, "Dein Fahrlehrer trägt hier nach den Fahrstunden ein, was du schon kannst."),
+    await examCard(state.profile, false),
     await trainingView(state.profile, false, data));
 }
 

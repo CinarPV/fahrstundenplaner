@@ -377,3 +377,15 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 /* Treffpunkt für Schüler */
 .note.meeting { border-left-color: var(--brand); background: #eef6fa; }
 .note.meeting a { color: var(--brand); font-weight: 600; white-space: nowrap; }
+
+/* Angeheftete Uhrzeiten: antippen = auswählen, × = entfernen */
+.time-chip { display: inline-flex; align-items: stretch; border: 1.5px solid var(--border); border-radius: 999px; overflow: hidden; background: #fff; }
+.time-chip .pick { border: 0; background: transparent; padding: 0 12px; min-height: 44px; font: inherit; font-size: 15px; color: var(--text); cursor: pointer; }
+.time-chip .unpin { border: 0; border-left: 1px solid var(--border); background: transparent; width: 40px; min-height: 44px; font-size: 18px; color: var(--muted); cursor: pointer; }
+.time-chip.on { border-color: var(--brand); background: var(--brand); }
+.time-chip.on .pick { color: #fff; font-weight: 600; }
+.time-chip.on .unpin { color: #fff; border-left-color: rgba(255,255,255,.35); }
+.list-item.exam-passed { border-color: var(--teal); }
+
+/* „hidden“ gilt immer – auch bei Elementen mit display:flex o. ä. */
+[hidden] { display: none !important; }

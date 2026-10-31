@@ -86,6 +86,20 @@ alter table public.settings add column if not exists meeting_point  text check (
 alter table public.settings add column if not exists meeting_points text check (char_length(meeting_points) <= 2000);
 alter table public.bookings add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
 alter table public.slots    add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
+-- Angeheftete Uhrzeiten beim Anlegen, z. B. "08:00,09:45,11:30"
+alter table public.settings add column if not exists time_presets   text check (char_length(time_presets) <= 400);
+
+-- Prüfungen (Theorie/Praxis): Termin + Ergebnis; bei „nicht bestanden“ folgt ein neuer Termin
+create table if not exists public.exams (
+  id          uuid primary key default gen_random_uuid(),
+  student_id  uuid not null references public.profiles(id) on delete cascade,
+  kind        text not null default 'praxis' check (kind in ('theorie','praxis')),
+  exam_at     timestamptz not null,
+  result      text check (result in ('passed','failed')),   -- NULL = noch offen
+  note        text check (char_length(note) <= 300),
+  created_at  timestamptz not null default now()
+);
+create index if not exists exams_student_idx on public.exams (student_id, exam_at);
 
 -- Ausbildungsthemen (eigene Formulierung, angelehnt an den gesetzlichen Ausbildungsplan).
 -- teacher_id NULL = Standardthemen für alle; später können Fahrlehrer eigene Themen/Strecken ergänzen.
@@ -431,6 +445,22 @@ begin
     end;
   end loop;
 
+  -- Prüfungen
+  for r in select * from jsonb_array_elements(coalesce(p_data->'exams', '[]'::jsonb)) loop
+    begin
+      if student_teacher((r->>'student_id')::uuid) is distinct from me then
+        n_skipped := n_skipped + 1;
+        continue;
+      end if;
+      insert into exams (id, student_id, kind, exam_at, result, note, created_at)
+      values ((r->>'id')::uuid, (r->>'student_id')::uuid, coalesce(r->>'kind', 'praxis'), (r->>'exam_at')::timestamptz,
+              r->>'result', r->>'note', coalesce((r->>'created_at')::timestamptz, now()))
+      on conflict (id) do update set kind = excluded.kind, exam_at = excluded.exam_at, result = excluded.result, note = excluded.note
+        where student_teacher(exams.student_id) = me;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end loop;
+
   return jsonb_build_object('students', n_students, 'slots', n_slots, 'bookings', n_bookings, 'skipped', n_skipped);
 end $$;
 
@@ -559,6 +589,7 @@ alter table public.slots    enable row level security;
 alter table public.bookings enable row level security;
 alter table public.training_topics   enable row level security;
 alter table public.training_progress enable row level security;
+alter table public.exams             enable row level security;
 
 -- Profile: man sieht sich selbst; Fahrlehrer sehen ihre eigenen Schüler; Haupt-Admin sieht die Fahrlehrer
 drop policy if exists profiles_select on public.profiles;
@@ -616,6 +647,15 @@ create policy progress_select on public.training_progress for select
          or (public.is_teacher() and public.student_teacher(student_id) = auth.uid()));
 drop policy if exists progress_teacher on public.training_progress;
 create policy progress_teacher on public.training_progress for all
+  using (public.is_teacher() and public.student_teacher(student_id) = auth.uid())
+  with check (public.is_teacher() and public.student_teacher(student_id) = auth.uid());
+
+-- Prüfungen: Schüler sehen nur die eigenen; nur der eigene Fahrlehrer trägt ein
+drop policy if exists exams_select on public.exams;
+create policy exams_select on public.exams for select
+  using (student_id = auth.uid() and public.is_active());
+drop policy if exists exams_teacher on public.exams;
+create policy exams_teacher on public.exams for all
   using (public.is_teacher() and public.student_teacher(student_id) = auth.uid())
   with check (public.is_teacher() and public.student_teacher(student_id) = auth.uid());
 
