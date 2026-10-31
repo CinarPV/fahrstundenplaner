@@ -22,7 +22,10 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - Die Dauer (Standard **90 Minuten**) lässt sich im **5-Minuten-Takt** ändern (−5/+5, −15/+15) oder per Schnellwahl auf 45, 90 oder 135 Min. setzen. **Auf die Zahl tippen**, um beliebige Minuten selbst einzugeben, z. B. 83.
 - **Einzelner Termin:** Datum und Uhrzeit wählen, fertig.
 - **🔁 Wiederholen (Haken):** Erst mit dem Haken erscheinen die **Wochentage** zum Antippen (vorausgewählt ist der Wochentag des gewählten Datums; dazu Mo–Fr, Mo–Sa, jeden Tag) und **„Wiederholen bis“** mit Schnellwahl 2, 4, 8 oder 12 Wochen.
-- **Uhrzeiten** festlegen, z. B. 3 Fahrstunden hintereinander mit 15 Min. Pause, dazu einzelne Uhrzeiten. Die Vorschau zeigt vorher, wie viele Termine entstehen.
+- **Angeheftete Uhrzeiten:** Deine üblichen Uhrzeiten stehen immer als Knöpfe da, z. B. `08:00 – 09:30`. Antippen wählt sie aus, **×** entfernt sie dauerhaft. Neue Uhrzeiten (einzeln oder als Reihe mit Pause) werden automatisch angeheftet. Die Vorschau zeigt vorher, wie viele Termine entstehen.
+- **📍 Treffpunkt pro Termin:** Standard-Treffpunkt und Ausweich-Treffpunkte in den Einstellungen. Beim Anlegen auswählen oder einen neuen eintippen (wird gemerkt). Schüler sehen ihn beim Anfragen und nach der Bestätigung, mit Link zur Karte.
+- **🎓 Prüfung zuordnen:** Im selben Fenster wie Termine. Schüler, Art (Praxis/Theorie), Beginn, Dauer (Standard **55 Min.**) und Ort wählen. Die Prüfung erscheint gold im Kalender von Fahrlehrer und Schüler. Danach „bestanden“ oder „nicht bestanden“ eintragen; bei „nicht bestanden“ gleich den nächsten Termin, bis bestanden ist.
+- **🏖️ Tage sperren (Urlaub, frei, krank …):** Im Kalender oben. An gesperrten Tagen kann niemand anfragen, beim Anlegen werden sie übersprungen, Schüler sehen einen Hinweis.
 - **⧉ Woche kopieren:** Eine fertig geplante Woche mit einem Klick in die nächsten Wochen übernehmen. Termine, die es schon gibt, werden übersprungen.
 - Anfragen **bestätigen** (verbindlich) oder **ablehnen**. Dabei lassen sich die Uhrzeit anpassen und eine Antwort schreiben, etwa „Ausweis + Brille mitbringen, Treffpunkt Bahnhof“.
 - Nach der Fahrstunde **abhaken**: Die geplanten Minuten stehen schon drin. Bei kürzerer oder längerer Fahrt passt du sie mit −15/−5/+5/+15 an und setzt dann den Haken.
@@ -37,7 +40,8 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - **Freigeben oder zuordnen:** Beim Anlegen wählst du **🟢 Freigeben**, dann können alle Schüler die Termine anfragen, oder **👤 Einem Schüler zuordnen**. Beim Zuordnen tippst du den Schüler in der Liste an, und alle Termine werden direkt bestätigt für ihn eingetragen, z. B. für die Prüfungsvorbereitung die ganze Woche.
 - **Höchstzahl pro Schüler:** Standard für alle (Einstellungen). In der Schülerliste setzt ein **Häkchen „Mehr erlauben“** einen Schüler mit einem Klick auf unbegrenzt. Im Schüler-Fenster geht auch eine eigene Anzahl (z. B. 5).
 - **Einem Schüler anbieten:** Termine einzeln oder mehrere auf einmal einem bestimmten Schüler **anbieten**. Der Schüler sagt in der App **zu** (dann ist die Fahrstunde verbindlich) oder **ab** (dann ist der Termin wieder frei). Alternativ lassen sie sich direkt **fest eintragen**. Offene Angebote stehen im Tab „Anfragen“, mit einem Knopf zum Erinnern per WhatsApp.
-- **📈 Ausbildungsstand pro Schüler:** Oben auf den Tab **„Ausbildung“** tippen und den Schüler auswählen (oder im Schüler-Fenster auf „Ausbildungsstand“). Rund 40 Themen in den Stufen **Grundstufe, Aufbaustufe, Leistungsstufe, Grundfahraufgaben, besondere Ausbildungsfahrten sowie Reife- und Teststufe**. Ein Thema antippen schaltet weiter: offen → **eingeführt** → **geübt** → **sicher**. Fortschrittsbalken pro Stufe und gesamt. Bei Überland, Autobahn und Nacht steht automatisch, wie oft schon gefahren wurde. (Die Themen sind eigene Formulierungen in Anlehnung an den gesetzlichen Ausbildungsplan, keine Kopie der urheberrechtlich geschützten BVF-Diagrammkarte. Eigene Themen und Strecken lassen sich später ergänzen.)
+- **📈 Ausbildungsstand pro Schüler:** Oben auf den Tab **„Ausbildung“** tippen und den Schüler auswählen (oder im Schüler-Fenster auf „Ausbildungsstand“). Rund 40 Themen in den Stufen **Grundstufe, Aufbaustufe, Leistungsstufe, Grundfahraufgaben, besondere Ausbildungsfahrten sowie Reife- und Teststufe**. Ein Thema antippen schaltet weiter: offen → **eingeführt** → **geübt** → **sicher**. Fortschrittsbalken pro Stufe und gesamt. Bei Überland, Autobahn und Nacht steht automatisch, wie oft schon gefahren wurde. (Die Themen sind eigene Formulierungen in Anlehnung an den gesetzlichen Ausbildungsplan, keine Kopie der urheberrechtlich geschützten BVF-Diagrammkarte.)
+- **🗺️ Prüfungsstrecken & eigene Themen:** Jeder Fahrlehrer pflegt seine eigene Liste (hinzufügen, umbenennen, mit × löschen). Andere Fahrlehrer sehen sie nicht. Die eigenen Schüler sehen sie in ihrem Ausbildungsstand.
 - **Schüler direkt eintragen:** In einem freien Termin einen Schüler auswählen, z. B. nach telefonischer Absprache. Die Fahrstunde ist dann sofort bestätigt.
 - **Sonderfahrten:** Beim Abhaken die Art wählen (Übungsfahrt, 🌳 Überland, 🛣️ Autobahn, 🌙 Nacht). Die Zahlen erscheinen pro Schüler in der Übersicht.
 - **Schülerdaten bearbeiten** (Name, Klasse, Sehhilfe, Umschreiber, Handynummer).
@@ -45,9 +49,11 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - **Höchstzahl Termine** pro Schüler festlegen (Einstellungen, z. B. 2 oder 3; 0 = unbegrenzt). Gezählt werden **Termine**, nicht Fahrstunden.
 - **WhatsApp-Benachrichtigung:** Nach Anbieten, Bestätigen, Ablehnen, Absagen oder Eintragen erscheint ein Knopf mit fertigem Nachrichtentext und Link zur App. Ein Tippen öffnet WhatsApp, dann nur noch auf Senden drücken. (Vollautomatischer Versand wäre nur über die kostenpflichtige WhatsApp Business Platform möglich.)
 - Rote Zahlen an den Tabs zeigen offene Anfragen, neue Anmeldungen und neue Absagen.
+- **✅ Tab „Kontrolle“:** Alle abgehakten Fahrstunden (und kostenpflichtigen Fehlstunden) eines Monats, nach Kalenderwochen und Tagen, mit Name, Datum, Uhrzeit, Minuten und Art. Ein **Haken pro Fahrstunde** markiert, was schon ins Fahrschulsystem übertragen ist („Ganze Woche übertragen“ geht auch). Monat als Excel-Liste oder zum Drucken.
+- **Fahrstunden-Zählung:** 1 Fahrstunde = 45 Minuten. 90 gefahrene Minuten = 2 Fahrstunden.
 
 **Fahrschüler**
-- Über den Link des eigenen Fahrlehrers registrieren (der Fahrlehrer steht dann schon fest) mit Vor- und Nachname, Führerscheinklasse (B, B197 oder B Automatik), Sehhilfe ja/nein, Umschreiber ja/nein, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
+- Über den gemeinsamen Link registrieren und dabei den eigenen Fahrlehrer auswählen, mit Vor- und Nachname, Führerscheinklasse (B, B197 oder B Automatik), Sehhilfe ja/nein, Umschreiber ja/nein, E-Mail und Passwort. Danach erscheint „warte auf Freischaltung“, bis der Fahrlehrer zustimmt.
 - Der Wochenkalender zeigt **freie** Termine, die **eigenen** Termine und Termine, die jemand anderes **angefragt** hat, die aber **noch nicht bestätigt** sind (ohne Namen). So lohnt es sich, wieder reinzuschauen. Bestätigte Fahrstunden anderer sind unsichtbar.
 - Freien Termin anfragen, mit einer kurzen Nachricht (max. 300 Zeichen). Ein Hinweis erklärt: Nach der Bestätigung ist die Fahrstunde verbindlich, und eine Absage nach dem Vortag 18:00 Uhr ist eine kostenpflichtige Fehlstunde.
 - Eine bestätigte Fahrstunde mit **„Fahrstunde absagen“** absagen. Dafür muss der Schüler einen kurzen Grund schreiben und einen Haken setzen. Nach der Frist erscheint eine deutliche Warnung, und die Absage wird automatisch als Fehlstunde vermerkt.
@@ -153,13 +159,13 @@ Die App ist für **Handy und Tablet** gebaut und in Hoch- und Querformat geprüf
 - Fenster öffnen sich auf dem Handy als Blatt von unten, über die volle Breite und scrollbar.
 - Notch und abgerundete Ecken werden berücksichtigt.
 
-**Als App auf den Startbildschirm:**
+**Als App auf den Startbildschirm** (in der App gibt es dazu den Link „📲 Als App installieren“; funktioniert erst unter der echten `https://`-Adresse, nicht mit `localhost`):
 - **iPhone (Safari):** Teilen-Knopf antippen, dann **„Zum Home-Bildschirm“** wählen.
 - **Android (Chrome):** Menü ⋮ antippen, dann **„App installieren“** bzw. **„Zum Startbildschirm hinzufügen“**.
 
 Die App öffnet sich dann ohne Browser-Leiste, mit eigenem Symbol und dem Namen „Easy Fahrstunden“.
 
-**Nach einem Update:** In `index.html` stehen hinter den Dateien Versionsnummern (`?v=2026-10-31`). Bei jeder Änderung das Datum hochsetzen. Dann laden alle Handys sicher die neue Version.
+**Nach einem Update:** In `index.html` stehen hinter den Dateien Versionsnummern (`?v=2026-10-31t`). Bei jeder Änderung hochsetzen, ebenso `CACHE` in `sw.js`. Dann laden alle Handys sicher die neue Version.
 
 ---
 
@@ -185,7 +191,7 @@ Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, *
 **Wo liegen die Daten?** Alle laufenden Daten (Schüler, Termine, Fahrstunden) liegen in **Supabase**, auf einem Server in Frankfurt (Region eu-central-1).
 
 **Sichern per Knopfdruck:** Unter **Einstellungen → 💾 Datensicherung**:
-- **„Komplette Sicherung herunterladen“** lädt eine Datei `Sicherung_Easy_Fahrstundenplaner_JJJJ-MM-TT.json` mit **allen deinen Daten** herunter: Schüler, Termine, Buchungen, Fahrzeiten, Notizen und Einstellungen.
+- **„Komplette Sicherung herunterladen“** lädt eine Datei `Sicherung_Easy_Fahrstundenplaner_JJJJ-MM-TT.json` mit **allen deinen Daten** herunter: Schüler, Termine, Buchungen, Fahrzeiten, Notizen, Einstellungen, Ausbildungsstand, Prüfungen, gesperrte Tage und eigene Strecken.
 - **„Alle Fahrstunden als Excel-Liste“** lädt eine Datei `Alle_Fahrstunden_JJJJ-MM-TT.csv` zum Anschauen und Abrechnen herunter.
 - Die Dateien landen auf **dem Gerät, auf dem du den Knopf drückst**: am Mac im Ordner „Downloads“, am iPhone in der App „Dateien“. Am besten zusätzlich in iCloud, Google Drive oder auf einen USB-Stick kopieren.
 - Ist die letzte Sicherung auf diesem Gerät **älter als 30 Tage**, erscheint ein rotes **„!“** am Tab „Einstellungen“.
@@ -215,8 +221,9 @@ Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, *
 | `app.js` | Die ganze App-Logik (Kalender, Buchen, Bestätigen …) |
 | `style.css` | Aussehen (immer helles Layout, auch auf dem Handy) |
 | `manifest.webmanifest`, `icons/` | App-Symbol und Einstellungen für „Zum Startbildschirm hinzufügen“ |
+| `sw.js` | Service Worker: macht die App installierbar und startet sie auch bei schlechtem Netz (Daten werden nie zwischengespeichert) |
 | `logo.svg` | Logo für Kopfzeile und Browser-Tab (kann durch ein eigenes ersetzt werden) |
-| `legal.js` | Impressum, Datenschutzerklärung, Nutzungsbedingungen – oben Anschrift/E-Mail eintragen |
+| `legal.js` | Impressum, Datenschutzerklärung, Nutzungsbedingungen – oben stehen Anschrift und E-Mail |
 | `LICENSE` | Urheberrecht: © Kürsat Cinar, alle Rechte vorbehalten |
 | `config.js` | Verbindung zu Supabase (die zwei Werte aus Schritt 4) |
 | `supabase/schema.sql` | Datenbank-Tabellen und Zugriffsregeln |
@@ -225,6 +232,6 @@ Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, *
 - Nicht freigeschaltete oder gesperrte Personen sehen **gar nichts**: keine Termine und keine Einstellungen. Das prüft die Datenbank selbst, nicht nur die Oberfläche.
 - Schüler sehen nur **eigene** Anfragen und Nachrichten. Belegte Termine anderer bekommen sie gar nicht erst geliefert.
 - Nur Fahrlehrer können Termine anlegen, bestätigen, ablehnen und Fahrzeiten eintragen, und zwar **nur für die eigenen Schüler und Termine**.
-- **Getrennte Bereiche:** Ein Fahrlehrer sieht niemals Schüler, Termine, Buchungen oder Einstellungen eines anderen Fahrlehrers, auch der Haupt-Admin nicht. Das ist in der Datenbank festgelegt und mit 36 automatischen Tests geprüft.
+- **Getrennte Bereiche:** Ein Fahrlehrer sieht niemals Schüler, Termine, Buchungen oder Einstellungen eines anderen Fahrlehrers, auch der Haupt-Admin nicht. Das ist in der Datenbank festgelegt und mit über 140 automatischen Tests geprüft (auch Prüfungen, Treffpunkte, Urlaub, Strecken und Kontroll-Haken).
 - Wird ein Fahrlehrer gesperrt, sehen er und alle seine Schüler nichts mehr, bis er wieder freigeschaltet wird.
 - Ein Termin kann nie doppelt angefragt werden. Das prüft die Datenbank selbst.
