@@ -704,6 +704,18 @@ function installHint() {
   return el("p", { class: "small", style: "margin-top:12px" },
     el("a", { href: "#", onclick: (e) => { e.preventDefault(); openInstallHelp(); } }, "📲 Als App auf dem Handy installieren"));
 }
+// Startbildschirm: einmal pro App-Start ~3 Sek. zeigen, dann sanft ausblenden (Antippen überspringt)
+(function splash() {
+  const sp = document.getElementById("splash");
+  if (!sp) return;
+  if (document.documentElement.classList.contains("no-splash")) { sp.remove(); return; }
+  try { sessionStorage.setItem("fsp_splash", "1"); } catch { /* privater Modus */ }
+  const quick = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const close = () => { sp.classList.add("hide"); setTimeout(() => sp.remove(), 500); };
+  sp.addEventListener("click", close);
+  setTimeout(close, quick ? 800 : 3000);
+})();
+
 // Passwortfelder: Auge-Knopf zum Anzeigen/Verbergen – gilt automatisch für jedes Passwortfeld der App
 function addPasswordEye(input) {
   if (input.dataset.eye) return;

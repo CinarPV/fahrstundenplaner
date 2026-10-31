@@ -15,9 +15,28 @@
   <meta name="format-detection" content="telephone=no">
   <meta name="theme-color" content="#05679A">
   <meta name="color-scheme" content="light">
-  <link rel="stylesheet" href="style.css?v=2026-11-01g">
+  <link rel="stylesheet" href="style.css?v=2026-11-01h">
+  <!-- Startbildschirm nur einmal pro App-Start zeigen (nicht bei jedem Neuladen) -->
+  <script>try { if (sessionStorage.getItem("fsp_splash")) document.documentElement.classList.add("no-splash"); } catch (e) {}</script>
 </head>
 <body>
+  <!-- Startbildschirm: Ampel-„E“ schaltet Rot → Gelb → Grün, dann geht's los -->
+  <div id="splash" aria-hidden="true">
+    <div class="splash-inner">
+      <svg class="splash-logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+        <rect x="2" y="2" width="60" height="60" rx="15" fill="#fff"/>
+        <rect class="sp-bar sp-v" x="14" y="10" width="8" height="44" rx="4" fill="#0b3d5c"/>
+        <rect class="sp-bar sp-a1" x="14" y="13.5" width="22" height="7" rx="3.5" fill="#0b3d5c"/>
+        <rect class="sp-bar sp-a2" x="14" y="28.5" width="22" height="7" rx="3.5" fill="#0b3d5c"/>
+        <rect class="sp-bar sp-a3" x="14" y="43.5" width="22" height="7" rx="3.5" fill="#0b3d5c"/>
+        <circle class="sp-light sp-red" cx="40" cy="17" r="7" fill="#e5484d" stroke="#fff" stroke-width="2.5"/>
+        <circle class="sp-light sp-yellow" cx="40" cy="32" r="7" fill="#f5a623" stroke="#fff" stroke-width="2.5"/>
+        <circle class="sp-light sp-green" cx="40" cy="47" r="7" fill="#2fb36d" stroke="#fff" stroke-width="2.5"/>
+      </svg>
+      <div class="splash-title"><span class="easy">Easy</span>Fahrstundenplaner</div>
+      <div class="splash-sub">Fahrstunden einfach planen</div>
+    </div>
+  </div>
   <header class="topbar">
     <div class="brand" role="link" title="Zur Startseite (Kalender)"><img src="logo.svg?v=ampel" alt=""><span><b class="easy">Easy</b> Fahrstundenplaner<small>Fahrstunden einfach planen</small></span></div>
     <div id="userbox" class="userbox"></div>
@@ -37,8 +56,8 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <script src="config.js?v=2026-11-01g"></script>
-  <script src="legal.js?v=2026-11-01g"></script>
-  <script src="app.js?v=2026-11-01g"></script>
+  <script src="config.js?v=2026-11-01h"></script>
+  <script src="legal.js?v=2026-11-01h"></script>
+  <script src="app.js?v=2026-11-01h"></script>
 </body>
 </html>
