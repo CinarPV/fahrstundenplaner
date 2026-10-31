@@ -631,7 +631,49 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
           .then(({ error }) => error ? fail(error) : toast("E-Mail zum Zurücksetzen wurde verschickt."));
       },
     }, "Passwort vergessen?")) : null,
+    installHint(),
   ));
+}
+
+/* ---------------- Als App installieren (iPhone/Android) ---------------- */
+
+let installPrompt = null;  // Android/Chrome: Installations-Dialog, den wir auf Knopfdruck zeigen
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; });
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
+const isInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function openInstallHelp() {
+  if (installPrompt) {
+    installPrompt.prompt();
+    installPrompt.userChoice.finally(() => (installPrompt = null));
+    return;
+  }
+  openModal("📲 Als App installieren",
+    el("h3", {}, "iPhone / iPad (Safari)"),
+    el("ol", {},
+      el("li", {}, "Diese Seite in ", el("b", {}, "Safari"), " öffnen."),
+      el("li", {}, "Unten auf ", el("b", {}, "Teilen"), " tippen (Quadrat mit Pfeil nach oben)."),
+      el("li", {}, el("b", {}, "„Zum Home-Bildschirm“"), " wählen und auf ", el("b", {}, "„Hinzufügen“"), " tippen.")),
+    el("h3", {}, "Android (Chrome)"),
+    el("ol", {},
+      el("li", {}, "Diese Seite in ", el("b", {}, "Chrome"), " öffnen."),
+      el("li", {}, "Oben rechts auf ", el("b", {}, "⋮"), " tippen."),
+      el("li", {}, el("b", {}, "„App installieren“"), " bzw. ", el("b", {}, "„Zum Startbildschirm hinzufügen“"), " wählen.")),
+    el("p", { class: "muted small" }, "Danach startet „Easy Fahrstunden“ wie eine normale App vom Startbildschirm – ohne Adresszeile. Du bleibst angemeldet."));
+}
+function installHint() {
+  if (isInstalled()) return null;
+  return el("p", { class: "small", style: "margin-top:12px" },
+    el("a", { href: "#", onclick: (e) => { e.preventDefault(); openInstallHelp(); } }, "📲 Als App auf dem Handy installieren"));
+}
+function installCard() {
+  if (isInstalled()) return null;
+  return el("div", { class: "card" },
+    el("h3", {}, "📲 App aufs Handy"),
+    el("p", { class: "muted small" }, "Einmal installieren – dann startet die App direkt vom Startbildschirm, wie eine normale App."),
+    el("div", { class: "actions" }, el("button", { class: "btn ghost", onclick: openInstallHelp }, isIOS() ? "So geht's auf dem iPhone" : "Als App installieren")));
 }
 
 function renderNewPassword() {
@@ -655,7 +697,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["exams", "🎓 Prüfungen"], ["control", "Kontrolle"], ["settings", "Einstellungen"]]
+    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -680,7 +722,6 @@ async function render() {
     else if (state.tab === "mine") view = await studentMine();
     else if (state.tab === "profile") view = studentProfile();
     else if (state.tab === "training") view = isAdmin() ? await adminTraining() : await studentTraining();
-    else if (state.tab === "exams") view = await adminExams();
     else if (state.tab === "control") view = await adminControl();
     content.replaceChildren(view);
   } catch (e) {
@@ -699,11 +740,10 @@ async function updateStudentNews(tabbar) {
 }
 
 async function updateRequestCount(tabbar) {
-  const [req, pend, canc, exOpen] = await Promise.all([
+  const [req, pend, canc] = await Promise.all([
     sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
     sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending"),
     sb.from("bookings").select("id", { count: "exact", head: true }).in("status", ["cancelled_student", "declined"]).gt("decided_at", getSeen("requests")),
-    sb.from("exams").select("id", { count: "exact", head: true }).is("result", null).lt("exam_at", new Date().toISOString()),
   ]);
   const badge = (tab, count) => {
     const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
@@ -712,7 +752,6 @@ async function updateRequestCount(tabbar) {
   badge("requests", (req.count || 0) + (state.tab === "requests" ? 0 : canc.count || 0));
   if (state.tab === "requests") markSeen("requests");
   badge("students", pend.count);
-  badge("exams", exOpen.count);  // Prüfung vorbei, Ergebnis fehlt
   // Erinnerung: Sicherung älter als 30 Tage
   const st = tabbar.querySelector('[data-tab="settings"]');
   if (st && backupOverdue()) st.append(el("span", { class: "count", title: "Datensicherung fällig" }, "!"));
@@ -1696,8 +1735,8 @@ async function ownerTeachers() {
     if (!v.first || !v.last) throw new Error("Bitte Vor- und Nachnamen angeben");
     if (!v.email.includes("@")) throw new Error("Bitte eine gültige E-Mail angeben");
     if (v.pw.length < 6) throw new Error("Passwort: mindestens 6 Zeichen");
-    if (v.slug.length < 2) throw new Error("Link-Kürzel: mindestens 2 Zeichen");
-    if (teachers.some((t) => t.slug === v.slug)) throw new Error("Dieses Link-Kürzel ist schon vergeben");
+    if (v.slug.length < 2) throw new Error("Kürzel: mindestens 2 Zeichen");
+    if (teachers.some((t) => t.slug === v.slug)) throw new Error("Dieses Kürzel ist schon vergeben");
     // Konto mit einem zweiten, unabhängigen Zugang anlegen – deine eigene Anmeldung bleibt bestehen
     const tmp = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY,
       { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "fsp-tmp" } });
@@ -1710,7 +1749,6 @@ async function ownerTeachers() {
   });
 
   const row = (t) => {
-    const link = appLink() + "?l=" + t.slug;
     const toggle = el("button", { class: "btn small " + (t.status === "active" ? "danger" : "ok") }, t.status === "active" ? "Sperren" : "Freischalten");
     toggle.onclick = () => busy(toggle, async () => {
       if (t.status === "active" && !confirm(`${fullName(t)} sperren? Er und alle seine Schüler sehen dann nichts mehr, bis du ihn wieder freischaltest.`)) return;
@@ -1735,9 +1773,7 @@ async function ownerTeachers() {
           t.is_owner ? el("span", { class: "badge admin" }, "Haupt-Admin") : null,
           t.status !== "active" ? el("span", { class: "badge rejected" }, "Gesperrt") : null,
           el("div", { class: "small muted" }, t.email || "")),
-        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, pwBtn, toggle, del)),
-      el("div", { class: "done-row small" }, el("code", {}, link),
-        el("button", { class: "btn small ghost", onclick: () => copyText(link, "Link kopiert.") }, "Kopieren")));
+        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, pwBtn, toggle, del)));
   };
 
   return el("div", {},
@@ -1751,12 +1787,14 @@ async function ownerTeachers() {
       el("div", { class: "row" },
         el("div", {}, el("label", {}, "Passwort (mind. 6 Zeichen)"),
           el("div", { class: "linkbox" }, pw, el("button", { type: "button", class: "btn ghost", title: "Neues Passwort erzeugen", onclick: () => (pw.value = randomPassword()) }, "🎲"))),
-        el("div", {}, el("label", {}, "Link-Kürzel"), slug)),
+        el("div", {}, el("label", {}, "Kürzel (intern)"), slug)),
       linkPreview,
       el("div", { class: "actions" }, btn)),
     el("div", { class: "card" },
       el("h2", {}, `Fahrlehrer (${teachers.length})`),
-      teachers.map(row)),
+      el("p", { class: "muted small" }, "Sperren: Der Fahrlehrer und seine Schüler sehen nichts mehr, bis du ihn wieder freischaltest – die Daten bleiben erhalten. Löschen: Fahrlehrer mit allen Schülern und Terminen endgültig entfernen."),
+      teachers.map(row),
+      el("p", { class: "muted small" }, "Alle nutzen denselben Link: ", el("code", {}, appLink()))),
   );
 }
 
@@ -2022,6 +2060,7 @@ function adminSettings() {
       el("p", { class: "muted small" }, "Ein Link für alle Fahrlehrer und Schüler. Bei der Registrierung wählen Schüler ihren Fahrlehrer aus – neue Fahrlehrer erscheinen dort automatisch. Den Link findest du auch jederzeit oben über 🔗."),
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
+    installCard(),
     passwordCard(),
   );
 }
@@ -2334,48 +2373,10 @@ async function examCard(student, editable) {
   return box;
 }
 
-// Prüfungen eines Schülers als Fenster (aus Kalender, Prüfungs-Tab oder Schülerliste)
+// Prüfungen eines Schülers als Fenster (aus dem Kalender)
 async function openExamModal(student) {
   state.renderOnClose = true;
   openModal("🎓 Prüfungen – " + fullName(student), await examCard(student, true));
-}
-
-// Tab „Prüfungen“: alles auf einen Blick – Ergebnis fehlt, anstehend, zuletzt
-async function adminExams() {
-  const [{ data: exams, error }, { data: students, error: e2 }] = await Promise.all([
-    sb.from("exams").select("id,kind,exam_at,result,note,student_id,profiles(id,first_name,last_name,license_class)").order("exam_at"),
-    sb.from("profiles").select("id,first_name,last_name,license_class").eq("role", "student").in("status", ["active", "blocked"]).order("last_name"),
-  ]);
-  if (error) throw error;
-  if (e2) throw e2;
-  const now = Date.now();
-  const open = exams.filter((e) => !e.result && new Date(e.exam_at).getTime() <= now);
-  const next = exams.filter((e) => new Date(e.exam_at).getTime() > now);
-  const done = exams.filter((e) => e.result).reverse().slice(0, 10);
-  const row = (e) => el("button", { class: "next-row exam-row", onclick: () => openExamModal(e.profiles || { id: e.student_id }) },
-    new Date(e.exam_at).getTime() > now ? countdownEl(e.exam_at, 0) : el("span", { class: "countdown" + (e.result === "passed" ? " ok" : "") },
-      e.result === "passed" ? "🎉 Bestanden" : e.result === "failed" ? "✗ Nicht bestanden" : "Ergebnis?"),
-    el("span", { class: "next-when" }, `${fmtDay(e.exam_at)} ${fmtTime(e.exam_at)} · ${EXAM_KIND[e.kind]}`),
-    el("span", { class: "next-who" }, fullName(e.profiles)));
-
-  const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
-    students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
-  const add = el("button", { class: "btn" }, "➕ Prüfungstermin eintragen");
-  add.onclick = () => {
-    const st = students.find((x) => x.id === who.value);
-    if (!st) return toast("Bitte zuerst einen Schüler wählen.", true);
-    openExamModal(st);
-  };
-  return el("div", {},
-    el("div", { class: "card exam-card" },
-      el("h2", {}, "🎓 Prüfungen"),
-      el("p", { class: "muted small" }, "Prüfungstermin eintragen, nach der Prüfung „bestanden“ oder „nicht bestanden“ wählen. Bei „nicht bestanden“ trägst du gleich den nächsten Termin ein."),
-      el("div", { class: "done-row" }, el("span", { style: "flex:1;min-width:200px" }, who), add)),
-    open.length ? el("div", { class: "card", style: "border-color:var(--req-bd)" },
-      el("h3", {}, `⚠️ Ergebnis eintragen (${open.length})`), open.map(row)) : null,
-    el("div", { class: "card" }, el("h3", {}, "Anstehende Prüfungen"),
-      next.length ? next.map(row) : el("p", { class: "muted small" }, "Keine anstehenden Prüfungen.")),
-    done.length ? el("div", { class: "card" }, el("h3", {}, "Letzte Ergebnisse"), done.map(row)) : null);
 }
 
 /* ---------------- Fahrlehrer: Ausbildungsstand (Schüler wählen → abhaken) ---------------- */
@@ -2436,7 +2437,7 @@ function studentProfile() {
     el("h2", {}, "Mein Profil"),
     el("p", { class: "muted small" }, state.profile.email || ""),
     f.node, el("div", { class: "actions" }, save),
-    el("hr"), passwordCard());
+    el("hr"), passwordCard(), installHint());
 }
 
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */

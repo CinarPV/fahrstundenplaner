@@ -401,8 +401,6 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 .exam-banner .exam-icon { font-size: 32px; line-height: 1; }
 .exam-banner .countdown { margin-left: auto; background: var(--exam-bd); color: #3d2600; }
 .exam-btn { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
-.tab[data-tab="exams"] { border-color: var(--exam-bd); }
-.tab[data-tab="exams"].active { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
 .countdown.ok { background: var(--teal); color: #fff; }
 
 /* Kontrolle: Liste zum Übertragen ins Fahrschulsystem */
