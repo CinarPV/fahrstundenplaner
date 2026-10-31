@@ -418,3 +418,13 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
   .control-row .c-time { grid-column: 2; font-weight: 600; }
   .control-row .c-name, .control-row .c-what { grid-column: 2; text-align: left; }
 }
+
+/* Urlaub / gesperrte Tage */
+.slot.off { background: repeating-linear-gradient(135deg, #f1f3f5, #f1f3f5 6px, #e6e9ed 6px, #e6e9ed 12px); color: #444; border: 1px dashed #9aa4b2; }
+.off-banner { border-left: 4px solid #9aa4b2; }
+
+/* Eigene Prüfungsstrecken bearbeiten */
+.own-topic { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.own-topic input { flex: 1; }
+.own-topic .unpin { border: 1px solid var(--border); background: #fff; width: 44px; min-height: 44px; border-radius: 8px; font-size: 20px; color: #b42318; cursor: pointer; }
+.stage.own .stage-head h4 { color: var(--brand); }

@@ -91,6 +91,18 @@ alter table public.settings add column if not exists time_presets   text check (
 -- Kontrolle: wann die Fahrstunde ins Fahrschulsystem übertragen wurde (NULL = noch nicht)
 alter table public.bookings add column if not exists transferred_at timestamptz;
 
+-- Urlaub / freie Tage eines Fahrlehrers: an diesen Tagen kann nichts angefragt werden
+create table if not exists public.time_off (
+  id          uuid primary key default gen_random_uuid(),
+  teacher_id  uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  from_day    date not null,
+  to_day      date not null,
+  note        text check (char_length(note) <= 100),
+  created_at  timestamptz not null default now(),
+  check (to_day >= from_day)
+);
+create index if not exists time_off_teacher_idx on public.time_off (teacher_id, from_day);
+
 -- Prüfungen (Theorie/Praxis): Termin + Ergebnis; bei „nicht bestanden“ folgt ein neuer Termin
 create table if not exists public.exams (
   id          uuid primary key default gen_random_uuid(),
@@ -210,6 +222,13 @@ $$;
 
 -- Neues Profil automatisch anlegen, wenn sich jemand registriert.
 -- Schüler werden über das Link-Kürzel (Metadaten "teacher") ihrem Fahrlehrer zugeordnet.
+-- Liegt der Zeitpunkt an einem gesperrten Tag (Urlaub/frei) des Fahrlehrers? (deutsche Zeit)
+create or replace function public.is_time_off(p_teacher uuid, p_at timestamptz)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from time_off t where t.teacher_id = p_teacher
+                 and (p_at at time zone 'Europe/Berlin')::date between t.from_day and t.to_day);
+$$;
+
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare v_teacher uuid;
@@ -432,6 +451,28 @@ begin
     end;
   end loop;
 
+  -- Eigene Prüfungsstrecken/Themen (vor dem Ausbildungsstand, der darauf verweist)
+  for r in select * from jsonb_array_elements(coalesce(p_data->'topics', '[]'::jsonb)) loop
+    begin
+      insert into training_topics (id, teacher_id, stage, sort, title)
+      values (r->>'id', me, coalesce(r->>'stage', 'eigene'), coalesce((r->>'sort')::int, 0), r->>'title')
+      on conflict (id) do update set title = excluded.title, sort = excluded.sort
+        where training_topics.teacher_id = me;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end loop;
+
+  -- Urlaub / freie Tage
+  for r in select * from jsonb_array_elements(coalesce(p_data->'time_off', '[]'::jsonb)) loop
+    begin
+      insert into time_off (id, teacher_id, from_day, to_day, note)
+      values ((r->>'id')::uuid, me, (r->>'from_day')::date, (r->>'to_day')::date, r->>'note')
+      on conflict (id) do update set from_day = excluded.from_day, to_day = excluded.to_day, note = excluded.note
+        where time_off.teacher_id = me;
+    exception when others then n_skipped := n_skipped + 1;
+    end;
+  end loop;
+
   -- Ausbildungsstand
   for r in select * from jsonb_array_elements(coalesce(p_data->'progress', '[]'::jsonb)) loop
     begin
@@ -483,6 +524,7 @@ language sql stable security definer set search_path = public as $$
   where s.starts_at >= p_from and s.starts_at < p_to
     and s.teacher_id = my_teacher_id()
     and (b.id is null or b.status = 'requested' or b.student_id = auth.uid())
+    and (b.id is not null or not is_time_off(s.teacher_id, s.starts_at))  -- freie Termine an Urlaubstagen ausblenden
     and is_active()
   order by s.starts_at;
 $$;
@@ -496,6 +538,7 @@ begin
   select starts_at into v_start from slots where id = p_slot and teacher_id = my_teacher_id();
   if v_start is null then raise exception 'Termin nicht gefunden'; end if;
   if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
+  if is_time_off(my_teacher_id(), v_start) then raise exception 'An diesem Tag ist dein Fahrlehrer nicht verfügbar (Urlaub/frei).'; end if;
   -- Obergrenze: eigene Höchstzahl des Schülers, sonst Standard seines Fahrlehrers
   select coalesce(p.max_open, st.max_open) into v_max
   from profiles p join settings st on st.teacher_id = p.teacher_id where p.id = auth.uid();
@@ -592,6 +635,7 @@ alter table public.bookings enable row level security;
 alter table public.training_topics   enable row level security;
 alter table public.training_progress enable row level security;
 alter table public.exams             enable row level security;
+alter table public.time_off          enable row level security;
 
 -- Profile: man sieht sich selbst; Fahrlehrer sehen ihre eigenen Schüler; Haupt-Admin sieht die Fahrlehrer
 drop policy if exists profiles_select on public.profiles;
@@ -661,6 +705,15 @@ create policy exams_teacher on public.exams for all
   using (public.is_teacher() and public.student_teacher(student_id) = auth.uid())
   with check (public.is_teacher() and public.student_teacher(student_id) = auth.uid());
 
+-- Urlaub/freie Tage: Schüler sehen die ihres Fahrlehrers; nur der Fahrlehrer selbst trägt ein
+drop policy if exists time_off_select on public.time_off;
+create policy time_off_select on public.time_off for select
+  using (teacher_id = public.my_teacher_id() and public.is_active());
+drop policy if exists time_off_teacher on public.time_off;
+create policy time_off_teacher on public.time_off for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+
 -- Rechte für Funktionen
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
 grant execute on function public.book_slot(uuid, text) to authenticated;
@@ -676,6 +729,7 @@ grant execute on function public.my_teacher_id() to authenticated;
 grant execute on function public.slot_teacher(uuid) to authenticated;
 grant execute on function public.student_teacher(uuid) to authenticated;
 grant execute on function public.has_own_booking(uuid) to authenticated;
+grant execute on function public.is_time_off(uuid, timestamptz) to authenticated;
 grant execute on function public.delete_student(uuid) to authenticated;
 grant execute on function public.create_teacher(uuid, text, text, text) to authenticated;
 grant execute on function public.set_teacher_status(uuid, text) to authenticated;

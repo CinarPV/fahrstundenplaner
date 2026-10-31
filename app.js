@@ -800,6 +800,82 @@ function legend(items) {
   return el("div", { class: "legend" }, items.map(([cls, text]) => el("span", {}, el("i", { class: "slot " + cls, style: "padding:0;margin:0" }), text)));
 }
 
+/* ---------------- Urlaub / freie Tage ---------------- */
+
+// Gesperrte Zeiträume des (eigenen) Fahrlehrers – werden beim Laden des Kalenders gefüllt
+async function loadTimeOff() {
+  const { data } = await sb.from("time_off").select("id,from_day,to_day,note").order("from_day");
+  state.timeOff = data || [];
+  return state.timeOff;
+}
+const offOn = (day) => { const d = dateInput(day); return (state.timeOff || []).find((t) => d >= t.from_day && d <= t.to_day); };
+const fmtDayStr = (s) => new Date(s + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
+const offRange = (t) => (t.from_day === t.to_day ? fmtDayStr(t.from_day) : `${fmtDayStr(t.from_day)} – ${fmtDayStr(t.to_day)}`);
+// Kalender-Einträge „Urlaub“ für jeden gesperrten Tag der angezeigten Woche
+function offExtras(onClick) {
+  const list = [];
+  for (let i = 0; i < 7; i++) {
+    const day = addDays(state.weekStart, i), t = offOn(day);
+    if (t) list.push({ at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0).toISOString(),
+      node: el(onClick ? "button" : "div", { class: "slot off", onclick: onClick ? (e) => { e.stopPropagation(); onClick(); } : null },
+        el("b", {}, "🏖️ " + (t.note || "Frei")), onClick ? "Tag gesperrt" : "Fahrlehrer nicht verfügbar") });
+  }
+  return list;
+}
+
+async function openTimeOff() {
+  state.renderOnClose = true;
+  const list = await loadTimeOff();
+  const from = el("input", { type: "date", value: dateInput(new Date()) });
+  const to = el("input", { type: "date", value: dateInput(new Date()) });
+  from.addEventListener("change", () => { if (to.value < from.value) to.value = from.value; });
+  const note = el("input", { maxlength: 100, value: "Urlaub", placeholder: "z. B. Urlaub, Fortbildung, Feiertag" });
+  const chips = el("div", { class: "chips" }, ["Urlaub", "Frei", "Krank", "Fortbildung", "Feiertag"].map((t) =>
+    el("button", { type: "button", class: "btn small ghost", onclick: () => (note.value = t) }, t)));
+  const save = el("button", { class: "btn" }, "Tage sperren");
+  save.onclick = () => busy(save, async () => {
+    if (!from.value || !to.value || to.value < from.value) throw new Error("Bitte gültigen Zeitraum wählen (bis ≥ von)");
+    const { error } = await sb.from("time_off").insert({ from_day: from.value, to_day: to.value, note: note.value.trim() || null });
+    if (error) throw error;
+    // Termine im gesperrten Zeitraum prüfen: freie löschen (nach Rückfrage), gebuchte nur melden
+    const start = fromInputs(from.value, "00:00"), end = addDays(fromInputs(to.value, "00:00"), 1);
+    const { data: slots } = await sb.from("slots").select("id,starts_at,bookings(status)")
+      .gte("starts_at", start.toISOString()).lt("starts_at", end.toISOString());
+    const isBooked = (x) => (x.bookings || []).some((b) => ["requested", "confirmed", "offered"].includes(b.status));
+    const free = (slots || []).filter((x) => !isBooked(x)), booked = (slots || []).filter(isBooked);
+    let msg = "Zeitraum gesperrt.";
+    if (free.length && confirm(`In diesem Zeitraum gibt es ${free.length} freie Termin${free.length === 1 ? "" : "e"}. Jetzt löschen?`)) {
+      const { error: e2 } = await sb.from("slots").delete().in("id", free.map((x) => x.id));
+      if (e2) throw e2;
+      msg += ` ${free.length} freie Termin${free.length === 1 ? "" : "e"} gelöscht.`;
+    }
+    if (booked.length) alert(`Achtung: In diesem Zeitraum gibt es ${booked.length} angefragte/gebuchte Fahrstunde${booked.length === 1 ? "" : "n"}. Bitte im Kalender selbst absagen oder verschieben.`);
+    toast(msg);
+    openTimeOff();
+  });
+  const row = (t) => el("div", { class: "list-item" },
+    el("div", { class: "head" },
+      el("div", {}, el("b", {}, "🏖️ " + (t.note || "Frei")), el("div", {}, offRange(t))),
+      el("button", { class: "btn small danger", "aria-label": "Sperre aufheben", onclick: async () => {
+        if (!confirm("Diese Sperre aufheben? Die Tage sind dann wieder buchbar.")) return;
+        const { error } = await sb.from("time_off").delete().eq("id", t.id);
+        if (error) return fail(error);
+        toast("Sperre aufgehoben.");
+        openTimeOff();
+      } }, "× Aufheben")));
+  const today = dateInput(new Date());
+  const current = list.filter((t) => t.to_day >= today), past = list.filter((t) => t.to_day < today);
+  openModal("🏖️ Urlaub & freie Tage",
+    el("p", { class: "muted small" }, "An gesperrten Tagen können Schüler nichts anfragen, und beim Anlegen werden diese Tage übersprungen. Schüler sehen „Fahrlehrer nicht verfügbar“."),
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis einschließlich"), to)),
+    el("label", {}, "Grund (sehen auch die Schüler)"), note, chips,
+    el("div", { class: "actions" }, save),
+    el("hr"),
+    el("h3", {}, "Gesperrt"),
+    current.length ? current.map(row) : el("p", { class: "muted small" }, "Keine gesperrten Tage."),
+    past.length ? el("details", { class: "fold" }, el("summary", {}, `Vergangene (${past.length})`), past.map(row)) : null);
+}
+
 // extras: weitere Einträge im Kalender, z. B. Prüfungen – [{ at, node }]
 function weekGrid(slots, renderSlot, onAddDay, extras = []) {
   const today = new Date();
@@ -877,6 +953,7 @@ async function adminCalendar() {
     .select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
+  await loadTimeOff();
   const { data: weekExams } = await sb.from("exams").select("id,kind,exam_at,result,student_id,profiles(id,first_name,last_name)")
     .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at");
   const examExtras = (weekExams || []).map((e) => ({ at: e.exam_at,
@@ -902,14 +979,15 @@ async function adminCalendar() {
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       el("b", {}, fmtRange(s.starts_at, s.duration_min)), label,
       upcoming ? el("div", {}, countdownEl(s.starts_at, s.duration_min, "small")) : null);
-  }, (day) => openSlotForm(day), examExtras);
+  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras));
 
   return el("div", {},
     await nextLessonsCard(),
     el("div", { class: "actions", style: "margin:0 0 12px" },
       el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunden anlegen / freigeben")),
-    weekBar(slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null),
-    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"], ["exam", "🎓 Prüfung"]]),
+    weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
+      slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
+    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"], ["exam", "🎓 Prüfung"], ["off", "🏖️ gesperrt"]]),
     grid,
   );
 }
@@ -1017,7 +1095,9 @@ function newSlotForm(opts = {}) {
     pinTimes([extra.value]); times = uniq(times.concat(extra.value)); extra.value = ""; refresh();
   } }, "+ Uhrzeit anheften");
 
+  let skippedOff = 0;
   function build() {
+    skippedOff = 0;
     const start = fromInputs(date.value, "00:00");
     if (isNaN(start)) return [];
     const now = Date.now(), list = [];
@@ -1030,6 +1110,7 @@ function newSlotForm(opts = {}) {
     }
     for (let day = start; day <= end; day = addDays(day, 1)) {
       if (repeat.checked && !days.has(weekdayIndex(day))) continue;
+      if (offOn(day)) { skippedOff++; continue; }  // Urlaub/frei: überspringen
       for (const t of times) {
         const at = fromInputs(dateInput(day), t);
         if (at.getTime() > now) list.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
@@ -1056,8 +1137,9 @@ function newSlotForm(opts = {}) {
       ? el("span", {}, el("b", {}, `${list.length} Termin${list.length > 1 ? "e" : ""}`),
         repeat.checked
           ? ` · jeden ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
-          : ` · ${fmtDate(list[0].starts_at)} · ${times.map((t) => t + " Uhr").join(", ")}`)
-      : el("span", { class: "muted" }, times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen."));
+          : ` · ${fmtDate(list[0].starts_at)} · ${times.map((t) => t + " Uhr").join(", ")}`,
+        skippedOff ? ` · 🏖️ ${skippedOff} gesperrte${skippedOff === 1 ? "r Tag" : " Tage"} übersprungen` : "")
+      : el("span", { class: "muted" }, skippedOff ? "🏖️ Dieser Tag ist gesperrt (Urlaub/frei) – unter „Tage sperren“ änderbar." : times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen."));
   }
   [date, until].forEach((i) => i.addEventListener("input", refresh));
   date.addEventListener("input", () => { if (!repeat.checked) { days.clear(); days.add(weekdayIndex(fromInputs(date.value, "00:00"))); } });
@@ -1372,7 +1454,7 @@ function doneControls(slot, b, after, opts = {}) {
 const STAGES = [
   ["grund", "Grundstufe"], ["aufbau", "Aufbaustufe"], ["leistung", "Leistungsstufe"],
   ["grundfahr", "Grundfahraufgaben"], ["sonder", "Besondere Ausbildungsfahrten"],
-  ["reife", "Reife- und Teststufe"], ["eigene", "Eigene Themen & Strecken"],
+  ["reife", "Reife- und Teststufe"], ["eigene", "🗺️ Prüfungsstrecken & eigene Themen"],
 ];
 const LEVELS = ["offen", "eingeführt", "geübt", "sicher"];
 // Sonderfahrt-Thema ↔ Fahrt-Art beim Abhaken (zeigt, wie oft schon gefahren)
@@ -1439,11 +1521,14 @@ async function trainingView(student, editable, lessons) {
 
   const sections = STAGES.map(([stage, name]) => {
     const list = topics.filter((x) => x.stage === stage);
-    if (!list.length) return null;
+    const own = stage === "eigene" && editable;  // Fahrlehrer pflegt seine eigenen Strecken/Themen
+    if (!list.length && !own) return null;
     stageBars[stage] = el("div", { class: "bar small" });
-    return el("div", { class: "stage" },
+    return el("div", { class: "stage" + (stage === "eigene" ? " own" : "") },
       el("div", { class: "stage-head" }, el("h4", {}, name), stageBars[stage]),
-      list.map(row));
+      list.map(row),
+      own ? el("div", { class: "actions" }, el("button", { class: "btn small", onclick: openOwnTopics },
+        list.length ? "✏️ Strecken bearbeiten / hinzufügen" : "➕ Prüfungsstrecken eintragen")) : null);
   });
   updateBars();
   return el("div", { class: "training" },
@@ -1452,6 +1537,54 @@ async function trainingView(student, editable, lessons) {
       [1, 2, 3].map((n) => el("span", {}, el("span", { class: "lv" }, [1, 2, 3].map((k) => el("i", { class: k <= n ? "on l" + n : "" }))), " " + LEVELS[n])),
       editable ? el("span", {}, "· Thema antippen, um die Stufe zu ändern") : null),
     sections);
+}
+
+// Eigene Prüfungsstrecken/Themen des Fahrlehrers: hinzufügen, umbenennen, mit × löschen.
+// Jeder Fahrlehrer hat seine eigene Liste – andere sehen sie nicht.
+async function openOwnTopics() {
+  state.renderOnClose = true;
+  const { data, error } = await sb.from("training_topics").select("id,title,sort,stage,teacher_id")
+    .eq("teacher_id", state.profile.id).eq("stage", "eigene").order("sort");
+  if (error) return fail(error);
+  const list = (data || []).filter((t) => t.stage === "eigene" && t.teacher_id === state.profile.id);
+  const rename = (t, input) => async () => {
+    const v = input.value.trim();
+    if (!v || v === t.title) { input.value = t.title; return; }
+    const { error } = await sb.from("training_topics").update({ title: v }).eq("id", t.id);
+    if (error) return fail(error);
+    t.title = v;
+    toast("Gespeichert.");
+  };
+  const row = (t) => {
+    const input = el("input", { value: t.title, maxlength: 120, "aria-label": "Strecke umbenennen" });
+    input.addEventListener("change", rename(t, input));
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+    return el("div", { class: "own-topic" }, input,
+      el("button", { type: "button", class: "unpin", title: "Löschen", "aria-label": `${t.title} löschen`, onclick: async () => {
+        if (!confirm(`„${t.title}“ löschen? Die Häkchen bei allen Schülern für diese Strecke werden mit gelöscht.`)) return;
+        const { error } = await sb.from("training_topics").delete().eq("id", t.id);
+        if (error) return fail(error);
+        toast("Gelöscht.");
+        openOwnTopics();
+      } }, "×"));
+  };
+  const add = el("textarea", { rows: 3, maxlength: 2000, placeholder: "Neue Strecke, z. B. „Kreisverkehr am Bahnhof“ – mehrere: eine pro Zeile" });
+  const btn = el("button", { class: "btn" }, "➕ Hinzufügen");
+  btn.onclick = () => busy(btn, async () => {
+    const titles = add.value.split("\n").map((x) => x.trim()).filter(Boolean).map((x) => x.slice(0, 120));
+    if (!titles.length) throw new Error("Bitte eine Strecke eintragen");
+    let sort = list.reduce((m, t) => Math.max(m, t.sort), 0);
+    const { error } = await sb.from("training_topics").insert(titles.map((title) => ({
+      id: "own-" + crypto.randomUUID(), teacher_id: state.profile.id, stage: "eigene", sort: ++sort, title })));
+    if (error) throw error;
+    toast(titles.length === 1 ? "Hinzugefügt." : `${titles.length} Strecken hinzugefügt.`);
+    openOwnTopics();
+  });
+  openModal("🗺️ Prüfungsstrecken & eigene Themen",
+    el("p", { class: "muted small" }, "Deine eigene Liste – andere Fahrlehrer sehen sie nicht und haben ihre eigene. Text antippen zum Ändern, × zum Löschen. Deine Schüler sehen die Strecken in ihrem Ausbildungsstand."),
+    list.length ? list.map(row) : el("p", { class: "muted small" }, "Noch keine eigenen Strecken."),
+    el("label", {}, "Neue Strecke(n)"), add,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Fertig")));
 }
 
 async function openTraining(st, lessons) {
@@ -1884,15 +2017,17 @@ async function fetchAll(makeQuery) {
 }
 async function loadOwnData() {
   const tid = state.profile.id;
-  const [settings, students, slots, bookings, progress, exams] = await Promise.all([
+  const [settings, students, slots, bookings, progress, exams, time_off, topics] = await Promise.all([
     sb.from("settings").select("*").eq("teacher_id", tid).maybeSingle().then(({ data, error }) => { if (error) throw error; return data; }),
     fetchAll(() => sb.from("profiles").select("*").eq("teacher_id", tid).order("last_name")),
     fetchAll(() => sb.from("slots").select("*").eq("teacher_id", tid).order("starts_at")),
     fetchAll(() => sb.from("bookings").select("*").order("created_at")), // Zugriffsregeln: nur Buchungen auf eigenen Terminen
     fetchAll(() => sb.from("training_progress").select("*").order("student_id")), // nur eigene Schüler
     fetchAll(() => sb.from("exams").select("*").order("exam_at")), // nur eigene Schüler
+    fetchAll(() => sb.from("time_off").select("*").eq("teacher_id", tid).order("from_day")),
+    fetchAll(() => sb.from("training_topics").select("*").eq("teacher_id", tid).order("sort")), // eigene Strecken/Themen
   ]);
-  return { settings, students, slots, bookings, progress, exams };
+  return { settings, students, slots, bookings, progress, exams, time_off, topics };
 }
 const today = () => dateInput(new Date());
 const backupKey = () => `fsp_backup_${state.profile && state.profile.id}`;
@@ -2075,6 +2210,9 @@ async function studentCalendar() {
     sb.from("exams").select("id,kind,exam_at,result,note").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   const exams = myExams.data || [];
+  await loadTimeOff();
+  const today = dateInput(new Date()), soon = dateInput(addDays(new Date(), 21));
+  const nextOff = (state.timeOff || []).find((t) => t.to_day >= today && t.from_day <= soon);
   // Nächste Prüfung (ab heute) – groß oben anzeigen
   const nextExam = exams.find((e) => !e.result && new Date(e.exam_at).getTime() > Date.now() - 6 * 3600000);
   const examExtras = exams.map((e) => ({ at: e.exam_at,
@@ -2103,9 +2241,12 @@ async function studentCalendar() {
       class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
       onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
     }, el("b", {}, fmtRange(s.starts_at, s.duration_min)), label);
-  }, null, examExtras);
+  }, null, offExtras(null).concat(examExtras));
 
   return el("div", {},
+    nextOff ? el("div", { class: "notice off-banner", style: "margin-bottom:12px" },
+      el("b", {}, `🏖️ Dein Fahrlehrer ist nicht verfügbar (${nextOff.note || "frei"}): `), offRange(nextOff),
+      ". An diesen Tagen kannst du nichts anfragen.") : null,
     nextExam ? el("button", { class: "card exam-banner", onclick: () => goTab("training") },
       el("span", { class: "exam-icon" }, "🎓"),
       el("span", {}, el("b", {}, `Deine ${EXAM_KIND[nextExam.kind]}`), el("br"),
