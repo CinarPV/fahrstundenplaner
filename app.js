@@ -954,11 +954,11 @@ async function adminCalendar() {
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
-  const { data: weekExams } = await sb.from("exams").select("id,kind,exam_at,result,student_id,profiles(id,first_name,last_name)")
+  const { data: weekExams } = await sb.from("exams").select("id,kind,exam_at,duration_min,result,student_id,profiles(id,first_name,last_name,phone)")
     .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at");
   const examExtras = (weekExams || []).map((e) => ({ at: e.exam_at,
     node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openExamModal(e.profiles || { id: e.student_id }); } },
-      el("b", {}, `🎓 ${fmtTime(e.exam_at)} Prüfung`), `${EXAM_KIND[e.kind]} · ${fullName(e.profiles)}`,
+      el("b", {}, `🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`), `${EXAM_KIND[e.kind]} · ${fullName(e.profiles)}`,
       e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
 
   const grid = weekGrid(slots, (s) => {
@@ -1034,16 +1034,30 @@ function newSlotForm(opts = {}) {
   const studentList = el("div", { class: "pick-list" });
   const how = assignHow();
   how.onChange(() => refresh());
+  const assignExtras = el("div", {}, how.node, el("label", {}, "Hinweis an den Schüler"), reply);
   const assignBox = el("div", { hidden: true },
-    el("label", {}, "Welchem Schüler?"), search, studentList, how.node,
-    el("label", {}, "Hinweis an den Schüler"), reply);
-  const modeBtns = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"]].map(([m, text]) =>
-    el("button", { type: "button", class: "tab" + (m === mode ? " active" : ""), onclick: () => setMode(m) }, text));
+    el("label", {}, "Welchem Schüler?"), search, studentList, assignExtras);
+  // Prüfung zuordnen: Art, Uhrzeit, Dauer (Standard 55 Min.), Ort/Hinweis
+  const examKind = el("select", {}, Object.entries(EXAM_KIND).map(([k, t]) => el("option", { value: k }, t)));
+  const examTime = el("input", { type: "time", value: "08:00", step: 300 });
+  const examDur = durationControl(55);
+  const examNote = el("input", { maxlength: 300, placeholder: "Optional, z. B. „TÜV-Station Siegen“" });
+  const examBox = el("div", { hidden: true },
+    el("label", {}, "Art der Prüfung"), examKind,
+    el("label", {}, "Beginn"), examTime,
+    el("label", {}, "Dauer (Standard: 55 Min.)"), examDur.node,
+    el("label", {}, "Ort / Hinweis (sieht auch der Schüler)"), examNote);
+  const MODES = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"], ["exam", "🎓 Prüfung zuordnen"]];
+  const modeBtns = MODES.map(([m, text]) =>
+    el("button", { type: "button", class: "tab" + (m === mode ? " active" : "") + (m === "exam" ? " exam-mode" : ""), onclick: () => setMode(m) }, text));
   async function setMode(m) {
     mode = m;
-    modeBtns.forEach((b, i) => b.classList.toggle("active", ["free", "assign"][i] === m));
-    assignBox.hidden = m !== "assign";
-    if (m === "assign" && !students) {
+    modeBtns.forEach((b, i) => b.classList.toggle("active", MODES[i][0] === m));
+    assignBox.hidden = m === "free";
+    assignExtras.hidden = m === "exam";
+    examBox.hidden = m !== "exam";
+    slotBox.hidden = m === "exam";
+    if (m !== "free" && !students) {
       studentList.replaceChildren(el("p", { class: "muted small" }, "Lädt …"));
       const { data, error } = await sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
         .eq("role", "student").eq("status", "active").order("last_name");
@@ -1120,8 +1134,9 @@ function newSlotForm(opts = {}) {
   }
   function refresh() {
     renderStudents();
-    btn.textContent = mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
-    btn.className = "btn" + (mode === "assign" ? " ok" : "");
+    btn.textContent = mode === "exam" ? (student ? `🎓 Prüfung für ${fullName(student)} eintragen` : "Schüler wählen …")
+      : mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
+    btn.className = "btn" + (mode === "assign" ? " ok" : mode === "exam" ? " exam-btn" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
     timeChips.replaceChildren(...(pinned.length ? pinned.map((t) => {
       const on = times.includes(t);
@@ -1153,6 +1168,19 @@ function newSlotForm(opts = {}) {
   dur.input.addEventListener("input", refresh);
 
   btn.onclick = () => busy(btn, async () => {
+    if (mode === "exam") {
+      if (!student) throw new Error("Bitte einen Schüler auswählen");
+      const at = fromInputs(date.value, examTime.value);
+      if (isNaN(at)) throw new Error("Bitte Datum und Beginn angeben");
+      const note = examNote.value.trim() || null;
+      const { error } = await sb.from("exams").insert({ student_id: student.id, kind: examKind.value, exam_at: at.toISOString(), duration_min: examDur.value, note });
+      if (error) throw error;
+      state.weekStart = startOfWeek(at);
+      const text = `Hallo ${student.first_name || ""}, deine ${EXAM_KIND[examKind.value]} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
+        + (note ? `\n📍 ${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App: ${appLink()}\n\n` + teacherSignature();
+      notifyStep(`Prüfung für ${fullName(student)} eingetragen`, student.phone, text);
+      return;
+    }
     const list = build();
     if (mode === "assign" && !student) throw new Error("Bitte einen Schüler auswählen");
     await meetSlot.commit();
@@ -1181,11 +1209,17 @@ function newSlotForm(opts = {}) {
   });
 
   refresh();
+  const slotBox = el("div", {});
   const node = el("div", { class: opts.inModal ? "" : "card" },
     opts.inModal ? null : el("h3", {}, "Neue Fahrstunden anlegen"),
     el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns),
     assignBox,
     el("label", {}, "Datum"), date,
+    examBox,
+    slotBox,
+    el("div", { class: "actions" }, btn),
+  );
+  slotBox.append(
     el("label", { class: "check repeat-toggle" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
     repeatBox,
     el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,
@@ -1201,7 +1235,6 @@ function newSlotForm(opts = {}) {
       el("div", { class: "actions" }, makeRow)),
     meetSlot.node,
     preview,
-    el("div", { class: "actions" }, btn),
   );
   repeatBox.append(
     el("label", {}, "An welchen Tagen?"),
@@ -2207,7 +2240,7 @@ async function studentCalendar() {
   const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
     sb.from("bookings").select("status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
-    sb.from("exams").select("id,kind,exam_at,result,note").eq("student_id", state.profile.id).order("exam_at"),
+    sb.from("exams").select("id,kind,exam_at,duration_min,result,note").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   const exams = myExams.data || [];
   await loadTimeOff();
@@ -2217,7 +2250,7 @@ async function studentCalendar() {
   const nextExam = exams.find((e) => !e.result && new Date(e.exam_at).getTime() > Date.now() - 6 * 3600000);
   const examExtras = exams.map((e) => ({ at: e.exam_at,
     node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); goTab("training"); } },
-      el("b", {}, `🎓 ${fmtTime(e.exam_at)} Prüfung`), EXAM_KIND[e.kind],
+      el("b", {}, `🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`), "Deine " + EXAM_KIND[e.kind], e.note ? el("div", { class: "small" }, "📍 " + e.note) : null,
       e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
   if (error) throw error;
   // Nächste eigene Fahrstunde mit Countdown
@@ -2250,8 +2283,8 @@ async function studentCalendar() {
     nextExam ? el("button", { class: "card exam-banner", onclick: () => goTab("training") },
       el("span", { class: "exam-icon" }, "🎓"),
       el("span", {}, el("b", {}, `Deine ${EXAM_KIND[nextExam.kind]}`), el("br"),
-        `${fmtDate(nextExam.exam_at)} um ${fmtTime(nextExam.exam_at)} Uhr`, nextExam.note ? ` · ${nextExam.note}` : ""),
-      countdownEl(nextExam.exam_at, 0)) : null,
+        `${fmtDate(nextExam.exam_at)} · ${fmtRange(nextExam.exam_at, nextExam.duration_min || 55)} Uhr`, nextExam.note ? ` · 📍 ${nextExam.note}` : ""),
+      countdownEl(nextExam.exam_at, nextExam.duration_min || 55)) : null,
     nextOwn ? el("div", { class: "card next-card" },
       el("div", { class: "next-row first", style: "cursor:default" },
         countdownEl(nextOwn.slots.starts_at, nextOwn.slots.duration_min),
@@ -2440,7 +2473,7 @@ const EXAM_KIND = { praxis: "Praktische Prüfung", theorie: "Theorieprüfung" };
 async function examCard(student, editable) {
   const box = el("div", { class: "card exam-card" });
   async function draw() {
-    const { data, error } = await sb.from("exams").select("id,kind,exam_at,result,note").eq("student_id", student.id).order("exam_at");
+    const { data, error } = await sb.from("exams").select("id,kind,exam_at,duration_min,result,note").eq("student_id", student.id).order("exam_at");
     if (error) return box.replaceChildren(el("p", { class: "muted small" }, "Prüfungen konnten nicht geladen werden."));
     const exams = data || [];
     if (!editable && !exams.length) { box.hidden = true; return; }
@@ -2468,16 +2501,37 @@ async function examCard(student, editable) {
       return el("div", { class: "list-item" + (e.result === "passed" ? " exam-passed" : "") },
         el("div", { class: "head" },
           el("div", {}, el("b", {}, `${EXAM_KIND[e.kind]}${nr > 1 ? ` (${nr}. Versuch)` : ""}`),
-            el("div", {}, `${fmtDate(e.exam_at)} um ${fmtTime(e.exam_at)} Uhr`)),
+            el("div", {}, `${fmtDate(e.exam_at)} · ${fmtRange(e.exam_at, e.duration_min || 55)} Uhr (${e.duration_min || 55} Min.)`)),
           e.result === "passed" ? el("span", { class: "badge confirmed" }, "🎉 Bestanden")
             : e.result === "failed" ? el("span", { class: "badge rejected" }, "Nicht bestanden")
-            : el("span", { class: "badge requested" }, future ? countdownText(e.exam_at, 0) || "Anstehend" : "Ergebnis offen")),
-        e.note ? el("div", { class: "note" }, e.note) : null,
+            : el("span", { class: "badge requested" }, future ? countdownText(e.exam_at, e.duration_min || 55) || "Anstehend" : "Ergebnis offen")),
+        e.note ? el("div", { class: "note" }, "📍 ", e.note) : null,
+        editable && !e.result ? editExam(e) : null,
         editable ? el("div", { class: "actions" },
           e.result ? el("button", { type: "button", class: "btn small ghost", onclick: setResult(e, null) }, "Ergebnis ändern")
             : [el("button", { type: "button", class: "btn small ok", onclick: setResult(e, "passed") }, "✓ Bestanden"),
                el("button", { type: "button", class: "btn small danger", onclick: setResult(e, "failed") }, "✗ Nicht bestanden")],
           del) : null);
+    };
+    // Zeit/Dauer/Ort einer Prüfung ändern
+    const editExam = (e) => {
+      const d = el("input", { type: "date", value: dateInput(e.exam_at) });
+      const t = el("input", { type: "time", value: timeInput(e.exam_at), step: 300 });
+      const du = durationControl(e.duration_min || 55);
+      const n = el("input", { maxlength: 300, value: e.note || "", placeholder: "Ort / Hinweis" });
+      const save = el("button", { class: "btn small" }, "Speichern");
+      save.onclick = () => busy(save, async () => {
+        const at = fromInputs(d.value, t.value);
+        if (isNaN(at)) throw new Error("Bitte Datum und Beginn angeben");
+        const { error } = await sb.from("exams").update({ exam_at: at.toISOString(), duration_min: du.value, note: n.value.trim() || null }).eq("id", e.id);
+        if (error) throw error;
+        toast("Prüfung geändert.");
+        state.renderOnClose = true;
+        draw();
+      });
+      return el("details", { class: "fold" }, el("summary", {}, "✏️ Zeit, Dauer oder Ort ändern"),
+        el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), d), el("div", {}, el("label", {}, "Beginn"), t)),
+        el("label", {}, "Dauer"), du.node, el("label", {}, "Ort / Hinweis"), n, el("div", { class: "actions" }, save));
     };
     let form = null;
     if (editable) {
@@ -2485,12 +2539,13 @@ async function examCard(student, editable) {
       kind.value = needsNext || (passed("theorie") ? "praxis" : "theorie");
       const date = el("input", { type: "date", value: dateInput(addDays(new Date(), 14)) });
       const time = el("input", { type: "time", value: "08:00", step: 300 });
-      const note = el("input", { maxlength: 300, placeholder: "Optional, z. B. „TÜV-Station Musterstadt“" });
+      const note = el("input", { maxlength: 300, placeholder: "Optional, z. B. „TÜV-Station Siegen“" });
+      const du = durationControl(55);
       const save = el("button", { class: "btn" }, "Prüfungstermin speichern");
       save.onclick = () => busy(save, async () => {
         const at = fromInputs(date.value, time.value);
         if (isNaN(at)) throw new Error("Bitte Datum und Uhrzeit angeben");
-        const { error } = await sb.from("exams").insert({ student_id: student.id, kind: kind.value, exam_at: at.toISOString(), note: note.value.trim() || null });
+        const { error } = await sb.from("exams").insert({ student_id: student.id, kind: kind.value, exam_at: at.toISOString(), duration_min: du.value, note: note.value.trim() || null });
         if (error) throw error;
         toast("Prüfungstermin eingetragen.");
         draw();
@@ -2498,7 +2553,8 @@ async function examCard(student, editable) {
       const fields = el("div", {},
         el("label", {}, "Art"), kind,
         el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Uhrzeit"), time)),
-        el("label", {}, "Hinweis"), note, el("div", { class: "actions" }, save));
+        el("label", {}, "Dauer (Standard: 55 Min.)"), du.node,
+        el("label", {}, "Ort / Hinweis"), note, el("div", { class: "actions" }, save));
       form = needsNext
         ? el("div", { class: "notice", style: "margin-top:12px" }, el("b", {}, `Nicht bestanden – nächster Termin für die ${EXAM_KIND[needsNext]}:`), fields)
         : el("details", { class: "fold" }, el("summary", {}, "➕ Prüfungstermin eintragen"), fields);

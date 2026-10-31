@@ -428,3 +428,5 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 .own-topic input { flex: 1; }
 .own-topic .unpin { border: 1px solid var(--border); background: #fff; width: 44px; min-height: 44px; border-radius: 8px; font-size: 20px; color: #b42318; cursor: pointer; }
 .stage.own .stage-head h4 { color: var(--brand); }
+.tab.exam-mode { border-color: var(--exam-bd); }
+.tab.exam-mode.active { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
