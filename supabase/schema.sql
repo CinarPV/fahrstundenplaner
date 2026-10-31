@@ -131,7 +131,7 @@ insert into public.training_topics (id, stage, sort, title) values
   ('r02', 'reife', 38, 'Selbstständig fahren ohne Hilfestellung'),
   ('r03', 'reife', 39, 'Testfahrt unter Prüfungsbedingungen'),
   ('r04', 'reife', 40, 'Prüfungsreife erreicht')
-on conflict (id) do nothing;
+on conflict (id) do update set stage = excluded.stage, sort = excluded.sort, title = excluded.title;
 
 -- Ausbildungsstand: pro Schüler und Thema eine Stufe (1 = eingeführt, 2 = geübt, 3 = sicher)
 create table if not exists public.training_progress (

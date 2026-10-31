@@ -113,7 +113,8 @@ function studentTags(p) {
 const isAdmin = () => !!state.profile && state.profile.role === "teacher" && state.profile.status === "active";
 const isOwner = () => isAdmin() && state.profile.is_owner;
 const teacherSignature = () => `Dein Fahrlehrer ${state.settings.display_name || ""}`.trim();
-const studentLink = () => location.origin + location.pathname + "?l=" + encodeURIComponent(state.profile.slug || "");
+// Ein Link für alle – Schüler wählen ihren Fahrlehrer bei der Registrierung aus
+const studentLink = () => location.origin + location.pathname;
 
 // Sonderfahrten
 const LESSON_TYPES = { normal: "Übungsfahrt", ueberland: "Überlandfahrt", autobahn: "Autobahnfahrt", nacht: "Nachtfahrt" };
@@ -481,7 +482,7 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
   const linkSlug = urlTeacherSlug();
   const teacherSel = el("select", { required: true }, el("option", { value: "" }, "Lädt …"));
   const teacherInfo = el("p", { class: "notice", hidden: true });
-  const teacherWrap = el("div", {}, el("label", {}, "Dein Fahrlehrer"), teacherSel);
+  const teacherWrap = el("div", {}, el("label", {}, "Mit welchem Fahrlehrer fährst du?"), teacherSel);
   const studentOnly = el("div", {});   // Felder nur für Schüler (bei der Ersteinrichtung ausgeblendet)
   let firstSetup = false;
   if (mode === "register") sb.rpc("public_teachers").then(({ data, error }) => {
@@ -498,15 +499,10 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
         "Es ist noch kein Fahrlehrer angelegt. Registriere dich hier als Betreiber – danach wirst du per Befehl in Supabase zum Haupt-Admin.");
       return;
     }
-    teacherSel.replaceChildren(el("option", { value: "" }, list.length ? "Bitte wählen …" : "Noch kein Fahrlehrer angelegt"),
+    teacherSel.replaceChildren(el("option", { value: "" }, "Bitte deinen Fahrlehrer wählen …"),
       ...list.map((t) => el("option", { value: t.slug }, t.display_name)));
     const match = list.find((t) => t.slug === linkSlug);
-    if (match) {
-      teacherSel.value = match.slug;
-      teacherWrap.hidden = true;
-      teacherInfo.hidden = false;
-      teacherInfo.replaceChildren("Anmeldung bei Fahrlehrer ", el("b", {}, match.display_name));
-    }
+    if (match) teacherSel.value = match.slug;   // alter Kürzel-Link (?l=…) wählt nur vor
   });
 
   const form = el("form", {
@@ -603,7 +599,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["settings", "Einstellungen"]]
+    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -627,7 +623,7 @@ async function render() {
     else if (state.tab === "teachers") view = await ownerTeachers();
     else if (state.tab === "mine") view = await studentMine();
     else if (state.tab === "profile") view = studentProfile();
-    else if (state.tab === "training") view = await studentTraining();
+    else if (state.tab === "training") view = isAdmin() ? await adminTraining() : await studentTraining();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -1539,7 +1535,7 @@ async function openStudent(st) {
   const del = el("button", { class: "btn danger" }, "Endgültig löschen");
   del.onclick = () => busy(del, () => deleteStudent(st));
   const edit = el("button", { class: "btn small ghost", onclick: () => openEditStudent(st) }, "✏️ Daten bearbeiten");
-  const training = el("button", { class: "btn small", onclick: () => openTraining(st, data) }, "📈 Ausbildungsstand");
+  const training = el("button", { class: "btn small", onclick: () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); } }, "📈 Ausbildungsstand");
 
   openModal(fullName(st),
     el("div", { class: "done-row" }, studentTags(st), training, edit),
@@ -1592,7 +1588,7 @@ async function ownerTeachers() {
   slug.addEventListener("input", () => (slugTouched = true));
   first.addEventListener("input", () => { if (!slugTouched) slug.value = slugify(first.value); });
   const linkPreview = el("div", { class: "small muted" });
-  const updatePreview = () => (linkPreview.textContent = "Schüler-Link: " + appLink() + "?l=" + (slugify(slug.value) || "…"));
+  const updatePreview = () => (linkPreview.textContent = "Interne Kennung: " + (slugify(slug.value) || "…") + " · Alle nutzen denselben Link: " + appLink());
   [first, slug].forEach((i) => i.addEventListener("input", updatePreview));
   updatePreview();
 
@@ -1692,10 +1688,10 @@ function openTeacherPassword(t) {
 
 function showTeacherCredentials(v, needsConfirm) {
   state.renderOnClose = true;
-  const link = appLink() + "?l=" + v.slug;
   const text = `Hallo ${v.first}, hier sind deine Zugangsdaten für den Easy Fahrstundenplaner:\n\n` +
     `Anmelden: ${appLink()}\nE-Mail: ${v.email}\nPasswort: ${v.pw}\n\n` +
-    `Dein Link für deine Schüler:\n${link}\n\nBitte ändere dein Passwort nach der ersten Anmeldung unter „Einstellungen“.`;
+    `Deine Schüler nutzen denselben Link und wählen bei der Registrierung „${v.first}“ als Fahrlehrer aus.\n\n` +
+    `Bitte ändere dein Passwort nach der ersten Anmeldung unter „Einstellungen“.`;
   openModal(`✓ ${v.first} ${v.last} angelegt`,
     el("p", {}, "Schick ihm diese Zugangsdaten – z. B. per WhatsApp:"),
     el("div", { class: "note", style: "white-space:pre-wrap" }, text),
@@ -1733,9 +1729,9 @@ function linkBox(link, shareText) {
     qr);
 }
 function openLinkModal() {
-  openModal("🔗 Dein Schüler-Link",
-    el("p", {}, "Diesen Link an deine Schüler schicken. Wer sich darüber registriert, landet automatisch bei dir."),
-    linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden bei mir (${state.settings.display_name || "deinem Fahrlehrer"}) anmelden:`));
+  openModal("🔗 Link für Schüler",
+    el("p", {}, "Ein Link für alle: Schüler öffnen ihn, tippen auf „Neu registrieren“ und wählen dort dich als Fahrlehrer aus."),
+    linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`));
 }
 
 /* ---------------- Fahrlehrer: Datensicherung ---------------- */
@@ -1912,9 +1908,9 @@ function adminSettings() {
       phone,
       el("div", { class: "actions" }, save)),
     el("div", { class: "card" },
-      el("h3", {}, "🔗 Dein Schüler-Link"),
-      el("p", { class: "muted small" }, "Wer sich über diesen Link registriert, landet automatisch bei dir. Den Link findest du auch jederzeit oben über „🔗 Schüler-Link“."),
-      linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden bei mir (${state.settings.display_name || "deinem Fahrlehrer"}) anmelden:`)),
+      el("h3", {}, "🔗 Link für Schüler"),
+      el("p", { class: "muted small" }, "Ein Link für alle Fahrlehrer und Schüler. Bei der Registrierung wählen Schüler ihren Fahrlehrer aus – neue Fahrlehrer erscheinen dort automatisch. Den Link findest du auch jederzeit oben über 🔗."),
+      linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
     passwordCard(),
   );
@@ -1986,6 +1982,28 @@ function openBooking(s) {
     isLate(s.starts_at) ? el("div", { class: "notice danger" },
       "Kurzfristige Buchung: Die Absagefrist ist bereits abgelaufen. Wird diese Fahrstunde bestätigt, ist eine Absage kostenpflichtig.") : null,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+/* ---------------- Fahrlehrer: Ausbildungsstand (Schüler wählen → abhaken) ---------------- */
+
+async function adminTraining() {
+  const { data: students, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status")
+    .eq("role", "student").eq("status", "active").order("last_name");
+  if (error) throw error;
+  if (!students.length) return el("div", { class: "card" }, el("h2", {}, "📈 Ausbildungsstand"), el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler."));
+  const chosen = students.find((x) => x.id === state.trainingStudent) || students[0];
+  state.trainingStudent = chosen.id;
+  const sel = el("select", { "aria-label": "Schüler wählen" },
+    students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
+  sel.value = chosen.id;
+  sel.addEventListener("change", () => { state.trainingStudent = sel.value; render(); });
+  const { data: lessons } = await sb.from("bookings").select("status,actual_minutes,lesson_type").eq("student_id", chosen.id);
+  return el("div", { class: "card" },
+    el("h2", {}, "📈 Ausbildungsstand"),
+    el("label", {}, "Schüler wählen"), sel,
+    el("div", { class: "done-row", style: "margin:8px 0 4px" }, studentTags(chosen)),
+    await trainingView(chosen, true, lessons || []));
 }
 
 /* ---------------- Schüler: Ausbildungsstand (nur ansehen) ---------------- */
