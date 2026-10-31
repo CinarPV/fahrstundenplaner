@@ -1167,13 +1167,13 @@ function newSlotForm(opts = {}) {
   const assignBox = el("div", { hidden: true },
     el("label", {}, "Welchem Schüler?"), search, studentList, assignExtras);
   // Prüfung zuordnen: Art, Uhrzeit, Dauer (Standard 55 Min.), Ort/Hinweis
-  const examKind = el("select", {}, Object.entries(EXAM_KIND).map(([k, t]) => el("option", { value: k }, t)));
+  const examKind = { value: "praxis" }; // es wird nur die praktische Prüfung geplant
   const examTime = el("input", { type: "time", value: "08:00", step: 300 });
   const examDur = durationControl(55);
   const examNote = examMeetingField(EXAM_MEETING);
   const examHint = el("input", { maxlength: 300, placeholder: "z. B. Ausweis und Brille mitbringen" });
   const examBox = el("div", { hidden: true },
-    el("label", {}, "Art der Prüfung"), examKind,
+    el("p", { class: "small", style: "margin:10px 0 0" }, el("b", {}, "🚗 Praktische Prüfung")),
     el("label", {}, "Beginn"), examTime,
     el("label", {}, "Dauer (Standard: 55 Min.)"), examDur.node,
     examNote.node,
@@ -1315,7 +1315,7 @@ function newSlotForm(opts = {}) {
       const { error } = await sb.from("exams").insert({ student_id: student.id, kind: examKind.value, exam_at: at.toISOString(), duration_min: examDur.value, meeting_point: meet, note });
       if (error) throw error;
       showDate(at);
-      const text = `Hallo ${student.first_name || ""}, deine ${EXAM_KIND[examKind.value]} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
+      const text = `Hallo ${student.first_name || ""}, deine ${examIn(examKind.value)} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
         + (meet ? `\n📍 Treffpunkt: ${meet}` : "") + (note ? `\n${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App: ${appLink()}\n\n` + teacherSignature();
       notifyStep(`Prüfung für ${fullName(student)} eingetragen`, student.phone, text);
       return;
@@ -2397,7 +2397,7 @@ async function studentCalendar() {
   const nextExam = exams.find((e) => !e.result && new Date(e.exam_at).getTime() > Date.now() - 6 * 3600000);
   const examExtras = exams.map((e) => ({ at: e.exam_at,
     node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); goTab("training"); } },
-      el("b", {}, `🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`), "Deine " + EXAM_KIND[e.kind], e.meeting_point || e.note ? el("div", { class: "small" }, "📍 " + (e.meeting_point || e.note)) : null,
+      el("b", {}, `🎓 ${fmtRange(e.exam_at, e.duration_min || 55)}`), "Deine " + examIn(e.kind), e.meeting_point || e.note ? el("div", { class: "small" }, "📍 " + (e.meeting_point || e.note)) : null,
       e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
   if (error) throw error;
   // Nächste eigene Fahrstunde mit Countdown
@@ -2429,7 +2429,7 @@ async function studentCalendar() {
       ". An diesen Tagen kannst du nichts anfragen.") : null,
     nextExam ? el("button", { class: "card exam-banner", onclick: () => goTab("training") },
       el("span", { class: "exam-icon" }, "🎓"),
-      el("span", {}, el("b", {}, `Deine ${EXAM_KIND[nextExam.kind]}`), el("br"),
+      el("span", {}, el("b", {}, `Deine ${examIn(nextExam.kind)}`), el("br"),
         `${fmtDate(nextExam.exam_at)} · ${fmtRange(nextExam.exam_at, nextExam.duration_min || 55)} Uhr`, nextExam.meeting_point ? ` · 📍 ${nextExam.meeting_point}` : ""),
       countdownEl(nextExam.exam_at, nextExam.duration_min || 55)) : null,
     nextOwn ? el("div", { class: "card next-card" },
@@ -2616,7 +2616,9 @@ function exportControlPrint(m, rows) {
 
 /* ---------------- Prüfungen (Theorie/Praxis): Termin, bestanden ja/nein, ggf. neuer Termin ---------------- */
 
+// Geplant wird nur die praktische Prüfung; „theorie“ bleibt nur, damit ältere Einträge noch richtig angezeigt werden
 const EXAM_KIND = { praxis: "Praktische Prüfung", theorie: "Theorieprüfung" };
+const examIn = (k) => (k === "praxis" ? "praktische Prüfung" : EXAM_KIND[k] || "Prüfung"); // mitten im Satz
 // Standard-Treffpunkt für Prüfungen (wird im Feld „Treffpunkt“ der Prüfung gespeichert, änderbar)
 const EXAM_MEETING = "TÜV-Station Siegen, Leimbachstraße 227, 57074 Siegen";
 function examMeetingField(value) {
@@ -2636,7 +2638,7 @@ async function examCard(student, editable) {
     if (!editable && !exams.length) { box.hidden = true; return; }
     const passed = (k) => exams.some((e) => e.kind === k && e.result === "passed");
     // Nach „nicht bestanden“ (und noch kein offener neuer Termin) gleich das Formular für den nächsten Termin zeigen
-    const needsNext = Object.keys(EXAM_KIND).find((k) => {
+    const needsNext = ["praxis"].find((k) => {
       const ofKind = exams.filter((e) => e.kind === k);
       return ofKind.length && ofKind[ofKind.length - 1].result === "failed" && !passed(k);
     });
@@ -2695,11 +2697,11 @@ async function examCard(student, editable) {
     // Neuer Prüfungstermin: im selben Fenster wie Fahrstunden („🎓 Prüfung“) – hier nur der Knopf dorthin
     let form = null;
     if (editable) {
-      const kind = needsNext || (passed("theorie") ? "praxis" : "theorie");
+      const kind = "praxis";
       const add = el("button", { type: "button", class: "btn exam-btn", onclick: () => openSlotForm(null, { student, kind }) },
-        needsNext ? `🎓 Nächsten Termin eintragen (${EXAM_KIND[needsNext]})` : "🎓 Prüfungstermin eintragen");
+        needsNext ? "🎓 Nächsten Prüfungstermin eintragen" : "🎓 Prüfungstermin eintragen");
       form = needsNext
-        ? el("div", { class: "notice", style: "margin-top:12px" }, el("b", {}, `Nicht bestanden – nächster Termin für die ${EXAM_KIND[needsNext]}:`), el("div", { class: "actions" }, add))
+        ? el("div", { class: "notice", style: "margin-top:12px" }, el("b", {}, "Nicht bestanden – nächster Termin für die praktische Prüfung:"), el("div", { class: "actions" }, add))
         : el("div", { class: "actions" }, add);
     }
     box.hidden = false;
