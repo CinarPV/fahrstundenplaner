@@ -279,13 +279,44 @@ function durationControl(initial, opts = {}) {
 function openModal(title, ...content) {
   modalBody.replaceChildren(
     el("div", { class: "modal-head" },
+      el("button", { class: "back", "aria-label": "Zurück", onclick: closeModal }, "‹ Zurück"),
       el("h3", {}, title),
       el("button", { class: "close", "aria-label": "Schließen", onclick: closeModal }, "×")),
     el("div", {}, ...content),
   );
-  if (!modal.open) modal.showModal();
+  if (!modal.open) {
+    modal.showModal();
+    // Eintrag im Verlauf: Die Zurück-Taste/-Geste des Handys schließt das Fenster
+    history.pushState({ tab: state.tab, modal: true }, "");
+  }
 }
-function closeModal() { if (modal.open) modal.close(); }
+function closeModal() {
+  if (!modal.open) return;
+  if (history.state && history.state.modal) history.back();   // → popstate schließt das Fenster
+  else modal.close();
+}
+
+/* ---------------- Navigation (Tabs, Zurück) ---------------- */
+
+// Tab wechseln und im Verlauf merken, damit „Zurück“ funktioniert
+function goTab(id) {
+  if (state.tab === id) return render();
+  history.pushState({ tab: id }, "");
+  state.tab = id;
+  render();
+}
+// Sichtbare Zurück-Taste: eine Seite zurück, sonst zum Kalender
+function goBack() {
+  if (history.state && history.state.tab && history.state.tab !== "calendar" && history.length > 1) history.back();
+  else goTab("calendar");
+}
+window.addEventListener("popstate", (e) => {
+  if (modal.open) { modal.close(); return; }
+  const tab = (e.state && e.state.tab) || "calendar";
+  if (state.profile && tab !== state.tab) { state.tab = tab; render(); }
+});
+// Fenster mit Esc geschlossen → Verlaufseintrag mitnehmen
+modal.addEventListener("close", () => { if (history.state && history.state.modal) history.back(); });
 modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
 
 async function busy(button, fn) {
@@ -401,8 +432,9 @@ function renderWaiting() {
       ? (p.role === "teacher" ? "Dein Fahrlehrer-Zugang ist gesperrt. Bitte wende dich an den Betreiber der App."
         : "Deine Ausbildung ist abgeschlossen – herzlichen Glückwunsch und allzeit gute Fahrt! Bei Fragen wende dich bitte direkt an deinen Fahrlehrer.")
       : `Hallo ${p.first_name || ""}! Deine Anmeldung ist angekommen. Dein Fahrlehrer muss dich noch freischalten – danach siehst du hier den Kalender und kannst Fahrstunden anfragen.`),
-    blocked ? null : el("div", { class: "actions" },
-      el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen")),
+    el("div", { class: "actions" },
+      blocked ? null : el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen"),
+      el("button", { class: "btn ghost", onclick: async () => { await sb.auth.signOut(); renderAuth("login"); } }, "‹ Zur Anmeldung / anderes Konto")),
   ));
 }
 
@@ -450,9 +482,22 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
   const teacherSel = el("select", { required: true }, el("option", { value: "" }, "Lädt …"));
   const teacherInfo = el("p", { class: "notice", hidden: true });
   const teacherWrap = el("div", {}, el("label", {}, "Dein Fahrlehrer"), teacherSel);
+  const studentOnly = el("div", {});   // Felder nur für Schüler (bei der Ersteinrichtung ausgeblendet)
+  let firstSetup = false;
   if (mode === "register") sb.rpc("public_teachers").then(({ data, error }) => {
     if (error) return fail(error);
     const list = data || [];
+    if (!list.length) {
+      // Allererste Registrierung: noch kein Fahrlehrer vorhanden → Betreiber legt sein Konto an
+      firstSetup = true;
+      [teacherSel, licenseClass, phone].forEach((x) => (x.required = false));
+      teacherWrap.hidden = true;
+      studentOnly.hidden = true;
+      teacherInfo.hidden = false;
+      teacherInfo.replaceChildren(el("b", {}, "Erste Einrichtung: "),
+        "Es ist noch kein Fahrlehrer angelegt. Registriere dich hier als Betreiber – danach wirst du per Befehl in Supabase zum Haupt-Admin.");
+      return;
+    }
     teacherSel.replaceChildren(el("option", { value: "" }, list.length ? "Bitte wählen …" : "Noch kein Fahrlehrer angelegt"),
       ...list.map((t) => el("option", { value: t.slug }, t.display_name)));
     const match = list.find((t) => t.slug === linkSlug);
@@ -472,7 +517,7 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
           const { error } = await sb.auth.signInWithPassword({ email: email.value.trim(), password: pw.value });
           if (error) throw new Error(error.message === "Invalid login credentials" ? "E-Mail oder Passwort falsch" : error.message);
         } else {
-          if (!waNumber(phone.value)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
+          if (!firstSetup && !waNumber(phone.value)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
           if (glasses.checked && !glassesConsent.checked) throw new Error("Bitte die Einwilligung zur Angabe „Sehhilfe“ bestätigen – oder den Haken bei Sehhilfe entfernen.");
           if (!terms.checked) throw new Error("Bitte den Nutzungsbedingungen zustimmen.");
           const { data, error } = await sb.auth.signUp({
@@ -501,12 +546,13 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
       el("div", {}, el("label", {}, "Nachname"), last)) : null,
     mode === "register" ? [
       teacherInfo, teacherWrap,
-      el("label", {}, "Führerscheinklasse"), licenseClass,
-      el("label", { class: "check" }, glasses, "Ich brauche eine Sehhilfe (Brille / Kontaktlinsen)"),
-      glassesConsentRow,
-      el("label", { class: "check" }, conversion, "Ich bin Umschreiber (habe schon einen ausländischen Führerschein)"),
-      el("label", {}, "Deine WhatsApp-Nummer"), phone,
-      el("p", { class: "muted small", style: "margin:4px 0 0" }, "Darüber schickt dir dein Fahrlehrer Angebote und Bestätigungen."),
+      (studentOnly.append(
+        el("label", {}, "Führerscheinklasse"), licenseClass,
+        el("label", { class: "check" }, glasses, "Ich brauche eine Sehhilfe (Brille / Kontaktlinsen)"),
+        glassesConsentRow,
+        el("label", { class: "check" }, conversion, "Ich bin Umschreiber (habe schon einen ausländischen Führerschein)"),
+        el("label", {}, "Deine WhatsApp-Nummer"), phone,
+        el("p", { class: "muted small", style: "margin:4px 0 0" }, "Darüber schickt dir dein Fahrlehrer Angebote und Bestätigungen.")), studentOnly),
     ] : null,
     el("label", {}, "E-Mail"), email,
     el("label", {}, "Passwort" + (mode === "register" ? " (mind. 6 Zeichen)" : "")), pw,
@@ -519,8 +565,8 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
 
   app.replaceChildren(el("div", { class: "card narrow" },
     el("div", { class: "tabs" },
-      el("button", { class: "tab" + (mode === "login" ? " active" : ""), onclick: () => renderAuth("login") }, "Anmelden"),
-      el("button", { class: "tab" + (mode === "register" ? " active" : ""), onclick: () => renderAuth("register") }, "Neu registrieren")),
+      el("button", { type: "button", class: "tab" + (mode === "login" ? " active" : ""), onclick: () => renderAuth("login") }, "Anmelden"),
+      el("button", { type: "button", class: "tab" + (mode === "register" ? " active" : ""), onclick: () => renderAuth("register") }, "Neu registrieren")),
     el("p", { class: "muted small" }, mode === "login"
       ? "Melde dich an, um Fahrstunden zu sehen und zu buchen."
       : "Einmal registrieren mit Vor- und Nachnamen – danach kannst du freie Fahrstunden anfragen."),
@@ -562,9 +608,12 @@ async function render() {
     : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
-    el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => { state.tab = id; render(); } }, label)));
+    el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => goTab(id) }, label)));
   const content = el("div", {}, el("p", { class: "muted" }, "Lädt …"));
-  app.replaceChildren(tabbar, content);
+  const back = state.tab !== "calendar"
+    ? el("button", { class: "btn small ghost backbtn", onclick: goBack }, "‹ Zurück") : null;
+  app.replaceChildren(...[tabbar, back, content].filter(Boolean));
+  if (!history.state || !history.state.tab) history.replaceState({ tab: state.tab }, "");
 
   if (isAdmin()) updateRequestCount(tabbar);
   else updateStudentNews(tabbar);
@@ -662,9 +711,12 @@ function weekGrid(slots, renderSlot, onAddDay) {
   for (let i = 0; i < 7; i++) {
     const day = addDays(state.weekStart, i);
     const daySlots = slots.filter((s) => sameDay(new Date(s.starts_at), day));
-    days.push(el("div", { class: "day" + (sameDay(day, today) ? " today" : "") },
+    days.push(el("div", {
+      class: "day" + (sameDay(day, today) ? " today" : "") + (onAddDay ? " tappable" : ""),
+      onclick: onAddDay ? (e) => { if (!e.target.closest(".slot")) onAddDay(day); } : null,
+    },
       el("div", { class: "day-head" }, el("span", {}, fmtDay(day)),
-        onAddDay ? el("button", { class: "plus", title: "Termin an diesem Tag anlegen", onclick: () => onAddDay(day) }, "+") : null),
+        onAddDay ? el("button", { class: "plus", title: "Termin an diesem Tag anlegen", onclick: (e) => { e.stopPropagation(); onAddDay(day); } }, "+") : null),
       daySlots.length ? daySlots.map(renderSlot) : el("div", { class: "empty" }, "—"),
     ));
   }
@@ -672,6 +724,52 @@ function weekGrid(slots, renderSlot, onAddDay) {
 }
 
 /* ---------------- Admin: Kalender ---------------- */
+
+// „Fahrstunden anlegen“ als Fenster – optional mit vorausgewähltem Tag
+function openSlotForm(day) {
+  const form = newSlotForm({ inModal: true });
+  openModal("➕ Fahrstunden anlegen", form.node);
+  if (day) form.setDate(day);
+}
+
+// Countdown bis zur Fahrstunde („in 2 Std. 15 Min.“) – wird alle 30 Sek. aktualisiert
+function countdownText(start, durMin) {
+  const t = new Date(start).getTime(), now = Date.now();
+  if (t <= now) return now < t + durMin * 60000 ? "läuft gerade" : "vorbei";
+  const m = Math.floor((t - now) / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  if (d > 0) return `in ${d} ${d === 1 ? "Tag" : "Tagen"}${h ? ` ${h} Std.` : ""}`;
+  if (h > 0) return `in ${h} Std. ${mm} Min.`;
+  return `in ${mm} Min.`;
+}
+function countdownEl(start, durMin, cls = "") {
+  const e = el("span", { class: "countdown " + cls, "data-start": start, "data-dur": durMin });
+  e.textContent = countdownText(start, durMin);
+  return e;
+}
+setInterval(() => document.querySelectorAll(".countdown").forEach((e) => (e.textContent = countdownText(e.dataset.start, +e.dataset.dur))), 30000);
+
+// Nächste bestätigte Fahrstunden des Fahrlehrers – mit wem und wann
+async function nextLessonsCard() {
+  const since = addMin(new Date(), -180).toISOString();
+  const [{ data, error }, req] = await Promise.all([
+    sb.from("bookings").select("id,profiles(first_name,last_name,needs_glasses),slots!inner(id,starts_at,duration_min)")
+      .eq("status", "confirmed").is("actual_minutes", null).gte("slots.starts_at", since),
+    sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
+  ]);
+  if (error) throw error;
+  const now = Date.now();
+  const list = data.filter((b) => b.slots && addMin(b.slots.starts_at, b.slots.duration_min).getTime() > now)
+    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at)).slice(0, 5);
+  return el("div", { class: "card next-card" },
+    el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
+      el("h3", { style: "margin:0" }, "🚗 Nächste Fahrstunden"),
+      req.count ? el("button", { class: "btn small", onclick: () => goTab("requests") }, `${req.count} offene Anfrage${req.count === 1 ? "" : "n"} ›`) : null),
+    list.length ? list.map((b, i) => el("button", { class: "next-row" + (i === 0 ? " first" : ""), onclick: () => openAdminSlot(b.slots.id) },
+      countdownEl(b.slots.starts_at, b.slots.duration_min),
+      el("span", { class: "next-when" }, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
+      el("span", { class: "next-who" }, fullName(b.profiles) + (b.profiles && b.profiles.needs_glasses ? " 👓" : ""))))
+      : el("p", { class: "muted", style: "margin:8px 0 0" }, "Keine anstehenden bestätigten Fahrstunden."));
+}
 
 const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", "confirmed", "offered"].includes(b.status));
 
@@ -682,7 +780,6 @@ async function adminCalendar() {
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
 
-  const form = newSlotForm();
   const grid = weekGrid(slots, (s) => {
     const b = activeBooking(s);
     const notHeld = (s.bookings || []).filter((x) => NOT_HELD_ICON[x.status]).pop();
@@ -697,12 +794,16 @@ async function adminCalendar() {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
-    return el("button", { class: "slot " + cls, onclick: () => openAdminSlot(s.id) },
-      el("b", {}, fmtRange(s.starts_at, s.duration_min)), label);
-  }, (day) => { form.setDate(day); form.node.scrollIntoView({ behavior: "smooth" }); });
+    const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && !past;
+    return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
+      el("b", {}, fmtRange(s.starts_at, s.duration_min)), label,
+      upcoming ? el("div", {}, countdownEl(s.starts_at, s.duration_min, "small")) : null);
+  }, (day) => openSlotForm(day));
 
   return el("div", {},
-    form.node,
+    await nextLessonsCard(),
+    el("div", { class: "actions", style: "margin:0 0 12px" },
+      el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunden anlegen / freigeben")),
     weekBar(slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null),
     legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"]]),
     grid,
@@ -733,7 +834,7 @@ async function insertSlots(list) {
 const insertedMsg = ({ added, skipped }) =>
   `${added} Termin${added === 1 ? "" : "e"} freigegeben` + (skipped ? ` (${skipped} gab es schon)` : "") + ".";
 
-function newSlotForm() {
+function newSlotForm(opts = {}) {
   const date = el("input", { type: "date", value: dateInput(new Date()) });
   const dur = durationControl(state.settings.default_duration);
   // Wiederholen: aus = genau ein Tag; an = gewählte Wochentage bis zum Enddatum
@@ -857,7 +958,7 @@ function newSlotForm() {
     if (mode === "assign" && !student) throw new Error("Bitte einen Schüler auswählen");
     const res = await insertSlots(list);
     state.weekStart = startOfWeek(new Date(list[0].starts_at));
-    if (mode === "free") { toast(insertedMsg(res)); render(); return; }
+    if (mode === "free") { toast(insertedMsg(res)); closeModal(); render(); return; }
     // Zuordnen: dem Schüler anbieten (er sagt zu/ab) oder gleich fest eintragen
     if (!res.rows.length) throw new Error("Alle diese Termine gibt es schon – nichts eingetragen.");
     const note = reply.value.trim() || null;
@@ -878,8 +979,8 @@ function newSlotForm() {
   });
 
   refresh();
-  const node = el("div", { class: "card" },
-    el("h3", {}, "Neue Fahrstunden anlegen"),
+  const node = el("div", { class: opts.inModal ? "" : "card" },
+    opts.inModal ? null : el("h3", {}, "Neue Fahrstunden anlegen"),
     el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns),
     assignBox,
     el("label", {}, "Datum"), date,
@@ -1823,8 +1924,14 @@ function adminSettings() {
 
 async function studentCalendar() {
   const from = state.weekStart, to = addDays(state.weekStart, 7);
-  const { data, error } = await sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() });
+  const [{ data, error }, own] = await Promise.all([
+    sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
+    sb.from("bookings").select("status,actual_minutes,slots(starts_at,duration_min)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+  ]);
   if (error) throw error;
+  // Nächste eigene Fahrstunde mit Countdown
+  const nextOwn = (own.data || []).filter((b) => b.slots && b.actual_minutes === null && addMin(b.slots.starts_at, b.slots.duration_min).getTime() > Date.now())
+    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at))[0];
   const now = Date.now();
   // Freie und fremd angefragte (unbestätigte) Termine in der Zukunft + die eigenen.
   // Fremde bestätigte Fahrstunden liefert die Datenbank gar nicht erst.
@@ -1841,11 +1948,15 @@ async function studentCalendar() {
     const clickable = s.mine || (s.status === "free" && !past);
     return el("button", {
       class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
-      onclick: clickable ? () => (s.mine ? (state.tab = "mine", render()) : openBooking(s)) : null,
+      onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
     }, el("b", {}, fmtRange(s.starts_at, s.duration_min)), label);
   });
 
   return el("div", {},
+    nextOwn ? el("div", { class: "card next-card" },
+      el("div", { class: "next-row first", style: "cursor:default" },
+        countdownEl(nextOwn.slots.starts_at, nextOwn.slots.duration_min),
+        el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`))) : null,
     weekBar(),
     legend([["free", "frei – antippen zum Anfragen"], ["offered", "Angebot für dich"], ["requested", "von jemandem angefragt – schau später wieder rein"], ["confirmed mine", "deine Fahrstunden"]]),
     grid,

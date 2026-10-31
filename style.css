@@ -349,3 +349,27 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 }
 .repeat-toggle { background: #eaf6f7; border: 1px solid #bfe5e7; border-radius: 10px; padding: 10px 12px; margin-top: 14px; }
 .repeat-box { border-left: 4px solid var(--teal); padding: 2px 0 6px 12px; margin: 8px 0 4px; }
+
+/* Navigation: Zurück */
+.backbtn { margin: -4px 0 12px; }
+.modal-head { display: flex; align-items: center; gap: 8px; }
+.modal-head h3 { flex: 1; text-align: center; font-size: 16px; }
+.modal-head .back { border: none; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+@media (pointer: coarse) { .modal-head .back { min-height: 40px; } }
+
+/* Kalender: Anlegen-Knopf, Tag antippbar */
+.add-btn { width: 100%; font-size: 16px; padding: 12px 16px; background: var(--teal-text); border-color: var(--teal-text); }
+.day.tappable { cursor: pointer; }
+.day.tappable:hover { box-shadow: 0 0 0 2px #bfe5e7; }
+
+/* Nächste Fahrstunden + Countdown */
+.next-card { padding: 12px 14px; }
+.next-row { display: grid; grid-template-columns: auto 1fr; grid-template-areas: "cd when" "cd who"; gap: 0 12px; align-items: center; width: 100%;
+  text-align: left; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-top: 8px; font: inherit; color: var(--text); cursor: pointer; }
+.next-row .countdown { grid-area: cd; }
+.next-when { grid-area: when; font-weight: 600; font-size: 14px; }
+.next-who { grid-area: who; font-size: 14px; color: var(--muted); }
+.next-row.first { background: #e7f6f7; border-color: var(--teal); }
+.countdown { display: inline-block; background: var(--brand); color: #fff; border-radius: 999px; padding: 4px 10px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.next-row.first .countdown { background: var(--teal-text); font-size: 14px; padding: 6px 12px; }
+.countdown.small { padding: 1px 8px; font-size: 11px; margin-top: 4px; background: var(--brand); }
