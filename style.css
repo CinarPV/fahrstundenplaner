@@ -389,3 +389,18 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 
 /* „hidden“ gilt immer – auch bei Elementen mit display:flex o. ä. */
 [hidden] { display: none !important; }
+
+/* Prüfungen – auffällig in Gold/Orange */
+:root { --exam-bg: #fff4d6; --exam-fg: #7a4b00; --exam-bd: #f0b429; }
+.slot.exam { background: var(--exam-bg); color: var(--exam-fg); border: 2px solid var(--exam-bd); font-weight: 600; }
+.legend .slot.exam { border-width: 1px; }
+.exam-card { border: 2px solid var(--exam-bd); background: linear-gradient(180deg, var(--exam-bg), #fff 120px); }
+.exam-card h2, .exam-card h3 { color: var(--exam-fg); }
+.exam-banner { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; cursor: pointer;
+  border: 2px solid var(--exam-bd); background: var(--exam-bg); color: var(--exam-fg); }
+.exam-banner .exam-icon { font-size: 32px; line-height: 1; }
+.exam-banner .countdown { margin-left: auto; background: var(--exam-bd); color: #3d2600; }
+.exam-btn { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
+.tab[data-tab="exams"] { border-color: var(--exam-bd); }
+.tab[data-tab="exams"].active { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
+.countdown.ok { background: var(--teal); color: #fff; }

@@ -655,7 +655,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["settings", "Einstellungen"]]
+    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["exams", "🎓 Prüfungen"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -680,6 +680,7 @@ async function render() {
     else if (state.tab === "mine") view = await studentMine();
     else if (state.tab === "profile") view = studentProfile();
     else if (state.tab === "training") view = isAdmin() ? await adminTraining() : await studentTraining();
+    else if (state.tab === "exams") view = await adminExams();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -697,10 +698,11 @@ async function updateStudentNews(tabbar) {
 }
 
 async function updateRequestCount(tabbar) {
-  const [req, pend, canc] = await Promise.all([
+  const [req, pend, canc, exOpen] = await Promise.all([
     sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
     sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending"),
     sb.from("bookings").select("id", { count: "exact", head: true }).in("status", ["cancelled_student", "declined"]).gt("decided_at", getSeen("requests")),
+    sb.from("exams").select("id", { count: "exact", head: true }).is("result", null).lt("exam_at", new Date().toISOString()),
   ]);
   const badge = (tab, count) => {
     const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
@@ -709,6 +711,7 @@ async function updateRequestCount(tabbar) {
   badge("requests", (req.count || 0) + (state.tab === "requests" ? 0 : canc.count || 0));
   if (state.tab === "requests") markSeen("requests");
   badge("students", pend.count);
+  badge("exams", exOpen.count);  // Prüfung vorbei, Ergebnis fehlt
   // Erinnerung: Sicherung älter als 30 Tage
   const st = tabbar.querySelector('[data-tab="settings"]');
   if (st && backupOverdue()) st.append(el("span", { class: "count", title: "Datensicherung fällig" }, "!"));
@@ -757,19 +760,22 @@ function legend(items) {
   return el("div", { class: "legend" }, items.map(([cls, text]) => el("span", {}, el("i", { class: "slot " + cls, style: "padding:0;margin:0" }), text)));
 }
 
-function weekGrid(slots, renderSlot, onAddDay) {
+// extras: weitere Einträge im Kalender, z. B. Prüfungen – [{ at, node }]
+function weekGrid(slots, renderSlot, onAddDay, extras = []) {
   const today = new Date();
   const days = [];
   for (let i = 0; i < 7; i++) {
     const day = addDays(state.weekStart, i);
     const daySlots = slots.filter((s) => sameDay(new Date(s.starts_at), day));
+    const dayExtras = extras.filter((x) => sameDay(new Date(x.at), day)).map((x) => x.node);
     days.push(el("div", {
       class: "day" + (sameDay(day, today) ? " today" : "") + (onAddDay ? " tappable" : ""),
       onclick: onAddDay ? (e) => { if (!e.target.closest(".slot")) onAddDay(day); } : null,
     },
       el("div", { class: "day-head" }, el("span", {}, fmtDay(day)),
         onAddDay ? el("button", { class: "plus", title: "Termin an diesem Tag anlegen", onclick: (e) => { e.stopPropagation(); onAddDay(day); } }, "+") : null),
-      daySlots.length ? daySlots.map(renderSlot) : el("div", { class: "empty" }, "—"),
+      dayExtras,
+      daySlots.length ? daySlots.map(renderSlot) : dayExtras.length ? null : el("div", { class: "empty" }, "—"),
     ));
   }
   return el("div", { class: "week" }, days);
@@ -831,6 +837,12 @@ async function adminCalendar() {
     .select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
+  const { data: weekExams } = await sb.from("exams").select("id,kind,exam_at,result,student_id,profiles(id,first_name,last_name)")
+    .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at");
+  const examExtras = (weekExams || []).map((e) => ({ at: e.exam_at,
+    node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openExamModal(e.profiles || { id: e.student_id }); } },
+      el("b", {}, `🎓 ${fmtTime(e.exam_at)} Prüfung`), `${EXAM_KIND[e.kind]} · ${fullName(e.profiles)}`,
+      e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
 
   const grid = weekGrid(slots, (s) => {
     const b = activeBooking(s);
@@ -850,14 +862,14 @@ async function adminCalendar() {
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       el("b", {}, fmtRange(s.starts_at, s.duration_min)), label,
       upcoming ? el("div", {}, countdownEl(s.starts_at, s.duration_min, "small")) : null);
-  }, (day) => openSlotForm(day));
+  }, (day) => openSlotForm(day), examExtras);
 
   return el("div", {},
     await nextLessonsCard(),
     el("div", { class: "actions", style: "margin:0 0 12px" },
       el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunden anlegen / freigeben")),
     weekBar(slots.length ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null),
-    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"]]),
+    legend([["free", "frei"], ["requested", "angefragt – bitte bestätigen"], ["offered", "angeboten – Schüler muss zusagen"], ["confirmed", "bestätigt"], ["done", "gefahren ✓ / vergangen"], ["exam", "🎓 Prüfung"]]),
     grid,
   );
 }
@@ -1619,9 +1631,10 @@ async function openStudent(st) {
   del.onclick = () => busy(del, () => deleteStudent(st));
   const edit = el("button", { class: "btn small ghost", onclick: () => openEditStudent(st) }, "✏️ Daten bearbeiten");
   const training = el("button", { class: "btn small", onclick: () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); } }, "📈 Ausbildungsstand");
+  const examBtn = el("button", { class: "btn small exam-btn", onclick: () => document.querySelector("dialog .exam-card")?.scrollIntoView({ behavior: "smooth", block: "start" }) }, "🎓 Prüfung");
 
   openModal(fullName(st),
-    el("div", { class: "done-row" }, studentTags(st), training, edit),
+    el("div", { class: "done-row" }, studentTags(st), training, examBtn, edit),
     el("p", { class: "muted small" }, [st.email, st.phone].filter(Boolean).join(" · ")),
     el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
     el("p", { class: "small" }, specialSummary(data)),
@@ -2016,10 +2029,18 @@ function adminSettings() {
 
 async function studentCalendar() {
   const from = state.weekStart, to = addDays(state.weekStart, 7);
-  const [{ data, error }, own] = await Promise.all([
+  const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
     sb.from("bookings").select("status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+    sb.from("exams").select("id,kind,exam_at,result,note").eq("student_id", state.profile.id).order("exam_at"),
   ]);
+  const exams = myExams.data || [];
+  // Nächste Prüfung (ab heute) – groß oben anzeigen
+  const nextExam = exams.find((e) => !e.result && new Date(e.exam_at).getTime() > Date.now() - 6 * 3600000);
+  const examExtras = exams.map((e) => ({ at: e.exam_at,
+    node: el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); goTab("training"); } },
+      el("b", {}, `🎓 ${fmtTime(e.exam_at)} Prüfung`), EXAM_KIND[e.kind],
+      e.result ? el("div", {}, e.result === "passed" ? "🎉 Bestanden" : "✗ Nicht bestanden") : null) }));
   if (error) throw error;
   // Nächste eigene Fahrstunde mit Countdown
   const nextOwn = (own.data || []).filter((b) => b.slots && b.actual_minutes === null && addMin(b.slots.starts_at, b.slots.duration_min).getTime() > Date.now())
@@ -2042,9 +2063,14 @@ async function studentCalendar() {
       class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
       onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
     }, el("b", {}, fmtRange(s.starts_at, s.duration_min)), label);
-  });
+  }, null, examExtras);
 
   return el("div", {},
+    nextExam ? el("button", { class: "card exam-banner", onclick: () => goTab("training") },
+      el("span", { class: "exam-icon" }, "🎓"),
+      el("span", {}, el("b", {}, `Deine ${EXAM_KIND[nextExam.kind]}`), el("br"),
+        `${fmtDate(nextExam.exam_at)} um ${fmtTime(nextExam.exam_at)} Uhr`, nextExam.note ? ` · ${nextExam.note}` : ""),
+      countdownEl(nextExam.exam_at, 0)) : null,
     nextOwn ? el("div", { class: "card next-card" },
       el("div", { class: "next-row first", style: "cursor:default" },
         countdownEl(nextOwn.slots.starts_at, nextOwn.slots.duration_min),
@@ -2160,6 +2186,50 @@ async function examCard(student, editable) {
   }
   await draw();
   return box;
+}
+
+// Prüfungen eines Schülers als Fenster (aus Kalender, Prüfungs-Tab oder Schülerliste)
+async function openExamModal(student) {
+  state.renderOnClose = true;
+  openModal("🎓 Prüfungen – " + fullName(student), await examCard(student, true));
+}
+
+// Tab „Prüfungen“: alles auf einen Blick – Ergebnis fehlt, anstehend, zuletzt
+async function adminExams() {
+  const [{ data: exams, error }, { data: students, error: e2 }] = await Promise.all([
+    sb.from("exams").select("id,kind,exam_at,result,note,student_id,profiles(id,first_name,last_name,license_class)").order("exam_at"),
+    sb.from("profiles").select("id,first_name,last_name,license_class").eq("role", "student").in("status", ["active", "blocked"]).order("last_name"),
+  ]);
+  if (error) throw error;
+  if (e2) throw e2;
+  const now = Date.now();
+  const open = exams.filter((e) => !e.result && new Date(e.exam_at).getTime() <= now);
+  const next = exams.filter((e) => new Date(e.exam_at).getTime() > now);
+  const done = exams.filter((e) => e.result).reverse().slice(0, 10);
+  const row = (e) => el("button", { class: "next-row exam-row", onclick: () => openExamModal(e.profiles || { id: e.student_id }) },
+    new Date(e.exam_at).getTime() > now ? countdownEl(e.exam_at, 0) : el("span", { class: "countdown" + (e.result === "passed" ? " ok" : "") },
+      e.result === "passed" ? "🎉 Bestanden" : e.result === "failed" ? "✗ Nicht bestanden" : "Ergebnis?"),
+    el("span", { class: "next-when" }, `${fmtDay(e.exam_at)} ${fmtTime(e.exam_at)} · ${EXAM_KIND[e.kind]}`),
+    el("span", { class: "next-who" }, fullName(e.profiles)));
+
+  const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
+    students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
+  const add = el("button", { class: "btn" }, "➕ Prüfungstermin eintragen");
+  add.onclick = () => {
+    const st = students.find((x) => x.id === who.value);
+    if (!st) return toast("Bitte zuerst einen Schüler wählen.", true);
+    openExamModal(st);
+  };
+  return el("div", {},
+    el("div", { class: "card exam-card" },
+      el("h2", {}, "🎓 Prüfungen"),
+      el("p", { class: "muted small" }, "Prüfungstermin eintragen, nach der Prüfung „bestanden“ oder „nicht bestanden“ wählen. Bei „nicht bestanden“ trägst du gleich den nächsten Termin ein."),
+      el("div", { class: "done-row" }, el("span", { style: "flex:1;min-width:200px" }, who), add)),
+    open.length ? el("div", { class: "card", style: "border-color:var(--req-bd)" },
+      el("h3", {}, `⚠️ Ergebnis eintragen (${open.length})`), open.map(row)) : null,
+    el("div", { class: "card" }, el("h3", {}, "Anstehende Prüfungen"),
+      next.length ? next.map(row) : el("p", { class: "muted small" }, "Keine anstehenden Prüfungen.")),
+    done.length ? el("div", { class: "card" }, el("h3", {}, "Letzte Ergebnisse"), done.map(row)) : null);
 }
 
 /* ---------------- Fahrlehrer: Ausbildungsstand (Schüler wählen → abhaken) ---------------- */
