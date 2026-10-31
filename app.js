@@ -737,6 +737,12 @@ const LOGOS = {
   calroad: ["logo-calendar-road.svg", "8 · Kalender + Straße"],
   elanes: ["logo-e-lanes.svg", "9 · „E“ aus Fahrbahnen"],
   curve: ["logo-curve.svg", "10 · Kurve"],
+  weserif: ["logo-w-e-serif.svg", "11 · „E“ elegant (weiß)"],
+  wegeo: ["logo-w-e-futura.svg", "12 · „E“ geometrisch (weiß)"],
+  welanes: ["logo-w-e-lanes.svg", "13 · „E“ aus Fahrbahnen (weiß)"],
+  wcheck: ["logo-w-road-check.svg", "14 · Haken als Straße (weiß)"],
+  wclock: ["logo-w-wheel-clock.svg", "15 · Lenkrad-Uhr (weiß)"],
+  wseal: ["logo-w-seal.svg", "16 · Siegel (weiß)"],
 };
 function currentLogo() { try { return LOGOS[localStorage.getItem("fsp_logo")] ? localStorage.getItem("fsp_logo") : "wheel"; } catch { return "wheel"; } }
 function applyLogo() {
