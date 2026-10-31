@@ -115,6 +115,8 @@ create table if not exists public.exams (
 );
 create index if not exists exams_student_idx on public.exams (student_id, exam_at);
 alter table public.exams add column if not exists duration_min int not null default 55 check (duration_min between 5 and 600);
+-- Treffpunkt der Prüfung (z. B. TÜV-Station), getrennt vom Hinweis
+alter table public.exams add column if not exists meeting_point text check (char_length(meeting_point) <= 300);
 
 -- Ausbildungsthemen (eigene Formulierung, angelehnt an den gesetzlichen Ausbildungsplan).
 -- teacher_id NULL = Standardthemen für alle; später können Fahrlehrer eigene Themen/Strecken ergänzen.
@@ -496,11 +498,11 @@ begin
         n_skipped := n_skipped + 1;
         continue;
       end if;
-      insert into exams (id, student_id, kind, exam_at, duration_min, result, note, created_at)
+      insert into exams (id, student_id, kind, exam_at, duration_min, result, note, meeting_point, created_at)
       values ((r->>'id')::uuid, (r->>'student_id')::uuid, coalesce(r->>'kind', 'praxis'), (r->>'exam_at')::timestamptz,
-              coalesce((r->>'duration_min')::int, 55), r->>'result', r->>'note', coalesce((r->>'created_at')::timestamptz, now()))
+              coalesce((r->>'duration_min')::int, 55), r->>'result', r->>'note', r->>'meeting_point', coalesce((r->>'created_at')::timestamptz, now()))
       on conflict (id) do update set kind = excluded.kind, exam_at = excluded.exam_at, duration_min = excluded.duration_min,
-        result = excluded.result, note = excluded.note
+        result = excluded.result, note = excluded.note, meeting_point = excluded.meeting_point
         where student_teacher(exams.student_id) = me;
     exception when others then n_skipped := n_skipped + 1;
     end;

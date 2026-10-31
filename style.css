@@ -447,3 +447,6 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 /* Logo/Name oben führt zur Startseite (Kalender) */
 .topbar .brand { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
 .topbar .brand:active { opacity: .8; }
+/* Anlegen-Fenster: oben groß „Fahrstunde“ oder „Prüfung“ */
+.kind-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.kind-tabs .tab { padding: 12px 8px; font-size: 16px; font-weight: 700; text-align: center; }
