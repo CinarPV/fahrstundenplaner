@@ -441,3 +441,7 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 .past-bar:active { opacity: .85; }
 .past-days { display: grid; gap: 8px; }
 .past-days .day { opacity: .8; }
+
+/* Logo/Name oben führt zur Startseite (Kalender) */
+.topbar .brand { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
+.topbar .brand:active { opacity: .8; }

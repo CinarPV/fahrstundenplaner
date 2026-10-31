@@ -491,7 +491,7 @@ function renderWaiting() {
       : `Hallo ${p.first_name || ""}! Deine Anmeldung ist angekommen. Dein Fahrlehrer muss dich noch freischalten – danach siehst du hier den Kalender und kannst Fahrstunden anfragen.`),
     el("div", { class: "actions" },
       blocked ? null : el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen"),
-      el("button", { class: "btn ghost", onclick: async () => { await sb.auth.signOut(); renderAuth("login"); } }, "‹ Zur Anmeldung / anderes Konto")),
+      el("button", { class: "btn ghost", onclick: (e) => logout(e.currentTarget) }, "‹ Zur Anmeldung / anderes Konto")),
   ));
 }
 
@@ -502,9 +502,34 @@ function renderUserbox() {
     isAdmin() ? el("span", { class: "badge admin" }, isOwner() ? "Haupt-Admin" : "Fahrlehrer") : null,
     isAdmin() ? el("button", { class: "btn small", onclick: openLinkModal, "aria-label": "Schüler-Link", title: "Schüler-Link" }, "🔗", el("span", { class: "hide-sm" }, " Schüler-Link")) : null,
     !isAdmin() && state.settings.display_name ? el("span", { class: "small muted" }, "· Fahrlehrer " + state.settings.display_name) : null,
-    el("button", { class: "btn small ghost", onclick: async () => { await sb.auth.signOut(); } }, "Abmelden"),
+    el("button", { class: "btn small ghost", onclick: (e) => logout(e.currentTarget) }, "Abmelden"),
   ].filter(Boolean));
 }
+
+// Abmelden – klappt immer, auch ohne Netz oder mit abgelaufener Anmeldung:
+// erst auf diesem Gerät abmelden, die Sitzung beim Server nur nebenbei beenden.
+async function logout(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Abmelden …"; }
+  if (modal.open) modal.close();
+  const timeout = new Promise((r) => setTimeout(r, 3000));
+  try { await Promise.race([sb.auth.signOut({ scope: "local" }), timeout]); } catch { /* egal – unten wird trotzdem abgemeldet */ }
+  try { Object.keys(localStorage).filter((k) => k.startsWith("sb-")).forEach((k) => localStorage.removeItem(k)); } catch { /* privater Modus */ }
+  state.session = null;
+  state.tab = "calendar";
+  history.replaceState({}, "");
+  await loadUserAndRender();
+}
+
+// Klick auf „Easy Fahrstundenplaner“ oben → Startseite mit Kalender
+document.querySelector(".topbar .brand").addEventListener("click", () => {
+  if (!state.profile) return;
+  if (modal.open) modal.close();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (state.tab === "calendar") return render();
+  history.pushState({ tab: "calendar" }, "");
+  state.tab = "calendar";
+  render();
+});
 
 // Kürzel des Fahrlehrers aus dem Link (?l=…), auf diesem Gerät gemerkt
 function urlTeacherSlug() {
