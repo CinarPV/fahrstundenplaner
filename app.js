@@ -724,53 +724,6 @@ function addPasswordEye(input) {
 new MutationObserver(() => document.querySelectorAll('input[type="password"]:not([data-eye])').forEach(addPasswordEye))
   .observe(document.body, { childList: true, subtree: true });
 
-// Logo zum Ausprobieren: Lenkrad (Standard) oder Führerschein (Schwarz-Weiß) – nur auf diesem Gerät gespeichert
-const LOGOS = {
-  wheel: ["logo.svg", "Lenkrad (Standard)"],
-  license: ["logo-license.svg", "1 · Führerschein s/w"],
-  plain: ["logo-license-plain.svg", "2 · s/w ohne Haken"],
-  licwheel: ["logo-license-wheel.svg", "3 · Führerschein + Lenkrad"],
-  blue: ["logo-license-blue.svg", "5 · Führerschein in Blau"],
-  roadcheck: ["logo-road-check.svg", "6 · Haken als Straße"],
-  wheelclock: ["logo-wheel-clock.svg", "7 · Lenkrad-Uhr"],
-  calroad: ["logo-calendar-road.svg", "8 · Kalender + Straße"],
-  elanes: ["logo-e-lanes.svg", "9 · „E“ aus Fahrbahnen"],
-  curve: ["logo-curve.svg", "10 · Kurve"],
-  weserif: ["logo-w-e-serif.svg", "11 · „E“ elegant (weiß)"],
-  wegeo: ["logo-w-e-futura.svg", "12 · „E“ geometrisch (weiß)"],
-  welanes: ["logo-w-e-lanes.svg", "13 · „E“ aus Fahrbahnen (weiß)"],
-  wcheck: ["logo-w-road-check.svg", "14 · Haken als Straße (weiß)"],
-  wclock: ["logo-w-wheel-clock.svg", "15 · Lenkrad-Uhr (weiß)"],
-  wseal: ["logo-w-seal.svg", "16 · Siegel (weiß)"],
-  narrow: ["logo-n-e-arrow.svg", "17 · „E“ mit Pfeil"],
-  ntraffic: ["logo-n-traffic-e.svg", "18 · Ampel-„E“"],
-  npin: ["logo-n-pin.svg", "19 · Treffpunkt-Pin"],
-  ncal: ["logo-n-cal-wheel.svg", "20 · Kalender + Lenkrad"],
-  nsign: ["logo-n-sign.svg", "21 · Verkehrsschild „E“"],
-  ngeo: ["logo-n-e-geo.svg", "22 · „E“ Dunkelblau"],
-};
-function currentLogo() { try { return LOGOS[localStorage.getItem("fsp_logo")] ? localStorage.getItem("fsp_logo") : "wheel"; } catch { return "wheel"; } }
-function applyLogo() {
-  const src = LOGOS[currentLogo()][0];
-  document.querySelectorAll(".topbar .brand img").forEach((i) => (i.src = src));
-  const icon = document.querySelector('link[rel="icon"]');
-  if (icon) icon.href = src;
-}
-applyLogo();
-function logoCard() {
-  const box = el("div", { class: "chips" });
-  const draw = () => box.replaceChildren(...Object.entries(LOGOS).map(([k, [src, label]]) =>
-    el("button", { type: "button", class: "logo-pick" + (currentLogo() === k ? " active" : ""), onclick: () => {
-      try { localStorage.setItem("fsp_logo", k); } catch { /* privater Modus */ }
-      applyLogo(); draw();
-    } }, el("img", { src, alt: "" }), label)));
-  draw();
-  return el("div", { class: "card" },
-    el("h3", {}, "🎨 Logo (zum Ausprobieren)"),
-    el("p", { class: "muted small" }, "Ändert nur das Logo oben in der App – nur auf diesem Gerät. Jederzeit wieder auf „Lenkrad“ zurückstellbar. Das Symbol auf dem Startbildschirm bleibt vorerst das Lenkrad."),
-    box);
-}
-
 function installCard() {
   if (isInstalled()) return null;
   return el("div", { class: "card" },
@@ -2398,7 +2351,6 @@ function adminSettings() {
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
     installCard(),
-    logoCard(),
     passwordCard(),
   );
 }

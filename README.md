@@ -222,7 +222,7 @@ Unten auf jeder Seite stehen **© Kürsat Cinar** und die Links **Impressum**, *
 | `style.css` | Aussehen (immer helles Layout, auch auf dem Handy) |
 | `manifest.webmanifest`, `icons/` | App-Symbol und Einstellungen für „Zum Startbildschirm hinzufügen“ |
 | `sw.js` | Service Worker: macht die App installierbar und startet sie auch bei schlechtem Netz (Daten werden nie zwischengespeichert) |
-| `logo.svg` | Logo für Kopfzeile und Browser-Tab (kann durch ein eigenes ersetzt werden) |
+| `logo.svg` | Logo (Ampel-„E“) für Kopfzeile und Browser-Tab; App-Symbole in `icons/`. Das frühere Lenkrad-Logo liegt in `alt/` |
 | `legal.js` | Impressum, Datenschutzerklärung, Nutzungsbedingungen – oben stehen Anschrift und E-Mail |
 | `LICENSE` | Urheberrecht: © Kürsat Cinar, alle Rechte vorbehalten |
 | `config.js` | Verbindung zu Supabase (die zwei Werte aus Schritt 4) |
