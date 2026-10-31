@@ -404,3 +404,19 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 .tab[data-tab="exams"] { border-color: var(--exam-bd); }
 .tab[data-tab="exams"].active { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
 .countdown.ok { background: var(--teal); color: #fff; }
+
+/* Kontrolle: Liste zum Übertragen ins Fahrschulsystem */
+.control-day { margin-top: 10px; }
+.control-day-head { font-weight: 600; color: var(--brand); padding: 4px 0; border-bottom: 1px solid var(--border); }
+.control-row { display: grid; grid-template-columns: 28px 110px 1fr auto; gap: 8px; align-items: center; min-height: 44px; padding: 4px 2px; border-bottom: 1px dashed var(--border); cursor: pointer; margin: 0; font-weight: normal; }
+.control-row input { width: 22px; height: 22px; margin: 0; }
+.control-row .c-time { font-variant-numeric: tabular-nums; }
+.control-row .c-what { color: var(--muted); font-size: 14px; text-align: right; }
+.control-row.done { opacity: .55; }
+.control-row.done .c-name { text-decoration: line-through; }
+.control-row.late .c-what { color: #b42318; font-weight: 600; }
+@media (max-width: 560px) {
+  .control-row { grid-template-columns: 28px 1fr; row-gap: 0; }
+  .control-row .c-time { grid-column: 2; font-weight: 600; }
+  .control-row .c-name, .control-row .c-what { grid-column: 2; text-align: left; }
+}

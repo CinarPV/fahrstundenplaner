@@ -88,6 +88,8 @@ alter table public.bookings add column if not exists meeting_point  text check (
 alter table public.slots    add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
 -- Angeheftete Uhrzeiten beim Anlegen, z. B. "08:00,09:45,11:30"
 alter table public.settings add column if not exists time_presets   text check (char_length(time_presets) <= 400);
+-- Kontrolle: wann die Fahrstunde ins Fahrschulsystem übertragen wurde (NULL = noch nicht)
+alter table public.bookings add column if not exists transferred_at timestamptz;
 
 -- Prüfungen (Theorie/Praxis): Termin + Ergebnis; bei „nicht bestanden“ folgt ein neuer Termin
 create table if not exists public.exams (

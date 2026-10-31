@@ -655,7 +655,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["exams", "🎓 Prüfungen"], ["settings", "Einstellungen"]]
+    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["exams", "🎓 Prüfungen"], ["control", "Kontrolle"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -681,6 +681,7 @@ async function render() {
     else if (state.tab === "profile") view = studentProfile();
     else if (state.tab === "training") view = isAdmin() ? await adminTraining() : await studentTraining();
     else if (state.tab === "exams") view = await adminExams();
+    else if (state.tab === "control") view = await adminControl();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -2106,6 +2107,151 @@ function openBooking(s) {
     isLate(s.starts_at) ? el("div", { class: "notice danger" },
       "Kurzfristige Buchung: Die Absagefrist ist bereits abgelaufen. Wird diese Fahrstunde bestätigt, ist eine Absage kostenpflichtig.") : null,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+/* ---------------- Kontrolle: abgehakte Fahrstunden eines Monats – zum Übertragen ins Fahrschulsystem ---------------- */
+
+// Kalenderwoche nach ISO 8601 (Woche beginnt Montag)
+function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 3 - ((t.getUTCDay() + 6) % 7));
+  const w1 = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
+  return 1 + Math.round(((t - w1) / 86400000 - 3 + ((w1.getUTCDay() + 6) % 7)) / 7);
+}
+const monthName = (d) => d.toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+
+async function loadControlRows(from, to) {
+  const { data, error } = await sb.from("bookings")
+    .select("id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,transferred_at,profiles(first_name,last_name,license_class),slots!inner(starts_at,duration_min)")
+    .gte("slots.starts_at", from.toISOString()).lt("slots.starts_at", to.toISOString());
+  if (error) throw error;
+  // Gefahrene (abgehakte) Fahrstunden + kostenpflichtige Fehlstunden
+  return data.filter((b) => b.slots && ((b.status === "confirmed" && b.actual_minutes !== null) || b.late_cancel))
+    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
+}
+const controlKind = (b) => (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : "Fehlstunde (kostenpflichtig)");
+const sumLine = (list) => {
+  const driven = list.filter((b) => b.status === "confirmed");
+  const min = driven.reduce((s, b) => s + b.actual_minutes, 0);
+  const late = list.length - driven.length;
+  if (!driven.length) return `${late} Fehlstunde${late === 1 ? "" : "n"}`;
+  return `${driven.length} Termin${driven.length === 1 ? "" : "e"} · ${min} Min. · ${fmtLessons(min)}` + (late ? ` · ${late} Fehlstunde${late === 1 ? "" : "n"}` : "");
+};
+
+async function adminControl() {
+  const m = state.controlMonth || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  state.controlMonth = m;
+  const from = new Date(m.getFullYear(), m.getMonth(), 1), to = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+  const rows = await loadControlRows(from, to);
+  const openOnly = !!state.controlOpenOnly;
+  const shown = openOnly ? rows.filter((b) => !b.transferred_at) : rows;
+  const openCount = () => rows.filter((b) => !b.transferred_at).length;
+  const openInfo = el("b", {});
+  const updateOpen = () => (openInfo.textContent = openCount() ? `Noch zu übertragen: ${openCount()}` : "✓ Alles übertragen");
+  updateOpen();
+
+  async function setTransferred(list, on) {
+    const ids = list.map((b) => b.id);
+    const { error } = await sb.from("bookings").update({ transferred_at: on ? new Date().toISOString() : null }).in("id", ids);
+    if (error) throw error;
+    list.forEach((b) => (b.transferred_at = on ? new Date().toISOString() : null));
+  }
+  const rowEl = (b) => {
+    const box = el("input", { type: "checkbox", checked: !!b.transferred_at, "aria-label": "Ins Fahrschulsystem übertragen" });
+    const line = el("label", { class: "control-row" + (b.transferred_at ? " done" : "") + (b.status !== "confirmed" ? " late" : "") }, box,
+      el("span", { class: "c-time" }, fmtRange(b.slots.starts_at, b.slots.duration_min)),
+      el("span", { class: "c-name" }, fullName(b.profiles), b.profiles && b.profiles.license_class ? el("span", { class: "muted small" }, ` · ${b.profiles.license_class}`) : null),
+      el("span", { class: "c-what" }, b.status === "confirmed" ? `${b.actual_minutes} Min. · ${controlKind(b)}` : controlKind(b)));
+    box.addEventListener("change", async () => {
+      box.disabled = true;
+      try { await setTransferred([b], box.checked); line.classList.toggle("done", box.checked); updateOpen(); }
+      catch (e) { box.checked = !box.checked; fail(e); }
+      box.disabled = false;
+    });
+    return line;
+  };
+
+  // Nach Wochen, darin nach Tagen gruppieren
+  const weeks = [];
+  for (const b of shown) {
+    const d = new Date(b.slots.starts_at), ws = startOfWeek(d).getTime();
+    let w = weeks.find((x) => x.start === ws);
+    if (!w) weeks.push((w = { start: ws, list: [] }));
+    w.list.push(b);
+  }
+  const weekCard = (w) => {
+    const start = new Date(w.start), end = addDays(start, 6);
+    const allDone = w.list.every((b) => b.transferred_at);
+    const all = el("button", { class: "btn small ghost" }, allDone ? "Woche: alle Haken entfernen" : "✓ Ganze Woche übertragen");
+    all.onclick = () => busy(all, async () => { await setTransferred(w.list, !allDone); render(); });
+    const days = [];
+    for (const b of w.list) {
+      const key = dateInput(b.slots.starts_at);
+      let d = days.find((x) => x.key === key);
+      if (!d) days.push((d = { key, list: [] }));
+      d.list.push(b);
+    }
+    return el("div", { class: "card" },
+      el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
+        el("h3", { style: "margin:0" }, `KW ${isoWeek(start)} · ${fmtDay(start)} – ${fmtDay(end)}`), all),
+      el("p", { class: "muted small", style: "margin:4px 0 8px" }, sumLine(w.list)),
+      days.map((d) => el("div", { class: "control-day" },
+        el("div", { class: "control-day-head" }, new Date(d.list[0].slots.starts_at).toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit" }),
+          el("span", { class: "muted small" }, ` · ${sumLine(d.list)}`)),
+        d.list.map(rowEl))));
+  };
+
+  const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
+  const next = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); render(); } }, "›");
+  const now = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = null; render(); } }, "Dieser Monat");
+  const onlyOpen = el("input", { type: "checkbox", checked: openOnly });
+  onlyOpen.addEventListener("change", () => { state.controlOpenOnly = onlyOpen.checked; render(); });
+  const special = SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]} ${LESSON_TYPES[t]}: ${rows.filter((b) => b.status === "confirmed" && b.lesson_type === t).length}`).join(" · ");
+
+  return el("div", {},
+    el("div", { class: "card" },
+      el("h2", {}, "✅ Kontrolle"),
+      el("p", { class: "muted small" }, "Alle abgehakten Fahrstunden (und Fehlstunden) des Monats – nach Wochen und Tagen. Haken setzen, sobald die Fahrstunde im Fahrschulsystem eingetragen ist."),
+      el("div", { class: "done-row" }, prev, el("b", { style: "min-width:150px;text-align:center" }, monthName(m)), next, now),
+      el("p", { style: "margin:10px 0 4px" }, el("b", {}, "Monat: "), sumLine(rows)),
+      el("p", { class: "small", style: "margin:0 0 8px" }, special),
+      el("div", { class: "done-row" }, openInfo,
+        el("label", { class: "check", style: "margin:0" }, onlyOpen, el("span", {}, "Nur noch nicht übertragene zeigen"))),
+      el("div", { class: "actions" },
+        el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows) }, "📊 Monat als Excel-Liste"),
+        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows) }, "🖨️ Monat drucken / PDF"))),
+    weeks.length ? weeks.map(weekCard)
+      : el("p", { class: "muted" }, openOnly && rows.length ? "Alles übertragen – nichts mehr offen. 👍" : "In diesem Monat gibt es noch keine abgehakten Fahrstunden."));
+}
+
+const controlTable = (rows) => rows.map((b) => [
+  `KW ${isoWeek(new Date(b.slots.starts_at))}`, new Date(b.slots.starts_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }),
+  fmtRange(b.slots.starts_at, b.slots.duration_min), fullName(b.profiles), (b.profiles && b.profiles.license_class) || "",
+  b.status === "confirmed" ? b.actual_minutes : "", controlKind(b), b.transferred_at ? "ja" : ""]);
+const CONTROL_HEAD = ["KW", "Datum", "Uhrzeit", "Name", "Klasse", "Minuten", "Art", "Übertragen"];
+function exportControlCsv(m, rows) {
+  const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [CONTROL_HEAD.map(esc).join(";")].concat(controlTable(rows).map((r) => r.map(esc).join(";")));
+  downloadFile(csvBlob(lines), `Kontrolle_${m.getFullYear()}-${pad(m.getMonth() + 1)}.csv`);
+}
+function exportControlPrint(m, rows) {
+  const w = window.open("", "_blank");
+  if (!w) { toast("Bitte Pop-ups für diese Seite erlauben.", true); return; }
+  const d = w.document;
+  d.title = "Kontrolle " + monthName(m);
+  const st = d.createElement("style");
+  st.textContent = "body{font:13px system-ui,sans-serif;margin:24px;color:#111}h1{font-size:20px;margin:0 0 4px}table{border-collapse:collapse;width:100%;margin-top:12px}th,td{border:1px solid #bbb;padding:5px 7px;text-align:left}th{background:#eee}tr.kw td{background:#e6f2f8;font-weight:600}";
+  d.head.append(st);
+  const tag = (t, txt, cls) => { const e = d.createElement(t); if (txt !== undefined) e.textContent = txt; if (cls) e.className = cls; return e; };
+  const table = tag("table");
+  const hr = tag("tr"); CONTROL_HEAD.slice(1, 7).concat("✓").forEach((h) => hr.append(tag("th", h))); table.append(hr);
+  let lastKw = null;
+  controlTable(rows).forEach((r) => {
+    if (r[0] !== lastKw) { lastKw = r[0]; const tr = tag("tr", undefined, "kw"); const td = tag("td", r[0]); td.colSpan = 7; tr.append(td); table.append(tr); }
+    const tr = tag("tr"); r.slice(1).concat(r[7] ? "☑" : "☐").forEach((v, i) => { if (i !== 6) tr.append(tag("td", v)); }); table.append(tr);
+  });
+  d.body.append(tag("h1", `Kontrolle – ${monthName(m)}`), tag("div", `${state.settings.display_name || ""} · Stand: ${new Date().toLocaleDateString("de-DE")}`), tag("p", sumLine(rows)), table);
+  setTimeout(() => w.print(), 300);
 }
 
 /* ---------------- Prüfungen (Theorie/Praxis): Termin, bestanden ja/nein, ggf. neuer Termin ---------------- */
