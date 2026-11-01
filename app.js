@@ -756,6 +756,26 @@ function addPasswordEye(input) {
 new MutationObserver(() => document.querySelectorAll('input[type="password"]:not([data-eye])').forEach(addPasswordEye))
   .observe(document.body, { childList: true, subtree: true });
 
+// Hintergrund-Farbe der App – nur auf diesem Gerät gespeichert
+const BACKGROUNDS = [["", "Hell", "#f2f8fa"], ["mint", "Mint", "#d7f0f1"], ["teal", "Türkis", "#28B5B9"], ["navy", "Dunkelblau", "#0b3d5c"]];
+function backgroundCard() {
+  const cur = () => document.documentElement.dataset.bg || "";
+  const box = el("div", { class: "bg-picks" });
+  const draw = () => box.replaceChildren(...BACKGROUNDS.map(([key, label, color]) => el("button", {
+    type: "button", class: "bg-pick" + (cur() === key ? " active" : ""),
+    onclick: () => {
+      if (key) document.documentElement.dataset.bg = key; else delete document.documentElement.dataset.bg;
+      try { key ? localStorage.setItem("fsp_bg", key) : localStorage.removeItem("fsp_bg"); } catch { /* privater Modus */ }
+      draw();
+    },
+  }, el("i", { style: `background:${color}` }), label)));
+  draw();
+  return el("div", { class: "card" },
+    el("h3", {}, "🎨 Hintergrund"),
+    el("p", { class: "muted small" }, "Farbe hinter Kalender und Karten. Gilt nur auf diesem Gerät – jederzeit änderbar."),
+    box);
+}
+
 function installCard() {
   if (isInstalled()) return null;
   return el("div", { class: "card" },
@@ -2423,6 +2443,7 @@ function adminSettings() {
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
     installCard(),
+    backgroundCard(),
     passwordCard(),
   );
 }

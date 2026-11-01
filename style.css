@@ -23,7 +23,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
-  background: var(--bg); color: var(--text);
+  background: var(--page-bg, var(--bg)); color: var(--text);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 .container { max-width: 1100px; margin: 0 auto; padding: 16px; }
@@ -549,3 +549,26 @@ html.no-splash #splash { display: none; }
 .slot.ctl-late { background: #fdecec; color: #8a1f1f; border-color: #f2b8b8; }
 
 .slot-hint { font-size: 12px; font-style: italic; opacity: .85; margin-top: 2px; }
+
+/* ---------- Hintergrund-Farbe (Einstellungen, pro Gerät) ---------- */
+html[data-bg="mint"]  { --page-bg: #d7f0f1; }
+html[data-bg="teal"]  { --page-bg: linear-gradient(180deg, #2fb3b7 0%, #1f97a3 100%) fixed; }
+html[data-bg="navy"]  { --page-bg: linear-gradient(180deg, #0d4a6e 0%, #0b3d5c 100%) fixed; }
+/* Auf kräftigem Hintergrund: Schrift direkt auf der Fläche hell, Knöpfe auf der Fläche weiß hinterlegt */
+html[data-bg="teal"] .weekbar .title, html[data-bg="navy"] .weekbar .title,
+html[data-bg="teal"] #app > div > h2, html[data-bg="navy"] #app > div > h2,
+html[data-bg="teal"] .mine-h, html[data-bg="navy"] .mine-h { color: #fff; }
+html[data-bg="teal"] #app > div > p.muted, html[data-bg="navy"] #app > div > p.muted,
+html[data-bg="teal"] #app > div > .muted, html[data-bg="navy"] #app > div > .muted { color: rgba(255, 255, 255, .85); }
+html[data-bg="teal"] .weekbar .btn.ghost, html[data-bg="navy"] .weekbar .btn.ghost,
+html[data-bg="teal"] .backbtn, html[data-bg="navy"] .backbtn,
+html[data-bg="teal"] #app > div > .actions .btn.ghost, html[data-bg="navy"] #app > div > .actions .btn.ghost { background: #fff; }
+html[data-bg="teal"] h2, html[data-bg="teal"] .mine-h { border-left-color: #fff; }
+html[data-bg="teal"] .past-bar { background: #0b3d5c; border-color: #0b3d5c; box-shadow: none; }
+html[data-bg="navy"] .past-bar { background: var(--teal); }
+html[data-bg="teal"] .day, html[data-bg="navy"] .day { border-color: transparent; }
+/* Auswahl in den Einstellungen */
+.bg-picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; }
+.bg-pick { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 4px; border: 2px solid var(--border); border-radius: 12px; background: var(--card); font: inherit; font-size: 12px; cursor: pointer; color: var(--text); }
+.bg-pick i { width: 44px; height: 44px; border-radius: 10px; border: 1px solid rgba(0, 0, 0, .1); }
+.bg-pick.active { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); font-weight: 700; }
