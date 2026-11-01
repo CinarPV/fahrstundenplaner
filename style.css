@@ -689,3 +689,6 @@ html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first 
 .quick-btn .qi { flex: 0 0 38px; height: 38px; border-radius: 12px; background: rgba(255, 255, 255, .2); display: flex; align-items: center; justify-content: center; font-size: 19px; }
 .quick-btn b { display: block; font-size: 16px; }
 .quick-btn small { display: block; font-size: 12px; opacity: .9; }
+.tr-pill.tap { border: 1px solid var(--border); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; color: var(--text); }
+.tr-pill.tap.live { background: #2fb36d; color: #fff; border-color: #2fb36d; }
+.tr-pill.tap.over { background: #f5a623; color: #3d2600; border-color: #f5a623; }

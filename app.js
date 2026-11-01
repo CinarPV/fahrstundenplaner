@@ -1282,57 +1282,63 @@ async function adminToday() {
     toast(msg);
     render();
   };
-  // Kompakte Zeile pro Fahrstunde
+  // Kleines Fenster beim Tippen auf die Minuten: Dauer anpassen und abhaken (ab 45 Min. vor Beginn) oder Ausfall wählen
+  const openQuick = (s, b, canTick) => {
+    const p = b.profiles || {};
+    const dur = durationControl(s.duration_min);
+    const ok = el("button", { class: "btn ok inst-big" }, "✓ Gefahren – abhaken");
+    const syncOk = () => (ok.textContent = `✓ Gefahren – ${dur.value} Min. abhaken`);
+    dur.input.addEventListener("input", syncOk); syncOk();
+    ok.onclick = () => busy(ok, async () => { closeModal(); await save(b, { actual_minutes: dur.value, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${dur.value} Min. gefahren`); });
+    const keep = el("button", { class: "btn" }, "Dauer speichern");
+    keep.onclick = () => busy(keep, async () => {
+      const { error } = await sb.from("slots").update({ duration_min: dur.value }).eq("id", s.id);
+      if (error) throw error;
+      closeModal(); toast(`Dauer geändert: ${dur.value} Min.`); render();
+    });
+    const reason = ([v, t]) => el("button", { type: "button", class: "btn small ghost", onclick: async () => {
+      const late = v === "no_show" || (v !== "cancelled_teacher" && isLate(s.starts_at));
+      if (!confirm(`${fullName(p)} – ${STATUS_TEXT[v]}${late ? " (zählt als Fehlstunde)" : ""}. Speichern?`)) return;
+      closeModal();
+      try {
+        await save(b, { status: v, late_cancel: late, actual_minutes: null, decided_at: new Date().toISOString() }, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " – Fehlstunde" : ""}`);
+        if (v === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
+      } catch (e) { fail(e); }
+    } }, t);
+    openModal(`${fmtTime(s.starts_at)} Uhr · ${fullName(p)}`,
+      el("label", {}, canTick ? "Wie lange gefahren?" : "Geplante Dauer"), dur.node,
+      el("div", { class: "actions" }, canTick ? ok : keep),
+      canTick ? null : el("p", { class: "muted small", style: "margin:6px 0 0" }, "Abhaken geht ab 45 Minuten vor Beginn."),
+      el("hr"),
+      el("p", { class: "small", style: "margin:0 0 6px" }, el("b", {}, "✗ Nicht gefahren?")),
+      el("div", { class: "chips" }, NOT_HELD.map(reason)));
+  };
+  // Kompakte Zeile pro Fahrstunde – alles in einer Zeile
   const row = ({ s, b }) => {
     const start = new Date(s.starts_at).getTime(), end = start + s.duration_min * 60000;
     const p = b.profiles || {}, held = b.status === "confirmed", done = held && b.actual_minutes !== null;
     const meet = b.meeting_point || s.meeting_point || state.settings.meeting_point || "";
     const phase = !held ? "nothere" : done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
+    const canTick = held && !done && now >= start - 45 * 60000;   // abhaken frühestens 45 Min. vor Beginn
     const wa = waNumber(p.phone);
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
       el("span", { class: "tr-name" }, fullName(p), p.needs_glasses ? " 👓" : ""),
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
-        : phase === "live" ? el("span", { class: "tr-pill live" }, "läuft")
-        : phase === "next" ? el("span", { class: "tr-pill" }, `${s.duration_min} Min.`)
-        : el("span", { class: "tr-pill over" }, "abhaken"),
-      phase === "next" && wa ? el("a", { class: "tr-icon", title: "Bin gleich da (WhatsApp)", target: "_blank", rel: "noopener",
+        : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
+            onclick: () => openQuick(s, b, canTick) }, `${s.duration_min} Min. ✎`),
+      phase === "next" && !canTick && wa ? el("a", { class: "tr-icon", title: "Bin gleich da (WhatsApp)", target: "_blank", rel: "noopener",
         href: `https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${p.first_name || ""}, ich bin in ca. 5 Minuten am Treffpunkt.` + (meet ? ` 📍 ${meet}` : ""))}` }, "💬") : null,
-      // Schnell abhaken mit der geplanten Dauer (abweichende Minuten, Ausfall, Löschen: über „⋯“)
-      phase === "next" || phase === "live" || phase === "over" ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
+      // Schnell abhaken mit der geplanten Dauer
+      canTick ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
         try { await save(b, { actual_minutes: s.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${s.duration_min} Min. gefahren`); }
         catch (e) { btn.disabled = false; fail(e); }
       } }, "✓") : null,
       el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
-    if (phase === "done" || phase === "nothere") return el("div", { class: "tr " + phase }, head);
-    if (phase === "next") return el("div", { class: "tr next" }, head, meetLine);  // abhaken erst ab Beginn
-    // Abhaken: Minuten direkt anpassen, bestätigen – oder Ausfall-Grund wählen
-    let mins = s.duration_min;
-    const minEl = el("b", { class: "tr-min" }, `${mins} Min.`);
-    const step = (d) => el("button", { type: "button", class: "tr-step", onclick: () => { mins = Math.max(5, Math.min(600, mins + d)); minEl.textContent = `${mins} Min.`; } }, d > 0 ? `+${d}` : `−${-d}`);
-    const ok = el("button", { class: "btn small ok tr-ok" }, "✓ Gefahren");
-    ok.title = "Gefahren – mit der eingestellten Minutenzahl abhaken";
-    ok.onclick = () => busy(ok, () => save(b, { actual_minutes: mins, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${mins} Min. gefahren`));
-    const why = el("select", { class: "tr-why", "aria-label": "Nicht gefahren – Grund" },
-      el("option", { value: "" }, "✗"),
-      NOT_HELD.map(([v, t]) => el("option", { value: v }, t)));
-    why.addEventListener("change", async () => {
-      const v = why.value;
-      if (!v) return;
-      const late = v === "no_show" || (v !== "cancelled_teacher" && isLate(s.starts_at));
-      if (!confirm(`${fullName(p)} – ${STATUS_TEXT[v]}${late ? " (zählt als Fehlstunde)" : ""}. Speichern?`)) { why.value = ""; return; }
-      why.disabled = true;
-      try {
-        await save(b, { status: v, late_cancel: late, actual_minutes: null, decided_at: new Date().toISOString() }, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " – Fehlstunde" : ""}`);
-        if (v === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
-      }
-      catch (e) { fail(e); why.disabled = false; why.value = ""; }
-    });
-    return el("div", { class: "tr " + phase }, head, meetLine,
-      el("div", { class: "tr-act" }, step(-5), minEl, step(5), ok, why));
+    return el("div", { class: "tr " + phase }, head, phase === "done" || phase === "nothere" ? null : meetLine);
   };
   const examRow = (e) => el("div", { class: "tr exam" },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
