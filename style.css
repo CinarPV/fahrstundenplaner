@@ -662,3 +662,6 @@ html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first 
 .cl-row.sent { opacity: .55; }
 .cl-sum { display: flex; justify-content: space-between; padding: 10px 0 6px; font-weight: 700; font-size: 15px; }
 .cl-sum b { font-size: 17px; color: var(--brand); }
+
+.push-ask { margin: 8px 0 12px; padding-left: 4px; list-style: none; }
+.push-ask li { padding: 6px 10px; margin: 4px 0; background: var(--bg); border-radius: 10px; font-size: 14px; }

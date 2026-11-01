@@ -459,6 +459,7 @@ async function loadUserAndRender() {
   renderUserbox();
   render();
   if (isAdmin() && state.profile.status === "active") cleanupOldData();
+  setTimeout(maybeAskPush, 3600);  // nach dem Startbildschirm
 }
 
 // Daten älter als 15 Monate automatisch löschen – beim Fahrlehrer höchstens einmal am Tag (still im Hintergrund)
@@ -856,6 +857,35 @@ function pushCard() {
       ? "Sofort Bescheid bei neuen Anfragen, Ausnahme-Bitten, Absagen und Zusagen deiner Schüler."
       : "Sofort Bescheid, wenn dein Fahrlehrer bestätigt, ablehnt, etwas anbietet, absagt oder eine Prüfung einträgt."),
     box);
+}
+
+// Nach der Anmeldung EINMAL fragen, ob Mitteilungen erlaubt werden sollen – danach nie wieder (änderbar in Einstellungen/Profil)
+async function maybeAskPush() {
+  if (!state.profile || (!isAdmin() && !state.active) || state.profile.must_change_password) return;
+  if (!pushSupported() || Notification.permission !== "default" || document.querySelector("dialog[open]")) return;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  if (ios && !installed) return;  // iPhone: geht nur mit installierter App
+  const key = "fsp_push_asked_" + state.profile.id;
+  try { if (localStorage.getItem(key)) return; } catch { return; }
+  const remember = () => { try { localStorage.setItem(key, String(Date.now())); } catch { /* egal */ } };
+  const examples = isAdmin()
+    ? ["📥 Ein Schüler fragt eine Fahrstunde an", "⚠️ Ein Schüler bittet um eine Ausnahme", "❌ Ein Schüler sagt eine Fahrstunde ab", "✅ Ein Schüler nimmt dein Angebot an"]
+    : ["✅ Deine Fahrstunde wurde bestätigt", "📨 Dein Fahrlehrer bietet dir eine Fahrstunde an", "❌ Eine Fahrstunde wurde abgesagt oder abgelehnt", "🎓 Dein Prüfungstermin wurde eingetragen"];
+  const yes = el("button", { class: "btn ok" }, "🔔 Ja, Mitteilungen erlauben");
+  yes.onclick = () => busy(yes, async () => {
+    remember();
+    await enablePush();
+    closeModal();
+    toast("🔔 Mitteilungen sind an – du bekommst ab jetzt Bescheid.");
+  });
+  openModal("🔔 Mitteilungen erlauben?",
+    el("p", {}, "Damit du nichts verpasst, kann dir der Easy Fahrstundenplaner eine ", el("b", {}, "Mitteilung aufs Handy"), " schicken – auch wenn die App geschlossen ist. Zum Beispiel:"),
+    el("ul", { class: "push-ask" }, examples.map((t) => el("li", {}, t))),
+    el("p", { class: "muted small" }, "Gleich fragt dein Handy noch einmal nach – bitte dort auf „Erlauben“ tippen. Ausschalten kannst du die Mitteilungen jederzeit unter " + (isAdmin() ? "„Einstellungen“." : "„Profil“.")),
+    el("div", { class: "actions" }, yes, el("button", { class: "btn ghost", onclick: () => {
+      remember(); closeModal();
+      toast(`Kein Problem – du kannst Mitteilungen jederzeit unter ${isAdmin() ? "„Einstellungen“" : "„Profil“"} einschalten.`);
+    } }, "Nein, danke")));
 }
 
 // Tab „☀️ Heute“ ein-/ausschalten (pro Fahrlehrer gespeichert)
