@@ -358,6 +358,10 @@ function closeModal() {
 
 /* ---------------- Navigation (Tabs, Zurück) ---------------- */
 
+// Startseite: für Fahrlehrer „☀️ Heute“ (außer ausgeschaltet), sonst der Kalender
+const showToday = () => isAdmin() && !state.settings.hide_today;
+const homeTab = () => (showToday() ? "today" : "calendar");
+
 // Tab wechseln und im Verlauf merken, damit „Zurück“ funktioniert
 function goTab(id) {
   if (state.tab === id) return render();
@@ -367,12 +371,12 @@ function goTab(id) {
 }
 // Sichtbare Zurück-Taste: eine Seite zurück, sonst zum Kalender
 function goBack() {
-  if (history.state && history.state.tab && history.state.tab !== "calendar" && history.length > 1) history.back();
-  else goTab("calendar");
+  if (history.state && history.state.tab && history.state.tab !== homeTab() && history.length > 1) history.back();
+  else goTab(homeTab());
 }
 window.addEventListener("popstate", (e) => {
   if (modal.open) { modal.close(); return; }
-  const tab = (e.state && e.state.tab) || "calendar";
+  const tab = (e.state && e.state.tab) || homeTab();
   if (state.profile && tab !== state.tab) { state.tab = tab; render(); }
 });
 // Fenster mit Esc geschlossen → Verlaufseintrag mitnehmen
@@ -451,7 +455,7 @@ async function loadUserAndRender() {
     // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
     state.active = profile.role === "teacher" ? profile.status === "active" : !!(await sb.rpc("is_active")).data;
   } catch (e) { fail(e); }
-  state.tab = "calendar";
+  state.tab = homeTab();
   renderUserbox();
   render();
   if (isAdmin() && state.profile.status === "active") cleanupOldData();
@@ -538,14 +542,15 @@ async function logout(btn) {
   await loadUserAndRender();
 }
 
-// Klick auf „Easy Fahrstundenplaner“ oben → Startseite mit Kalender
+// Klick auf „Easy Fahrstundenplaner“ oben → Startseite (Heute bzw. Kalender)
 document.querySelector(".topbar .brand").addEventListener("click", () => {
   if (!state.profile) return;
   if (modal.open) modal.close();
   window.scrollTo({ top: 0, behavior: "smooth" });
-  if (state.tab === "calendar") return render();
-  history.pushState({ tab: "calendar" }, "");
-  state.tab = "calendar";
+  const home = homeTab();
+  if (state.tab === home) return render();
+  history.pushState({ tab: home }, "");
+  state.tab = home;
   render();
 });
 
@@ -855,19 +860,19 @@ function pushCard() {
 
 // Tab „☀️ Heute“ ein-/ausschalten (pro Fahrlehrer gespeichert)
 function todayCard() {
-  const box = el("input", { type: "checkbox", checked: !!state.settings.show_today });
+  const box = el("input", { type: "checkbox", checked: !state.settings.hide_today });
   box.addEventListener("change", async () => {
     box.disabled = true;
-    const { error } = await sb.from("settings").update({ show_today: box.checked }).eq("teacher_id", state.profile.id);
+    const { error } = await sb.from("settings").update({ hide_today: !box.checked }).eq("teacher_id", state.profile.id);
     box.disabled = false;
     if (error) { box.checked = !box.checked; return fail(error); }
-    state.settings.show_today = box.checked;
-    toast(box.checked ? "☀️ Tab „Heute“ ist jetzt oben neben „Kalender“." : "Tab „Heute“ ausgeblendet.");
+    state.settings.hide_today = !box.checked;
+    toast(box.checked ? "☀️ „Heute“ ist wieder deine Startseite." : "Tab „Heute“ ausgeblendet – Startseite ist der Kalender.");
     render();
   });
   return el("div", { class: "card" },
     el("h3", {}, "☀️ Heute-Ansicht"),
-    el("label", { class: "check" }, box, el("span", {}, el("b", {}, "Tab „Heute“ anzeigen"),
+    el("label", { class: "check" }, box, el("span", {}, el("b", {}, "Tab „Heute“ anzeigen (Startseite)"),
       " – deine Fahrstunden von heute und morgen kompakt untereinander. Direkt abhaken (Minuten anpassen) oder „nicht gefahren“ mit Grund wählen. Wischen wechselt den Tag.")));
 }
 
@@ -913,14 +918,14 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? [["calendar", "Kalender"]].concat(state.settings.show_today ? [["today", "☀️ Heute"]] : []).concat([["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
+    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"],["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
       .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
     el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => goTab(id) }, label)));
   const content = el("div", {}, el("p", { class: "muted" }, "Lädt …"));
-  const back = state.tab !== "calendar"
+  const back = state.tab !== homeTab()
     ? el("button", { class: "btn small ghost backbtn", onclick: goBack }, "‹ Zurück") : null;
   app.replaceChildren(...[tabbar, back, content].filter(Boolean));
   if (!history.state || !history.state.tab) history.replaceState({ tab: state.tab }, "");
@@ -1302,29 +1307,6 @@ function countdownEl(start, durMin, cls = "") {
 }
 setInterval(() => document.querySelectorAll(".countdown").forEach((e) => (e.textContent = countdownText(e.dataset.start, +e.dataset.dur))), 30000);
 
-// Nächste bestätigte Fahrstunden des Fahrlehrers – mit wem und wann
-async function nextLessonsCard() {
-  const since = addMin(new Date(), -180).toISOString();
-  const [{ data, error }, req] = await Promise.all([
-    sb.from("bookings").select("id,profiles(first_name,last_name,needs_glasses),slots!inner(id,starts_at,duration_min)")
-      .eq("status", "confirmed").is("actual_minutes", null).gte("slots.starts_at", since),
-    sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
-  ]);
-  if (error) throw error;
-  const now = Date.now();
-  const list = data.filter((b) => b.slots && addMin(b.slots.starts_at, b.slots.duration_min).getTime() > now)
-    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at)).slice(0, 5);
-  return el("div", { class: "card next-card" },
-    el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
-      el("h3", { style: "margin:0" }, "🚗 Nächste Fahrstunden"),
-      req.count ? el("button", { class: "btn small", onclick: () => goTab("requests") }, `${req.count} offene Anfrage${req.count === 1 ? "" : "n"} ›`) : null),
-    list.length ? list.map((b, i) => el("button", { class: "next-row" + (i === 0 ? " first" : ""), onclick: () => openAdminSlot(b.slots.id) },
-      countdownEl(b.slots.starts_at, b.slots.duration_min),
-      el("span", { class: "next-when" }, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
-      el("span", { class: "next-who" }, fullName(b.profiles) + (b.profiles && b.profiles.needs_glasses ? " 👓" : ""))))
-      : el("p", { class: "muted", style: "margin:8px 0 0" }, "Keine anstehenden bestätigten Fahrstunden."));
-}
-
 const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", "confirmed", "offered"].includes(b.status));
 
 async function adminCalendar() {
@@ -1364,7 +1346,6 @@ async function adminCalendar() {
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras));
 
   return el("div", {},
-    await nextLessonsCard(),
     el("div", { class: "actions", style: "margin:0 0 12px" },
       el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunde / Prüfung anlegen")),
     weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
@@ -2873,14 +2854,16 @@ async function loadControlRows(from, to) {
     .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
 }
 const controlKind = (b) => (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : "Fehlstunde (kostenpflichtig)");
+// Zusammenfassung: Anzahl Fahrstunden und Minuten (bewusst nur Minuten, keine Stunden-Umrechnung)
 const sumLine = (list) => {
   const driven = list.filter((b) => b.status === "confirmed");
   const min = driven.reduce((s, b) => s + b.actual_minutes, 0);
   const late = list.length - driven.length;
-  if (!driven.length) return `${late} Fehlstunde${late === 1 ? "" : "n"}`;
-  return `${driven.length} Termin${driven.length === 1 ? "" : "e"} · ${min} Min. · ${fmtLessons(min)}` + (late ? ` · ${late} Fehlstunde${late === 1 ? "" : "n"}` : "");
+  return [driven.length ? `${driven.length} Fahrstunde${driven.length === 1 ? "" : "n"} · ${min} Min.` : "",
+    late ? `${late} Fehlstunde${late === 1 ? "" : "n"}` : ""].filter(Boolean).join(" · ");
 };
 
+// Kontrolle: schlichte Monatsliste Tag für Tag – wer, wann, wie lange; Tages- und Monatsminuten (für die Abrechnung)
 async function adminControl() {
   const m = state.controlMonth || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   state.controlMonth = m;
@@ -2889,91 +2872,70 @@ async function adminControl() {
   const openOnly = !!state.controlOpenOnly;
   const shown = openOnly ? rows.filter((b) => !b.transferred_at) : rows;
   const openCount = () => rows.filter((b) => !b.transferred_at).length;
-  const openInfo = el("b", {});
+  const openInfo = el("span", { class: "small" });
   const updateOpen = () => (openInfo.textContent = openCount() ? `Noch zu übertragen: ${openCount()}` : "✓ Alles übertragen");
   updateOpen();
 
   async function setTransferred(list, on) {
-    const ids = list.map((b) => b.id);
-    const { error } = await sb.from("bookings").update({ transferred_at: on ? new Date().toISOString() : null }).in("id", ids);
+    const { error } = await sb.from("bookings").update({ transferred_at: on ? new Date().toISOString() : null }).in("id", list.map((b) => b.id));
     if (error) throw error;
     list.forEach((b) => (b.transferred_at = on ? new Date().toISOString() : null));
   }
-  // Eine Fahrstunde wie im Kalender: Beginn links, Dauer rechts, darunter der Name; rechts Haken „übertragen“
-  const rowEl = (b) => {
+  // Eine Zeile: Uhrzeit · Name · Minuten · Haken „übertragen“
+  const line = (b) => {
     const ok = b.status === "confirmed";
-    const box = el("input", { type: "checkbox", checked: !!b.transferred_at, "aria-label": "Ins Fahrschulsystem übertragen" });
-    const entry = el("div", { class: "slot ctl " + (ok ? "done" : "ctl-late") + (b.transferred_at ? " transferred" : "") },
-      el("div", { class: "ctl-main" },
-        // nur das Nötige: Beginn, Dauer, Schüler (Fehlstunde mit Hinweis)
-        slotHead(`${fmtTime(b.slots.starts_at)} Uhr`, ok ? `${b.actual_minutes} Min.` : "Fehlstunde"),
-        el("div", {}, fullName(b.profiles)),
-        ok ? null : el("div", { class: "small" }, "kostenpflichtig" + (b.cancel_reason ? ` · ${b.cancel_reason}` : ""))),
-      el("label", { class: "ctl-check" }, box, el("span", {}, "übertragen")));
+    const box = el("input", { type: "checkbox", checked: !!b.transferred_at, title: "Ins Fahrschulsystem übertragen", "aria-label": "Übertragen" });
+    const row = el("label", { class: "cl-row" + (ok ? "" : " late") + (b.transferred_at ? " sent" : "") },
+      el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
+      el("span", { class: "cl-name" }, fullName(b.profiles)),
+      el("b", { class: "cl-min" }, ok ? `${b.actual_minutes} Min.` : "Fehlstunde"),
+      box);
     box.addEventListener("change", async () => {
       box.disabled = true;
-      try { await setTransferred([b], box.checked); entry.classList.toggle("transferred", box.checked); updateOpen(); }
+      try { await setTransferred([b], box.checked); row.classList.toggle("sent", box.checked); updateOpen(); }
       catch (e) { box.checked = !box.checked; fail(e); }
       box.disabled = false;
     });
-    return entry;
+    return row;
   };
-
-  // Ganzer Monat wie im Kalender: jede Woche (KW) mit allen Tagen untereinander, leere Tage schmal
-  const today = new Date();
-  const weeks = [];
-  for (let ws = startOfWeek(from); ws < to; ws = addDays(ws, 7)) {
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const day = addDays(ws, i);
-      if (day < from || day >= to) continue;
-      days.push({ day, list: shown.filter((b) => sameDay(new Date(b.slots.starts_at), day)) });
-    }
-    weeks.push({ start: ws, days, list: days.flatMap((d) => d.list) });
+  // Nach Tagen gruppieren (nur Tage mit Fahrstunden)
+  const days = [];
+  for (const b of shown) {
+    const key = dateInput(b.slots.starts_at);
+    let d = days.find((x) => x.key === key);
+    if (!d) days.push((d = { key, list: [] }));
+    d.list.push(b);
   }
-  // Kurz für die Tageszeile: „2 × · 180 Min.“ bzw. Fehlstunden
-  const daySum = (list) => {
-    const min = list.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.actual_minutes, 0), late = list.filter((b) => b.status !== "confirmed").length;
-    return [min ? `${min} Min.` : "", late ? `${late} Fehlstd.` : ""].filter(Boolean).join(" · ");
-  };
-  const weekCard = (w) => {
-    const start = new Date(w.start), end = addDays(start, 6);
-    const allDone = w.list.length && w.list.every((b) => b.transferred_at);
-    const all = w.list.length ? el("button", { class: "btn small ghost" }, allDone ? "Woche: alle Haken entfernen" : "✓ Ganze Woche übertragen") : null;
-    if (all) all.onclick = () => busy(all, async () => { await setTransferred(w.list, !allDone); render(); });
-    const days = openOnly ? w.days.filter((d) => d.list.length) : w.days;
-    return el("div", { class: "card ctl-week" },
-      el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
-        el("h3", { style: "margin:0" }, `KW ${isoWeek(start)} · ${fmtDay(start)} – ${fmtDay(end)}`), all),
-      el("p", { class: "muted small", style: "margin:4px 0 8px" }, w.list.length ? sumLine(w.list) : "Keine Fahrstunden"),
-      el("div", { class: "ctl-days" }, days.map((d) => el("div", { class: "day" + (sameDay(d.day, today) ? " today" : "") },
-        el("div", { class: "day-head" }, el("span", {}, fmtDay(d.day)),
-          d.list.length ? el("span", { class: "ctl-sum" }, daySum(d.list)) : null),
-        d.list.length ? d.list.map(rowEl) : el("div", { class: "empty" }, "—")))));
-  };
+  const dayMin = (list) => list.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.actual_minutes, 0);
+  const driven = rows.filter((b) => b.status === "confirmed"), totalMin = dayMin(rows), late = rows.length - driven.length;
 
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
   const next = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); render(); } }, "›");
-  const now = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = null; render(); } }, "Dieser Monat");
   const onlyOpen = el("input", { type: "checkbox", checked: openOnly });
   onlyOpen.addEventListener("change", () => { state.controlOpenOnly = onlyOpen.checked; render(); });
-  const special = SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]} ${LESSON_TYPES[t]}: ${rows.filter((b) => b.status === "confirmed" && b.lesson_type === t).length}`).join(" · ");
+  const totals = el("div", { class: "cl-totals" },
+    el("div", {}, el("b", {}, String(driven.length)), el("span", {}, "Fahrstunden")),
+    el("div", {}, el("b", {}, String(totalMin)), el("span", {}, "Minuten")),
+    late ? el("div", { class: "warn" }, el("b", {}, String(late)), el("span", {}, late === 1 ? "Fehlstunde" : "Fehlstunden")) : null);
 
   return el("div", {},
     el("div", { class: "card" },
-      el("h2", {}, "✅ Kontrolle"),
-      el("p", { class: "muted small" }, "Alle gefahrenen Fahrstunden (und Fehlstunden) des Monats – Tag für Tag wie im Kalender. Haken „übertragen“ setzen, sobald die Fahrstunde im Fahrschulsystem eingetragen ist."),
-      el("div", { class: "done-row" }, prev, el("b", { style: "min-width:150px;text-align:center" }, monthName(m)), next, now),
-      el("p", { style: "margin:10px 0 4px" }, el("b", {}, "Monat: "), sumLine(rows)),
-      el("p", { class: "small", style: "margin:0 0 8px" }, special),
-      el("div", { class: "done-row" }, openInfo,
-        el("label", { class: "check", style: "margin:0" }, onlyOpen, el("span", {}, "Nur noch nicht übertragene zeigen"))),
+      el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 10px" },
+        prev, el("b", { style: "font-size:17px" }, monthName(m)), next),
+      totals,
+      el("div", { class: "done-row", style: "justify-content:space-between;margin:10px 0 0" }, openInfo,
+        el("label", { class: "check", style: "margin:0" }, onlyOpen, el("span", { class: "small" }, "Nur nicht übertragene"))),
       el("div", { class: "actions" },
-        el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows) }, "📊 Monat als Excel-Liste"),
-        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows) }, "🖨️ Monat drucken / PDF"))),
-    !rows.length ? el("p", { class: "muted" }, "In diesem Monat gibt es noch keine abgehakten Fahrstunden.")
-      : openOnly && !shown.length ? el("p", { class: "muted" }, "Alles übertragen – nichts mehr offen. 👍")
-      : weeks.filter((w) => !openOnly || w.list.length).map(weekCard));
+        el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows) }, "📊 Excel"),
+        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows) }, "🖨️ Drucken / PDF"))),
+    days.length ? el("div", { class: "card cl-list" },
+      days.map((d) => el("div", { class: "cl-day" },
+        el("div", { class: "cl-head" },
+          el("span", {}, new Date(d.list[0].slots.starts_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })),
+          el("b", {}, dayMin(d.list) ? `${dayMin(d.list)} Min.` : "–")),
+        d.list.map(line))),
+      el("div", { class: "cl-sum" }, el("span", {}, `Monat gesamt · ${driven.length} Fahrstunde${driven.length === 1 ? "" : "n"}` + (late ? ` · ${late} Fehlstd.` : "")), el("b", {}, `${totalMin} Min.`)))
+      : el("p", { class: "muted" }, openOnly && rows.length ? "Alles übertragen – nichts mehr offen. 👍" : "In diesem Monat gibt es noch keine gefahrenen Fahrstunden."));
 }
 
 const controlTable = (rows) => rows.map((b) => [

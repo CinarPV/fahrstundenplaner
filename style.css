@@ -643,3 +643,22 @@ html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first 
 .tr-min { min-width: 58px; text-align: center; font-size: 14px; }
 .tr-ok { margin-left: auto; padding: 6px 10px; white-space: nowrap; }
 .tr-why { width: 46px; flex: 0 0 46px; padding: 5px 4px; font-size: 15px; border-radius: 8px; color: #c0392b; font-weight: 700; text-align: center; }
+
+/* Kontrolle: schlichte Monatsliste */
+.cl-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; }
+.cl-totals > div { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 8px; text-align: center; }
+.cl-totals b { display: block; font-size: 22px; color: var(--brand); }
+.cl-totals span { font-size: 12px; color: var(--muted); }
+.cl-totals .warn b { color: #c0392b; }
+.cl-list { padding: 6px 12px; }
+.cl-day { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.cl-head { display: flex; justify-content: space-between; font-weight: 700; color: var(--brand); font-size: 14px; margin-bottom: 2px; }
+.cl-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 14px; margin: 0; cursor: pointer; }
+.cl-time { width: 44px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-min { font-variant-numeric: tabular-nums; }
+.cl-row input { width: 20px; height: 20px; margin: 0; }
+.cl-row.late .cl-min { color: #c0392b; font-weight: 700; }
+.cl-row.sent { opacity: .55; }
+.cl-sum { display: flex; justify-content: space-between; padding: 10px 0 6px; font-weight: 700; font-size: 15px; }
+.cl-sum b { font-size: 17px; color: var(--brand); }
