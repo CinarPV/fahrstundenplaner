@@ -117,6 +117,24 @@ function studentTags(p) {
   return tags.length ? el("span", { class: "tags" }, tags) : null;
 }
 // "Admin" = Fahrlehrer (verwaltet eigene Schüler); "Owner" = Haupt-Admin (legt Fahrlehrer an)
+// Befristung: Tage bis zum Ablauf (negativ = abgelaufen); Schüler haben danach 28 Tage Schonfrist
+const GRACE_DAYS = 28;
+const daysLeft = (until) => (until ? Math.round((new Date(until + "T12:00:00") - dayStart(new Date()).getTime() - 12 * 3600000) / 86400000) : null);
+const fmtUntil = (until) => new Date(until + "T12:00:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+// Status-Text + Art für Schüler (student=true) oder Fahrlehrer
+function accessInfo(until, student) {
+  if (!until) return { text: "unbegrenzt", cls: "ok" };
+  const d = daysLeft(until);
+  if (d >= 0) return { text: d <= 30 ? `läuft in ${d} Tag${d === 1 ? "" : "en"} ab (${fmtUntil(until)})` : `gültig bis ${fmtUntil(until)}`, cls: d <= 30 ? "warn" : "ok" };
+  if (student && d >= -GRACE_DAYS) return { text: `abgelaufen – Sperre in ${GRACE_DAYS + d} Tag${GRACE_DAYS + d === 1 ? "" : "en"}`, cls: "warn" };
+  return { text: `abgelaufen am ${fmtUntil(until)}${student ? " – archiviert" : " – gesperrt"}`, cls: "bad" };
+}
+const addMonths = (until, n) => {
+  const base = until && daysLeft(until) >= 0 ? new Date(until + "T12:00:00") : new Date();
+  base.setMonth(base.getMonth() + n);
+  return dateInput(base);
+};
+
 const isAdmin = () => !!state.profile && state.profile.role === "teacher" && state.profile.status === "active";
 const isOwner = () => isAdmin() && state.profile.is_owner;
 // Fahrschul-Admin: vom Haupt-Admin angelegt, verwaltet die Fahrlehrer seiner eigenen Fahrschule
@@ -460,7 +478,7 @@ async function loadUserAndRender() {
       if (settings) state.settings = settings;
     }
     // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
-    state.active = profile.role === "teacher" ? profile.status === "active" : !!(await sb.rpc("is_active")).data;
+    state.active = !!(await sb.rpc(profile.role === "teacher" ? "is_teacher" : "is_active")).data;
   } catch (e) { fail(e); }
   state.tab = homeTab();
   renderUserbox();
@@ -507,6 +525,20 @@ function renderForcePassword() {
 
 function renderWaiting() {
   const p = state.profile;
+  // Zugang abgelaufen (Befristung)?
+  if (p.status === "active" && (p.role === "teacher" || p.teacher_id)) {
+    app.replaceChildren(el("div", { class: "card narrow" },
+      el("h2", {}, "⏳ Zugang abgelaufen"),
+      el("p", {}, p.role === "teacher"
+        ? (p.school_id
+          ? "Die Laufzeit deines Zugangs ist abgelaufen. Bitte wende dich an deine Fahrschule, um sie zu verlängern. Deine Daten und Schüler bleiben gespeichert."
+          : "Die Laufzeit deines Zugangs ist abgelaufen. Bitte wende dich an den Betreiber der App, um sie zu verlängern. Deine Daten und Schüler bleiben gespeichert.")
+        : "Dein Zugang ist abgelaufen. Bitte wende dich an deinen Fahrlehrer – er kann ihn mit einem Tipp verlängern. Deine Fahrstunden bleiben gespeichert."),
+      el("div", { class: "actions" },
+        el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen"),
+        el("button", { class: "btn ghost", onclick: (e) => logout(e.currentTarget) }, "‹ Zur Anmeldung / anderes Konto"))));
+    return;
+  }
   const blocked = p.status !== "pending";
   const noTeacher = p.role === "student" && !p.teacher_id;
   app.replaceChildren(el("div", { class: "card narrow" },
@@ -998,7 +1030,7 @@ async function render() {
   state.dirty = false;
   // Sperrseiten immer zuerst – egal von wo render() aufgerufen wird
   if (state.profile.must_change_password) return renderForcePassword();
-  if (!isAdmin() && !state.active) return renderWaiting();
+  if (!state.active) return renderWaiting();
   const tabs = isAdmin()
     ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"],["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
       .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
@@ -1009,7 +1041,12 @@ async function render() {
   const content = el("div", {}, el("p", { class: "muted" }, "Lädt …"));
   const back = state.tab !== homeTab()
     ? el("button", { class: "btn small ghost backbtn", onclick: goBack }, "‹ Zurück") : null;
-  app.replaceChildren(...[tabbar, back, content].filter(Boolean));
+  // Fahrlehrer: Zugang läuft bald ab → Hinweis oben
+  const left = isAdmin() && !isOwner() ? daysLeft(state.profile.valid_until) : null;
+  const expiryNote = left !== null && left <= 30 ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "),
+    left === 0 ? "Dein Zugang läuft heute ab." : `Dein Zugang läuft am ${fmtUntil(state.profile.valid_until)} ab (noch ${left} Tag${left === 1 ? "" : "e"}).`,
+    state.profile.school_id ? " Sprich deine Fahrschule an, um ihn zu verlängern." : " Melde dich beim Betreiber der App, um ihn zu verlängern.") : null;
+  app.replaceChildren(...[tabbar, back, expiryNote, content].filter(Boolean));
   if (!history.state || !history.state.tab) history.replaceState({ tab: state.tab }, "");
 
   if (isAdmin()) updateRequestCount(tabbar);
@@ -2224,7 +2261,7 @@ async function adminRequests() {
 
 async function adminStudents() {
   const [p, b] = await Promise.all([
-    sb.from("profiles").select("id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,created_at").order("last_name"),
+    sb.from("profiles").select("id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,valid_until,created_at").order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
   ]);
   if (p.error) throw p.error;
@@ -2243,12 +2280,15 @@ async function adminStudents() {
   }
   const students = p.data.filter((x) => x.role === "student");
   const pending = students.filter((x) => x.status === "pending");
-  const active = students.filter((x) => x.status === "active");
+  // Abgelaufen + Schonfrist vorbei = archiviert (gesperrt, Daten bleiben)
+  const archived = (x) => x.valid_until && daysLeft(x.valid_until) < -GRACE_DAYS;
+  const active = students.filter((x) => x.status === "active" && !archived(x));
+  const expired = students.filter((x) => x.status === "active" && archived(x));
   const blocked = students.filter((x) => x.status === "blocked");
   if (!students.length) return el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen.");
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Termine"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num", title: "1 Fahrstunde = 45 Min." }, "Fahrstd."), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"))),
+    el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", {}, "Klasse"), el("th", { class: "num" }, "Termine"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num", title: "1 Fahrstunde = 45 Min." }, "Fahrstd."), el("th", { class: "num" }, "Geplant"), el("th", {}, "Sonderfahrten"), el("th", { class: "num" }, "Ausgefallen"), el("th", { class: "num" }, "Fehlstd."), el("th", { title: "Darf mehr als den Standard anfragen" }, "Mehr erlauben"), el("th", {}, "Zugang"))),
     el("tbody", {}, list.map((st) => {
       const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
@@ -2256,7 +2296,8 @@ async function adminStudents() {
         el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)), el("td", { class: "num" }, fmtLessons(s.minutes).split(" ")[0]),
         el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
         el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late),
-        el("td", { onclick: (e) => e.stopPropagation() }, moreToggle(st)));
+        el("td", { onclick: (e) => e.stopPropagation() }, moreToggle(st)),
+        el("td", { onclick: (e) => e.stopPropagation(), style: "white-space:nowrap" }, accessCell(st)));
     }))));
 
   return el("div", {},
@@ -2276,10 +2317,29 @@ async function adminStudents() {
       el("h2", {}, "Aktive Schüler"),
       active.length ? table(active) : el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler."),
       el("p", { class: "muted small" }, "Namen antippen für Fahrstunden, Ausbildungsstand und Daten.")),
+    expired.length ? el("div", { class: "card" },
+      el("h2", {}, "⏳ Abgelaufen (archiviert)"),
+      el("p", { class: "muted small" }, "Zugang abgelaufen und 4 Wochen Schonfrist vorbei – der Schüler ist gesperrt, die Daten bleiben gespeichert. Mit „+6 Monate“ wieder freischalten."),
+      table(expired)) : null,
     blocked.length ? el("div", { class: "card" },
       el("h2", {}, "Fertige Schüler"),
       table(blocked)) : null,
   );
+}
+
+// Zugang eines Schülers: Status + „+6 Monate“ verlängern (vom aktuellen Ablaufdatum bzw. ab heute)
+function accessCell(st) {
+  const info = accessInfo(st.valid_until, true);
+  const btn = el("button", { class: "btn small ghost", title: "Zugang um 6 Monate verlängern" }, "+6 Mon.");
+  btn.onclick = () => busy(btn, async () => {
+    const until = addMonths(st.valid_until, 6);
+    const { error } = await sb.from("profiles").update({ valid_until: until }).eq("id", st.id);
+    if (error) throw error;
+    st.valid_until = until;
+    toast(`${fullName(st)}: Zugang verlängert bis ${fmtUntil(until)}.`);
+    render();
+  });
+  return el("span", { class: "access" }, el("span", { class: "access-badge " + info.cls }, info.text), " ", btn);
 }
 
 async function setStudentStatus(st, status) {
@@ -2394,6 +2454,10 @@ async function openStudent(st) {
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null))
       : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
     el("hr"),
+    el("h3", {}, "⏳ Zugang"),
+    el("p", { class: "muted small" }, "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
+    accessCell(st),
+    el("hr"),
     limitControl(st),
     el("hr"),
     el("h3", {}, "Ausbildung"),
@@ -2418,7 +2482,7 @@ const appLink = () => location.origin + location.pathname;
 
 async function ownerTeachers() {
   const { data: all, error } = await sb.from("profiles")
-    .select("id,first_name,last_name,email,slug,status,is_owner,is_school_admin,school_id,created_at").eq("role", "teacher").order("last_name");
+    .select("id,first_name,last_name,email,slug,status,is_owner,is_school_admin,school_id,valid_until,created_at").eq("role", "teacher").order("last_name");
   if (error) throw error;
   const owner = isOwner(), me = state.profile.id;
   // Fahrschul-Admin sieht nur die Fahrlehrer seiner eigenen Fahrschule
@@ -2485,9 +2549,11 @@ async function ownerTeachers() {
         el("div", {}, el("b", {}, fullName(t)), " ",
           t.is_owner ? el("span", { class: "badge admin" }, "Haupt-Admin") : null,
           t.is_school_admin ? el("span", { class: "badge admin" }, "Fahrschul-Admin") : null,
+          t.is_owner ? null : (() => { const i = accessInfo(t.valid_until, false); return el("div", { style: "margin-top:4px" }, el("span", { class: "access-badge " + i.cls }, "⏳ " + i.text)); })(),
           t.status !== "active" ? el("span", { class: "badge rejected" }, "Gesperrt") : null,
           el("div", { class: "small muted" }, t.email || "")),
-        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, pwBtn, toggle, del)));
+        t.is_owner ? null : el("div", { class: "actions", style: "margin:0" },
+          el("button", { class: "btn small ghost", onclick: () => openTeacherValidity(t) }, "⏳ Laufzeit"), pwBtn, toggle, del)));
   };
 
   // Haupt-Admin: eigene Fahrschule + je Fahrschul-Admin eine eigene Gruppe; Fahrschul-Admin: nur seine Fahrlehrer
@@ -2523,6 +2589,34 @@ async function ownerTeachers() {
         list.length ? list.map(row) : el("p", { class: "muted small" }, "Noch keine Fahrlehrer in dieser Fahrschule."));
     }),
   );
+}
+
+// Haupt-Admin: Laufzeit (Abo) eines Fahrlehrers / Fahrschul-Admins festlegen oder verlängern
+function openTeacherValidity(t) {
+  const date = el("input", { type: "date", value: t.valid_until || dateInput(new Date()) });
+  const quick = (label, months) => el("button", { type: "button", class: "btn small ghost", onclick: () => (date.value = addMonths(t.valid_until, months)) }, label);
+  const saveAs = async (until) => {
+    const { error } = await sb.rpc("set_teacher_valid", { p_id: t.id, p_until: until });
+    if (error) throw error;
+    closeModal();
+    toast(until ? `${fullName(t)}: gültig bis ${fmtUntil(until)}.` : `${fullName(t)}: unbegrenzt.`);
+    render();
+  };
+  const save = el("button", { class: "btn ok" }, "Speichern");
+  save.onclick = () => busy(save, () => { if (!date.value) throw new Error("Bitte ein Datum wählen"); return saveAs(date.value); });
+  const unlimited = el("button", { class: "btn ghost" }, "♾️ Unbegrenzt");
+  unlimited.onclick = () => busy(unlimited, () => saveAs(null));
+  const i = accessInfo(t.valid_until, false);
+  openModal(`⏳ Laufzeit – ${fullName(t)}`,
+    el("p", {}, "Aktuell: ", el("span", { class: "access-badge " + i.cls }, i.text)),
+    el("p", { class: "muted small" }, t.is_school_admin
+      ? "Gilt für die ganze Fahrschule: Läuft sie ab, sind auch alle Fahrlehrer dieser Fahrschule und deren Schüler gesperrt. Die Daten bleiben erhalten."
+      : "Läuft die Laufzeit ab, sind der Fahrlehrer und seine Schüler gesperrt. Die Daten bleiben erhalten – nach einer Verlängerung geht es weiter."
+        + (isSchoolAdmin() ? " Hinweis: Deine Fahrlehrer laufen nie länger als deine eigene Fahrschule." : "")),
+    el("label", {}, "Verlängern um"),
+    el("div", { class: "chips" }, quick("+1 Monat", 1), quick("+3 Monate", 3), quick("+6 Monate", 6), quick("+1 Jahr", 12)),
+    el("label", {}, "Gültig bis (einschließlich)"), date,
+    el("div", { class: "actions" }, save, unlimited, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
 // Fahrlehrer hat sein Passwort vergessen: Haupt-Admin setzt ein neues (lesen kann man Passwörter nie)
@@ -2860,7 +2954,13 @@ async function studentCalendar() {
     }, slotHead(fmtRange(s.starts_at, s.duration_min), tag), label);
   }, null, offExtras(null).concat(examExtras));
 
+  // Zugang läuft bald ab bzw. ist abgelaufen (Schonfrist) → Hinweis an den Schüler
+  const left = daysLeft(state.profile.valid_until);
+  const expiryNote = left !== null && left <= 30 ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "),
+    left >= 0 ? `Dein Zugang läuft am ${fmtUntil(state.profile.valid_until)} ab.` : `Dein Zugang ist abgelaufen – in ${GRACE_DAYS + left} Tag${GRACE_DAYS + left === 1 ? "" : "en"} wird er gesperrt.`,
+    " Sprich deinen Fahrlehrer an, wenn du weiter fahren möchtest – er kann ihn verlängern.") : null;
   return el("div", {},
+    expiryNote,
     nextOff ? el("div", { class: "notice off-banner", style: "margin-bottom:12px" },
       el("b", {}, `🏖️ Dein Fahrlehrer ist nicht verfügbar (${nextOff.note || "frei"}): `), offRange(nextOff),
       ". An diesen Tagen kannst du nichts anfragen.") : null,

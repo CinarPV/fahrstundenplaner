@@ -35,6 +35,12 @@ create index if not exists profiles_teacher_idx on public.profiles (teacher_id);
 -- school_id = der Fahrschul-Admin, zu dessen Fahrschule ein Fahrlehrer gehört (leer = Fahrschule des Haupt-Admins)
 alter table public.profiles add column if not exists is_school_admin boolean not null default false;
 alter table public.profiles add column if not exists school_id uuid references public.profiles(id) on delete set null;
+-- Befristung: gültig bis (einschließlich). Leer = unbegrenzt.
+--   Schüler: bei Freischaltung automatisch 1 Jahr; der eigene Fahrlehrer verlängert (z. B. +6 Monate).
+--            Nach Ablauf noch 4 Wochen Schonfrist, danach gesperrt (Daten bleiben, „archiviert“).
+--   Fahrlehrer / Fahrschul-Admins: legt nur der Haupt-Admin fest (Abo). Fahrlehrer einer Fahrschule
+--            sind nur so lange gültig wie ihr Fahrschul-Admin. Der Haupt-Admin selbst läuft nie ab.
+alter table public.profiles add column if not exists valid_until date;
 
 -- Einstellungen: eine Zeile pro Fahrlehrer
 create table if not exists public.settings (
@@ -201,9 +207,21 @@ create table if not exists public.training_progress (
 -- ---------- Hilfsfunktionen ------------------------------------------
 
 -- Aktiver Fahrlehrer?
+-- Ist dieser Fahrlehrer gerade gültig (aktiv, nicht abgelaufen, seine Fahrschule auch nicht)?
+create or replace function public.teacher_valid(p_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles t
+    where t.id = p_id and t.role = 'teacher' and t.status = 'active'
+      and (t.is_owner or t.valid_until is null or t.valid_until >= current_date)
+      and (t.school_id is null or exists (
+            select 1 from profiles a where a.id = t.school_id and a.status = 'active'
+              and (a.is_owner or a.valid_until is null or a.valid_until >= current_date))));
+$$;
+
 create or replace function public.is_teacher()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from profiles where id = auth.uid() and role = 'teacher' and status = 'active');
+  select public.teacher_valid(auth.uid());
 $$;
 
 -- Haupt-Admin?
@@ -214,7 +232,8 @@ $$;
 
 create or replace function public.is_school_admin()
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from profiles where id = auth.uid() and role = 'teacher' and is_school_admin and status = 'active');
+  select exists (select 1 from profiles where id = auth.uid() and role = 'teacher' and is_school_admin and status = 'active')
+         and public.teacher_valid(auth.uid());
 $$;
 
 -- Darf ich diesen Fahrlehrer verwalten? Haupt-Admin: alle (außer sich selbst);
@@ -238,8 +257,9 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (
     select 1 from profiles p
     where p.id = auth.uid() and p.status = 'active'
-      and (p.role = 'teacher'
-           or exists (select 1 from profiles t where t.id = p.teacher_id and t.role = 'teacher' and t.status = 'active')));
+      and (case when p.role = 'teacher' then public.teacher_valid(p.id)
+                -- Schüler: gültig bis Ablaufdatum + 4 Wochen Schonfrist, und sein Fahrlehrer muss gültig sein
+                else (p.valid_until is null or p.valid_until + 28 >= current_date) and public.teacher_valid(p.teacher_id) end));
 $$;
 
 -- Hilfen für die Zugriffsregeln (ohne sich gegenseitig auszulösen)
@@ -397,7 +417,7 @@ create or replace function public.public_teachers()
 returns table (slug text, display_name text)
 language sql stable security definer set search_path = public as $$
   select p.slug, s.display_name from profiles p join settings s on s.teacher_id = p.id
-  where p.role = 'teacher' and p.status = 'active' and p.slug is not null
+  where p.role = 'teacher' and p.status = 'active' and p.slug is not null and public.teacher_valid(p.id)
   order by s.display_name;
 $$;
 
@@ -412,6 +432,41 @@ begin
     raise exception 'Nur der eigene Fahrlehrer darf diesen Schüler löschen';
   end if;
   delete from auth.users where id = p_id;
+end $$;
+
+-- Befristung schützen: Ablaufdatum ändern dürfen nur der eigene Fahrlehrer (Schüler) bzw. der Haupt-Admin (Fahrlehrer).
+-- Bei der Freischaltung eines Schülers wird automatisch 1 Jahr eingetragen.
+create or replace function public.profiles_valid_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.role = 'student' and new.status = 'active' and old.status is distinct from 'active' and new.valid_until is null then
+    new.valid_until := (current_date + interval '1 year')::date;
+  end if;
+  if new.valid_until is distinct from old.valid_until and auth.uid() is not null then
+    if not ((new.role = 'student' and new.teacher_id = auth.uid() and public.is_teacher())
+            or (new.role = 'teacher' and new.id <> auth.uid() and (public.is_owner()
+                or (public.is_school_admin() and new.school_id = auth.uid() and not new.is_school_admin)))) then
+      raise exception 'Die Gültigkeit darf hier nicht geändert werden';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists profiles_valid_guard on public.profiles;
+create trigger profiles_valid_guard before update on public.profiles
+  for each row execute function public.profiles_valid_guard();
+
+-- Bestehende freigeschaltete Schüler ohne Datum: ab heute 1 Jahr (einmalig, betrifft nur leere Felder)
+update public.profiles set valid_until = (current_date + interval '1 year')::date
+  where role = 'student' and status = 'active' and valid_until is null;
+
+-- Laufzeit eines Fahrlehrers setzen (leer = unbegrenzt):
+--   Haupt-Admin → alle Fahrlehrer und Fahrschul-Admins; Fahrschul-Admin → nur die Fahrlehrer seiner Fahrschule
+--   (die trotzdem nie länger laufen als die Fahrschule selbst). Niemand verlängert sich selbst.
+create or replace function public.set_teacher_valid(p_id uuid, p_until date)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not can_manage_teacher(p_id) then raise exception 'Diese Laufzeit darfst du nicht ändern'; end if;
+  update profiles set valid_until = p_until where id = p_id;
 end $$;
 
 -- Aufräumen: alles, was älter als 15 Monate ist, wird gelöscht (nur die eigenen Daten des Fahrlehrers).
@@ -853,5 +908,7 @@ grant execute on function public.delete_teacher(uuid) to authenticated;
 grant execute on function public.owner_set_teacher_password(uuid, text) to authenticated;
 grant execute on function public.restore_backup(jsonb) to authenticated;
 grant execute on function public.cleanup_old_data() to authenticated;
+grant execute on function public.set_teacher_valid(uuid, date) to authenticated;
+grant execute on function public.teacher_valid(uuid) to authenticated;
 grant execute on function public.password_changed() to authenticated;
 grant execute on function public.public_teachers() to anon, authenticated;
