@@ -2869,75 +2869,79 @@ async function studentMine() {
   const now = Date.now();
   const upcoming = rows.filter((b) => (b.status === "requested" || b.status === "offered" || (b.status === "confirmed" && b.actual_minutes === null)) && new Date(b.slots.starts_at).getTime() >= now - 3600000).reverse();
   const offers = upcoming.filter((b) => b.status === "offered" && new Date(b.slots.starts_at).getTime() > now);
-  const rest = rows.filter((b) => !upcoming.includes(b));
+  const planned = upcoming.filter((b) => !offers.includes(b));
   const total = rows.reduce((sum, b) => sum + (b.status === "confirmed" && b.actual_minutes ? b.actual_minutes : 0), 0);
   const doneCount = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null).length;
-  const notHeldCount = rows.filter((b) => NOT_HELD_ICON[b.status]).length;
+  const lateRows = rows.filter((b) => b.late_cancel);
   const seen = getSeen("mine");
   markSeen("mine");
-  const lateCount = rows.filter((b) => b.late_cancel).length;
 
-  const item = (b) => {
-    const cancel = b.status === "requested" ? el("button", { class: "btn small danger" }, "Anfrage zurückziehen") : null;
-    if (cancel) cancel.onclick = () => busy(cancel, async () => {
+  // Eine Fahrstunde als kompakte Karte: Datum-Block links, rechts Uhrzeit, Status, Treffpunkt, Knöpfe
+  const card = (b) => {
+    const start = new Date(b.slots.starts_at);
+    const future = start.getTime() > now;
+    const isOffer = b.status === "offered" && future;
+    const canCancel = b.status === "confirmed" && b.actual_minutes === null && future;
+    const withdraw = b.status === "requested" ? el("button", { class: "btn small ghost" }, "Anfrage zurückziehen") : null;
+    if (withdraw) withdraw.onclick = () => busy(withdraw, async () => {
       if (!confirm("Anfrage wirklich zurückziehen?")) return;
       const { error } = await sb.rpc("cancel_request", { p_booking: b.id });
       if (error) throw error;
       toast("Anfrage zurückgezogen.");
       render();
     });
-    const future = new Date(b.slots.starts_at).getTime() > now;
-    const canCancel = b.status === "confirmed" && b.actual_minutes === null && future;
-    const cancelLesson = canCancel ? el("button", { class: "btn small danger", onclick: () => openStudentCancel(b) }, "Fahrstunde absagen") : null;
-    const isOffer = b.status === "offered" && future;
-    const accept = isOffer ? el("button", { class: "btn ok", onclick: () => answerOffer(b, true) }, "✓ Zusagen") : null;
-    const decline = isOffer ? el("button", { class: "btn danger", onclick: () => answerOffer(b, false) }, "✗ Absagen") : null;
-    return el("div", { class: "list-item" + (isOffer ? " offer" : "") },
-      el("div", { class: "head" },
-        el("div", {}, el("b", {}, fmtDate(b.slots.starts_at)), el("div", {}, fmtRange(b.slots.starts_at, b.slots.duration_min))),
-        b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null,
-        el("span", { class: "badge " + b.status }, b.status === "requested" ? "Wartet auf Bestätigung"
-          : b.status === "offered" ? "📨 Angebot"
-          : b.status === "confirmed" && b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
-      b.student_note ? el("div", { class: "note" }, "Deine Nachricht: ", b.student_note) : null,
-      b.admin_reply ? el("div", { class: "note reply" }, el("b", {}, "Fahrlehrer: "), b.admin_reply) : null,
-      b.status === "confirmed" && b.actual_minutes === null ? meetingBox(meetingOf(b)) : null,
-      b.actual_minutes !== null ? el("div", { class: "small", style: "margin-top:8px" }, `${typeLabel(b.lesson_type)} · gefahren: `, el("b", {}, fmtMinutes(b.actual_minutes)),
-        b.actual_minutes !== b.slots.duration_min ? ` (geplant waren ${b.slots.duration_min} Min.)` : "") : null,
-      b.cancel_reason ? el("div", { class: "note" }, "Grund der Absage: ", b.cancel_reason) : null,
-      b.late_cancel ? el("div", { class: "notice danger" }, "Fehlstunde – kurzfristig abgesagt, kostenpflichtig.") : null,
-      canCancel ? el("div", { class: "small muted", style: "margin-top:8px" }, isLate(b.slots.starts_at)
-        ? "Absagefrist abgelaufen – eine Absage ist jetzt kostenpflichtig."
-        : `Kostenlos absagen bis ${fmtDeadline(b.slots.starts_at)}.`) : null,
-      isOffer ? el("div", { class: "small", style: "margin-top:8px" }, isLate(b.slots.starts_at)
-        ? "Mit der Zusage ist die Fahrstunde verbindlich. Die Absagefrist ist schon abgelaufen – eine spätere Absage ist kostenpflichtig."
-        : `Mit der Zusage ist die Fahrstunde verbindlich. Kostenlos absagen kannst du danach noch bis ${fmtDeadline(b.slots.starts_at)}.`) : null,
-      isOffer ? el("div", { class: "actions" }, accept, decline) : null,
-      cancel || cancelLesson ? el("div", { class: "actions" }, cancel, cancelLesson) : null);
+    const badge = isOffer ? ["offered", "Angebot – bitte antworten"]
+      : b.status === "requested" ? ["requested", "Angefragt – wartet"]
+      : ["confirmed", "✓ Bestätigt"];
+    const meet = b.status === "confirmed" || isOffer ? meetingOf(b) : "";
+    return el("div", { class: "lesson-card" + (isOffer ? " offer" : "") },
+      el("div", { class: "date-chip" },
+        el("span", { class: "w" }, start.toLocaleDateString("de-DE", { weekday: "short" })),
+        el("span", { class: "d" }, start.getDate()),
+        el("span", { class: "m" }, start.toLocaleDateString("de-DE", { month: "short" }))),
+      el("div", { class: "lesson-body" },
+        el("div", { class: "lesson-top" },
+          el("b", {}, fmtRange(b.slots.starts_at, b.slots.duration_min) + " Uhr"),
+          b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null),
+        el("span", { class: "badge " + badge[0] }, badge[1]),
+        meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
+        b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
+        canCancel ? el("div", { class: "lesson-hint muted" }, isLate(b.slots.starts_at)
+          ? "Absagefrist abgelaufen – Absage kostenpflichtig"
+          : `Kostenlos absagen bis ${fmtDeadline(b.slots.starts_at)}`) : null,
+        isOffer ? el("div", { class: "actions" },
+          el("button", { class: "btn small ok", onclick: () => answerOffer(b, true) }, "✓ Zusagen"),
+          el("button", { class: "btn small danger", onclick: () => answerOffer(b, false) }, "✗ Absagen")) : null,
+        withdraw || canCancel ? el("div", { class: "actions" }, withdraw,
+          canCancel ? el("button", { class: "btn small ghost danger-text", onclick: () => openStudentCancel(b) }, "Absagen") : null) : null));
   };
 
-  // Schlicht: oben das Wichtigste (Anstehend), darunter aufklappbar Liste/Export und Verlauf
-  const wa = waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer anschreiben");
+  const wa = waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer schreiben");
   if (wa) wa.className = "btn small ghost";
+  const stat = (num, label, cls = "") => el("div", { class: "stat " + cls }, el("b", {}, num), el("span", {}, label));
   return el("div", {},
-    el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 12px" },
-      el("span", {}, el("b", {}, fmtLessons(total)), ` gefahren (à 45 Min.) · ${doneCount} Termin${doneCount === 1 ? "" : "e"} · ${total} Min.`,
-        lateCount ? el("span", { class: "badge late", style: "margin-left:6px" }, `${lateCount} Fehlstunde${lateCount === 1 ? "" : "n"}`) : null),
-      wa),
-    !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin-bottom:12px" },
+    // Auf einen Blick: wie viel gefahren, was steht an, ggf. Fehlstunden
+    el("div", { class: "stat-row" },
+      stat(fmtLessons(total).replace(/ Fahrstunden?$/, ""), "Fahrstunden gefahren"),
+      stat(String(planned.length + offers.length), "anstehend"),
+      lateRows.length ? stat(String(lateRows.length), lateRows.length === 1 ? "Fehlstunde" : "Fehlstunden", "warn") : null),
+    !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin:12px 0 0" },
       "Bitte trage unter „Profil“ deine WhatsApp-Nummer ein, damit dein Fahrlehrer dich erreichen kann.") : null,
-    offers.length ? el("div", { class: "notice", style: "margin-bottom:12px" },
-      el("b", {}, `📨 Du hast ${offers.length} Angebot${offers.length === 1 ? "" : "e"} von deinem Fahrlehrer.`), " Bitte unten zusagen oder absagen.") : null,
-    el("h2", {}, "Anstehend"),
-    upcoming.length ? upcoming.map(item) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
+    offers.length ? el("h2", { class: "mine-h" }, `📨 Angebote für dich (${offers.length})`) : null,
+    offers.map(card),
+    el("h2", { class: "mine-h" }, "Anstehende Fahrstunden"),
+    planned.length ? planned.map(card) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
     doneCount ? el("details", { class: "fold" },
-      el("summary", {}, `Gefahrene Fahrstunden (${doneCount}) · Sonderfahrten · Export`),
+      el("summary", {}, `✓ Gefahrene Fahrstunden (${doneCount})`),
       doneList(rows, total),
       el("p", { class: "small" }, specialSummary(rows)),
       exportButtons(state.profile, rows)) : null,
-    rest.length ? el("details", { class: "fold" },
-      el("summary", {}, `Verlauf (${rest.length})` + (notHeldCount ? ` · ${notHeldCount}× ausgefallen` : "")),
-      rest.map(item)) : null,
+    lateRows.length ? el("details", { class: "fold" },
+      el("summary", {}, `⚠️ Fehlstunden (${lateRows.length})`),
+      lateRows.map((b) => el("div", { class: "small", style: "padding:6px 0;border-bottom:1px solid var(--border)" },
+        el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
+        " – kurzfristig abgesagt, kostenpflichtig", b.cancel_reason ? ` (${b.cancel_reason})` : ""))) : null,
+    wa ? el("div", { class: "actions", style: "margin-top:16px" }, wa) : null,
   );
 }
 

@@ -481,3 +481,23 @@ html.no-splash #splash { display: none; }
 /* Kalender-Eintrag: Uhrzeit links, Status-Wort rechts */
 .slot-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .slot-tag { font-size: 12px; font-weight: 700; white-space: nowrap; opacity: .85; }
+
+/* Schüler „Stunden“: Überblick + kompakte Karten */
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 10px 8px; text-align: center; }
+.stat b { display: block; font-size: 24px; line-height: 1.1; color: var(--brand); }
+.stat span { font-size: 12px; color: var(--muted); }
+.stat.warn b { color: #c0392b; }
+.mine-h { font-size: 17px; margin: 18px 0 8px; }
+.lesson-card { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 10px; margin-bottom: 8px; }
+.lesson-card.offer { border: 2px solid var(--off-bd); background: var(--off-bg); }
+.date-chip { flex: 0 0 54px; display: flex; flex-direction: column; align-items: center; background: var(--brand); color: #fff; border-radius: 12px; padding: 6px 2px; }
+.date-chip .w, .date-chip .m { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .9; }
+.date-chip .d { font-size: 22px; font-weight: 800; line-height: 1.1; }
+.lesson-body { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.lesson-top { display: flex; gap: 8px; align-items: center; }
+.lesson-top b { font-size: 16px; }
+.lesson-meet { font-size: 13px; color: var(--teal-text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.lesson-hint { font-size: 13px; }
+.lesson-body .actions { margin: 4px 0 0; }
+.danger-text { color: #c0392b !important; }
