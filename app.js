@@ -1000,7 +1000,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"],["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
+    ? (showToday() ? [["today", "☀️ Heute"]] : [["calendar", "Kalender"]]).concat([["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
       .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -1299,9 +1299,12 @@ async function adminToday() {
         : el("span", { class: "tr-pill over" }, "abhaken"),
       phase === "next" && wa ? el("a", { class: "tr-icon", title: "Bin gleich da (WhatsApp)", target: "_blank", rel: "noopener",
         href: `https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${p.first_name || ""}, ich bin in ca. 5 Minuten am Treffpunkt.` + (meet ? ` 📍 ${meet}` : ""))}` }, "💬") : null,
-      el("button", { class: "tr-icon", title: "Löschen", "aria-label": "Fahrstunde löschen", onclick: async () => {
-        try { if (await deleteLessonSlot(s, b)) render(); } catch (e) { fail(e); }
-      } }, "🗑"),
+      // Schnell abhaken mit der geplanten Dauer (abweichende Minuten, Ausfall, Löschen: über „⋯“)
+      phase === "next" || phase === "live" || phase === "over" ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true;
+        try { await save(b, { actual_minutes: s.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${s.duration_min} Min. gefahren`); }
+        catch (e) { btn.disabled = false; fail(e); }
+      } }, "✓") : null,
       el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     if (phase === "done" || phase === "nothere") return el("div", { class: "tr " + phase }, head);
@@ -1350,6 +1353,12 @@ async function adminToday() {
       items.length ? items.map((x) => x.node) : el("div", { class: "empty" }, "—")));
   }
   const view = el("div", { class: "today-view" },
+    // Schnellzugriff: neue Fahrstunden/Prüfung anlegen oder zum Kalender (Wochen planen)
+    el("div", { class: "quick-row" },
+      el("button", { class: "quick-btn add", onclick: () => openSlotForm(first) },
+        el("span", { class: "qi" }, "➕"), el("span", {}, el("b", {}, "Anlegen"), el("small", {}, "Fahrstunde / Prüfung"))),
+      el("button", { class: "quick-btn cal", onclick: () => goTab("calendar") },
+        el("span", { class: "qi" }, "📅"), el("span", {}, el("b", {}, "Kalender"), el("small", {}, "Wochen planen")))),
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
