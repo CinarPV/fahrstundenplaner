@@ -459,7 +459,7 @@ async function loadUserAndRender() {
   renderUserbox();
   render();
   if (isAdmin() && state.profile.status === "active") cleanupOldData();
-  setTimeout(maybeAskPush, 3600);  // nach dem Startbildschirm
+  setTimeout(() => { if (!maybeAskInstall()) maybeAskPush(); }, 3600);  // nach dem Startbildschirm: erst Installieren, dann Mitteilungen
 }
 
 // Daten älter als 15 Monate automatisch löschen – beim Fahrlehrer höchstens einmal am Tag (still im Hintergrund)
@@ -723,6 +723,51 @@ function openInstallHelp() {
       el("li", {}, el("b", {}, "„App installieren“"), " bzw. ", el("b", {}, "„Zum Startbildschirm hinzufügen“"), " wählen.")),
     el("p", { class: "muted small" }, "Danach startet „Easy Fahrstunden“ wie eine normale App vom Startbildschirm – ohne Adresszeile. Du bleibst angemeldet."));
 }
+// Einmal nach der Anmeldung: geführte Installation aufs Handy (Android mit einem Knopf, iPhone mit Bild-Anleitung)
+const ICON_SHARE = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7.5 7.5 12 3l4.5 4.5"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>';
+const ICON_ADD = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/></svg>';
+function maybeAskInstall() {
+  if (!state.profile || isInstalled() || document.querySelector("dialog[open]")) return false;
+  const mobile = isIOS() || /android/i.test(navigator.userAgent);
+  if (!mobile) return false;
+  const key = "fsp_install_asked_" + state.profile.id;
+  try { if (localStorage.getItem(key)) return false; localStorage.setItem(key, "1"); } catch { return false; }
+  const icon = (svg) => { const i = el("span", { class: "inst-ico" }); i.innerHTML = svg; return i; };
+  const step = (n, ...content) => el("div", { class: "inst-step" }, el("span", { class: "inst-n" }, String(n)), el("div", {}, ...content));
+  const intro = el("p", {}, "Mit der App auf dem Startbildschirm bist du mit ", el("b", {}, "einem Tipp"), " drin – wie bei einer normalen App – und bekommst ", el("b", {}, "Mitteilungen"), ", z. B. wenn eine Fahrstunde bestätigt oder abgesagt wird.");
+  const later = el("button", { class: "btn ghost", onclick: () => { closeModal(); toast("Du findest die Anleitung jederzeit unter " + (isAdmin() ? "„Einstellungen“." : "„Profil“.")); } }, "Später");
+  if (isIOS()) {
+    openModal("📲 App aufs iPhone holen",
+      intro,
+      el("div", { class: "inst-steps" },
+        step(1, "Tippe in ", el("b", {}, "Safari"), " auf ", el("b", {}, "Teilen"), " ", icon(ICON_SHARE), el("div", { class: "muted small" }, "unten in der Leiste – oder erst auf „…“")),
+        step(2, "Wähle ", el("b", {}, "„Zum Home-Bildschirm“"), " ", icon(ICON_ADD), el("div", { class: "muted small" }, "evtl. etwas nach unten wischen")),
+        step(3, "Oben rechts auf ", el("b", {}, "„Hinzufügen“"), " tippen – fertig! 🎉")),
+      el("p", { class: "muted small" }, "Danach die App über das neue Symbol „Easy Fahrstunden“ auf dem Startbildschirm öffnen."),
+      el("div", { class: "inst-arrow", "aria-hidden": "true" }, "⬇"),
+      el("div", { class: "actions" }, el("button", { class: "btn ok", onclick: closeModal }, "Verstanden"), later));
+    return true;
+  }
+  // Android: Chrome bietet den Installations-Dialog per Knopf an
+  const install = el("button", { class: "btn ok inst-big" }, "📲 App installieren");
+  install.onclick = async () => {
+    if (!installPrompt) return openInstallHelp();
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice.catch(() => ({}));
+    installPrompt = null;
+    closeModal();
+    if (outcome === "accepted") toast("🎉 Installiert – du findest „Easy Fahrstunden“ jetzt auf dem Startbildschirm.");
+  };
+  openModal("📲 App aufs Handy holen",
+    intro,
+    installPrompt ? el("p", { class: "small" }, "Ein Tipp auf den Knopf – dann noch „Installieren“ bestätigen. Fertig!")
+      : el("div", { class: "inst-steps" },
+          step(1, "Oben rechts auf ", el("b", {}, "⋮"), " tippen (Menü)."),
+          step(2, el("b", {}, "„App installieren“"), " bzw. ", el("b", {}, "„Zum Startbildschirm hinzufügen“"), " wählen.")),
+    el("div", { class: "actions" }, installPrompt ? install : el("button", { class: "btn ok", onclick: closeModal }, "Verstanden"), later));
+  return true;
+}
+
 function installHint() {
   if (isInstalled()) return null;
   return el("p", { class: "small", style: "margin-top:12px" },
