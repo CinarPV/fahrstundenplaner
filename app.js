@@ -2360,14 +2360,26 @@ function passwordCard() {
 
 function adminSettings() {
   const dur = durationControl(state.settings.default_duration);
-  const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3 });
+  const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3, style: "max-width:110px" });
+  // Gilt die Wochen-Höchstzahl den ganzen Tag oder nur in einem Zeitfenster (z. B. 14–18 Uhr)?
+  const hhmm = (t) => (t ? String(t).slice(0, 5) : "");
+  const hasWindow = !!(state.settings.limit_from && state.settings.limit_to);
+  const winAll = el("input", { type: "radio", name: "limit-win", checked: !hasWindow });
+  const winPart = el("input", { type: "radio", name: "limit-win", checked: hasWindow });
+  const winFrom = el("input", { type: "time", step: 900, value: hhmm(state.settings.limit_from) || "14:00" });
+  const winTo = el("input", { type: "time", step: 900, value: hhmm(state.settings.limit_to) || "18:00" });
+  const winBox = el("div", { class: "row", hidden: !hasWindow, style: "max-width:320px" },
+    el("div", {}, el("label", {}, "von"), winFrom), el("div", {}, el("label", {}, "bis"), winTo));
+  [winAll, winPart].forEach((r) => r.addEventListener("change", () => (winBox.hidden = !winPart.checked)));
   const phone = el("input", { type: "tel", value: state.settings.admin_phone || "", placeholder: "z. B. 0151 23456789" });
   const display = el("input", { value: state.settings.display_name || "", maxlength: 60 });
   const meetStd = el("input", { value: state.settings.meeting_point || "", maxlength: 200, placeholder: "z. B. Fahrschule, Hauptstraße 1" });
   const meetMore = el("textarea", { maxlength: 2000, rows: 3, placeholder: "z. B.\nBahnhof, Haupteingang\nSchule am Markt" }, state.settings.meeting_points || "");
   const save = el("button", { class: "btn" }, "Speichern");
   save.onclick = () => busy(save, async () => {
+    if (winPart.checked && !(winFrom.value && winTo.value && winFrom.value < winTo.value)) throw new Error("Bitte ein gültiges Zeitfenster wählen (von vor bis).");
     const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null,
+      limit_from: winPart.checked ? winFrom.value : null, limit_to: winPart.checked ? winTo.value : null,
       display_name: display.value.trim() || "Fahrlehrer",
       meeting_point: meetStd.value.trim() || null,
       meeting_points: meetMore.value.split("\n").map((x) => x.trim()).filter(Boolean).join("\n") || null };
@@ -2386,8 +2398,12 @@ function adminSettings() {
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
       dur.node,
       el("h3", { style: "margin-top:18px" }, "Höchstzahl Fahrstunden pro Woche"),
-      el("p", { class: "muted small" }, "So viele Termine darf ein Schüler pro Woche (Mo–So) anfragen bzw. haben, z. B. 2 oder 3. 0 = unbegrenzt. Will er mehr, kann er um eine Ausnahme bitten – die gewährst oder ablehnst du unter „Anfragen“. Einzelne Schüler (z. B. vor der Prüfung) kannst du in der Schülerliste dauerhaft freigeben."),
+      el("p", { class: "muted small" }, "So viele Termine darf ein Schüler pro Woche (Mo–So) anfragen bzw. haben, z. B. 1 oder 2. 0 = unbegrenzt. Will er mehr, kann er um eine Ausnahme bitten – die gewährst oder ablehnst du unter „Anfragen“. Einzelne Schüler (z. B. vor der Prüfung) kannst du in der Schülerliste dauerhaft freigeben."),
       maxOpen,
+      el("label", {}, "Gilt für"),
+      el("label", { class: "check" }, winAll, el("span", {}, "den ganzen Tag")),
+      el("label", { class: "check" }, winPart, el("span", {}, "nur Termine in einem Zeitfenster – z. B. 14–18 Uhr. Termine davor oder danach sind frei buchbar.")),
+      winBox,
       el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler"),
       el("p", { class: "muted small" }, "So erscheinst du bei der Registrierung und in Nachrichten, z. B. „Kürsat“."),
       display,
@@ -2508,8 +2524,8 @@ function openBooking(s) {
   btn.onclick = () => busy(btn, async () => {
     const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value });
     // Höchstzahl erreicht → Pop-up mit der Möglichkeit, um eine Ausnahme zu bitten
-    const limit = error && /LIMIT:(\d+):(\d+)/.exec(error.message || "");
-    if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2]);
+    const limit = error && /LIMIT:(\d+):(\d+):?([\d:]+-[\d:]+)?/.exec(error.message || "");
+    if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2], limit[3]);
     if (error) throw error;
     toast("Angefragt! Du siehst unter „Meine Fahrstunden“, sobald dein Fahrlehrer bestätigt.");
     closeModal();
@@ -2529,7 +2545,8 @@ function openBooking(s) {
 }
 
 // Höchstzahl erreicht: Hinweis + kurze Nachricht an den Fahrlehrer → Anfrage als „Ausnahme gewünscht“
-function openLimitRequest(s, prevNote, open, max) {
+function openLimitRequest(s, prevNote, open, max, win) {
+  const span = win ? ` zwischen ${win.replace("-", " und ")} Uhr` : "";
   const msg = el("textarea", { maxlength: 300, placeholder: "z. B. „Meine Prüfung ist bald – könnte ich diese Woche noch eine Stunde fahren?“" });
   msg.value = prevNote || "";
   const btn = el("button", { class: "btn" }, "📨 Trotzdem anfragen (Ausnahme)");
@@ -2542,8 +2559,8 @@ function openLimitRequest(s, prevNote, open, max) {
     render();
   });
   openModal("Wochen-Höchstzahl erreicht",
-    el("div", { class: "notice" }, el("b", {}, `Du hast in dieser Woche schon ${open} Fahrstunde${open === 1 ? "" : "n"}`),
-      ` – die Höchstzahl pro Woche ist ${max}.`),
+    el("div", { class: "notice" }, el("b", {}, `Du hast in dieser Woche schon ${open} Fahrstunde${open === 1 ? "" : "n"}${span}`),
+      ` – die Höchstzahl pro Woche${span ? " für diese Uhrzeit" : ""} ist ${max}.`, win ? " Termine zu anderen Uhrzeiten kannst du ganz normal anfragen." : ""),
     el("p", {}, "Möchtest du diesen Termin trotzdem? Bitte deinen Fahrlehrer um eine Ausnahme und schreib kurz, warum. Die Ausnahme gilt nur für diesen einen Termin."),
     el("p", { class: "small" }, el("b", {}, fmtDate(s.starts_at)), ` · ${fmtRange(s.starts_at, s.duration_min)}`),
     el("label", {}, "Nachricht an deinen Fahrlehrer"), msg,

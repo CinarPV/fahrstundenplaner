@@ -94,6 +94,9 @@ alter table public.bookings add column if not exists meeting_point  text check (
 alter table public.slots    add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
 -- Angeheftete Uhrzeiten beim Anlegen, z. B. "08:00,09:45,11:30"
 alter table public.settings add column if not exists time_presets   text check (char_length(time_presets) <= 400);
+-- Wochen-Höchstzahl nur in einem Zeitfenster (z. B. 14–18 Uhr); beide leer = ganzer Tag
+alter table public.settings add column if not exists limit_from time;
+alter table public.settings add column if not exists limit_to   time;
 -- Kontrolle: wann die Fahrstunde ins Fahrschulsystem übertragen wurde (NULL = noch nicht)
 alter table public.bookings add column if not exists transferred_at timestamptz;
 -- Anfrage über der Höchstzahl: Schüler bittet um eine Ausnahme (Fahrlehrer entscheidet)
@@ -402,7 +405,9 @@ begin
         display_name     = coalesce(p_data->'settings'->>'display_name', display_name),
         default_duration = coalesce((p_data->'settings'->>'default_duration')::int, default_duration),
         max_open         = coalesce((p_data->'settings'->>'max_open')::int, max_open),
-        admin_phone      = p_data->'settings'->>'admin_phone'
+        admin_phone      = p_data->'settings'->>'admin_phone',
+        limit_from       = (p_data->'settings'->>'limit_from')::time,
+        limit_to         = (p_data->'settings'->>'limit_to')::time
       where teacher_id = me;
     exception when others then n_skipped := n_skipped + 1;
     end;
@@ -546,6 +551,7 @@ drop function if exists public.book_slot(uuid, text);
 create or replace function public.book_slot(p_slot uuid, p_note text, p_exception boolean default false)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_start timestamptz; v_max int; v_open int; v_over boolean := false;
+        v_from time; v_to time; v_window boolean;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
   select starts_at into v_start from slots where id = p_slot and teacher_id = my_teacher_id();
@@ -555,17 +561,23 @@ begin
   -- Obergrenze PRO WOCHE (Mo–So, deutsche Zeit): eigene Höchstzahl des Schülers, sonst Standard seines Fahrlehrers.
   -- Gezählt werden alle Anfragen, Angebote und Fahrstunden (auch schon gefahrene) in der Woche des gewünschten Termins.
   -- Eine gewährte Ausnahme gilt nur für diesen einen Termin – die Höchstzahl bleibt.
-  select coalesce(p.max_open, st.max_open) into v_max
+  -- Mit Zeitfenster (limit_from–limit_to, z. B. 14–18 Uhr) gilt und zählt die Höchstzahl nur für Termine,
+  -- die in diesem Fenster beginnen; Termine außerhalb sind frei buchbar.
+  select coalesce(p.max_open, st.max_open), st.limit_from, st.limit_to into v_max, v_from, v_to
   from profiles p join settings st on st.teacher_id = p.teacher_id where p.id = auth.uid();
-  if coalesce(v_max, 0) > 0 then
+  v_window := v_from is not null and v_to is not null and v_from < v_to;
+  if coalesce(v_max, 0) > 0
+     and (not v_window or (v_start at time zone 'Europe/Berlin')::time >= v_from and (v_start at time zone 'Europe/Berlin')::time < v_to) then
     select count(*) into v_open from bookings b join slots s on s.id = b.slot_id
     where b.student_id = auth.uid()
       and date_trunc('week', s.starts_at at time zone 'Europe/Berlin') = date_trunc('week', v_start at time zone 'Europe/Berlin')
-      and b.status in ('requested', 'offered', 'confirmed');
+      and b.status in ('requested', 'offered', 'confirmed')
+      and (not v_window or ((s.starts_at at time zone 'Europe/Berlin')::time >= v_from and (s.starts_at at time zone 'Europe/Berlin')::time < v_to));
     if v_open >= v_max then
       if not coalesce(p_exception, false) then
-        -- „LIMIT:“ erkennt die App und bietet dann die Ausnahme-Bitte an
-        raise exception 'LIMIT:%:%', v_open, v_max;
+        -- „LIMIT:“ erkennt die App und bietet dann die Ausnahme-Bitte an (mit Zeitfenster, falls eingestellt)
+        raise exception 'LIMIT:%:%:%', v_open, v_max,
+          case when v_window then to_char(v_from, 'HH24:MI') || '-' || to_char(v_to, 'HH24:MI') else '' end;
       end if;
       if coalesce(trim(p_note), '') = '' then raise exception 'Bitte schreib deinem Fahrlehrer kurz, warum du eine weitere Fahrstunde möchtest'; end if;
       v_over := true;
