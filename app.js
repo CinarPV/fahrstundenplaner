@@ -1000,7 +1000,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? (showToday() ? [["today", "☀️ Heute"]] : [["calendar", "Kalender"]]).concat([["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
+    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"],["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
       .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -1351,11 +1351,15 @@ async function adminToday() {
       .concat((exams || []).filter((e) => sameDay(new Date(e.exam_at), day)).map((e) => ({ at: e.exam_at, node: examRow(e) })))
       .sort((a, b) => a.at.localeCompare(b.at));
     const dayLessons = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day));
-    const minutes = dayLessons.reduce((n, x) => n + (x.b.actual_minutes || 0), 0);
+    // Tagessumme: Minuten aller stattfindenden/gefahrenen Fahrstunden (gefahren = tatsächliche, sonst geplante Dauer);
+    // FS = Fahrstunden à 45 Min. (90 Min. = 2 FS)
+    const minutes = dayLessons.filter((x) => x.b.status === "confirmed")
+      .reduce((n, x) => n + (x.b.actual_minutes !== null ? x.b.actual_minutes : x.s.duration_min), 0);
+    const fs = Math.round((minutes / LESSON_MIN) * 10) / 10;
     const todo = dayLessons.filter((x) => x.b.status === "confirmed" && x.b.actual_minutes === null && new Date(x.s.starts_at).getTime() <= now).length;
     days.push(el("div", { class: "day" + (sameDay(day, new Date()) ? " today" : "") },
       el("div", { class: "day-head" }, el("span", {}, (sameDay(day, new Date()) ? "Heute · " : "") + fmtDay(day)),
-        el("span", { class: "ctl-sum" }, [dayLessons.length ? `${dayLessons.length} Std.` : "", minutes ? `${minutes} Min. ✓` : "", todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
+        el("span", { class: "ctl-sum" }, [minutes ? `${fs.toLocaleString("de-DE")} FS · ${minutes} Min.` : "", todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
       items.length ? items.map((x) => x.node) : el("div", { class: "empty" }, "—")));
   }
   const view = el("div", { class: "today-view" },
