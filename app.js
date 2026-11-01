@@ -199,11 +199,18 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
   const hi = `Hallo ${(profile && profile.first_name) || ""},`;
   const body = {
     confirmed: `${hi} deine Fahrstunde am ${when} (${slot.duration_min} Min.) ist bestätigt.` + (meeting ? `\n📍 Treffpunkt: ${meeting}` : ""),
-    offered: `${hi} ich biete dir eine Fahrstunde an: ${when} (${slot.duration_min} Min.).` + (meeting ? ` Treffpunkt: ${meeting}.` : "") + " Bitte schau in die App und sag zu oder ab.",
-    rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen. Schau gern nach einem anderen freien Termin.`,
+    offered: `${hi} ich biete dir eine Fahrstunde an: ${when} (${slot.duration_min} Min.).` + (meeting ? `\n📍 Treffpunkt: ${meeting}` : ""),
+    rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen.`,
     cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
   }[kind];
-  return body + (reply ? `\n${reply}` : "") + `\n\nAlle Infos findest du in der App „Easy Fahrstundenplaner“.\n\n` + teacherSignature();
+  // Wo in der App geht es weiter? (statt eines Links)
+  const where = {
+    confirmed: "Du findest sie in der App „Easy Fahrstundenplaner“ unter „Meine Fahrstunden“.",
+    offered: "👉 Bitte öffne die App „Easy Fahrstundenplaner“ und sag unter „Meine Fahrstunden“ zu oder ab.",
+    rejected: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen anderen freien Termin aus.",
+    cancelled_teacher: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen neuen Termin aus.",
+  }[kind];
+  return body + (reply ? `\n${reply}` : "") + `\n\n${where}\n\n` + teacherSignature();
 }
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
 function notifyStep(msg, phone, text, who = "den Schüler") {
@@ -1625,7 +1632,7 @@ function newSlotForm(opts = {}) {
       pushNotify("exam", (madeExam || []).map((x) => x.id), "exam");
       showDate(at);
       const text = `Hallo ${student.first_name || ""}, deine ${examIn(examKind.value)} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
-        + (meet ? `\n📍 Treffpunkt: ${meet}` : "") + (note ? `\n${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App „Easy Fahrstundenplaner“.\n\n` + teacherSignature();
+        + (meet ? `\n📍 Treffpunkt: ${meet}` : "") + (note ? `\n${note}` : "") + `\n\nTermin, Treffpunkt und was du mitbringen musst, findest du in der App „Easy Fahrstundenplaner“ im „Kalender“. Viel Erfolg! 🍀\n\n` + teacherSignature();
       notifyStep(`Prüfung für ${fullName(student)} eingetragen`, student.phone, text);
       return;
     }
@@ -1650,9 +1657,9 @@ function newSlotForm(opts = {}) {
     if (meet) lines += `\n📍 Treffpunkt: ${meet}`;
     const text = kind === "offered"
       ? `Hallo ${student.first_name || ""}, ich biete dir folgende Fahrstunde${pl} an:\n${lines}` + (note ? `\n${note}` : "") +
-        `\n\nBitte schau in die App „Easy Fahrstundenplaner“ und sag dort zu oder ab.\n\n` + teacherSignature()
+        `\n\n👉 Bitte öffne die App „Easy Fahrstundenplaner“ und sag unter „Meine Fahrstunden“ zu oder ab.\n\n` + teacherSignature()
       : `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunde${pl} eingetragen:\n${lines}` + (note ? `\n${note}` : "") +
-        `\n\nAlle Infos findest du in der App „Easy Fahrstundenplaner“.\n\n` + teacherSignature();
+        `\n\nDu findest sie in der App „Easy Fahrstundenplaner“ unter „Meine Fahrstunden“.\n\n` + teacherSignature();
     notifyStep(`${n} Fahrstunde${pl} ${kind === "offered" ? "angeboten" : "eingetragen"} – ${fullName(student)}` + (res.skipped ? ` (${res.skipped} gab es schon)` : ""),
       student.phone, text);
   });
