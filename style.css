@@ -636,7 +636,9 @@ html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first 
 .tr-pill.live { background: #2fb36d; color: #fff; }
 .tr-pill.over { background: #f5a623; color: #3d2600; }
 .tr .countdown.small { margin: 0; }
-.tr-icon { border: none; background: none; font-size: 18px; padding: 2px 4px; cursor: pointer; text-decoration: none; color: var(--muted); line-height: 1; }
+.tr-icon { border: none; background: none; font-size: 15px; padding: 2px 2px; cursor: pointer; text-decoration: none; color: var(--muted); line-height: 1; }
+.tr-head { gap: 6px; }
+.tr-time { min-width: 40px; }
 .tr-meet { display: block; font-size: 12px; color: var(--teal-text); text-decoration: none; margin: 0 0 2px 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-act { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .tr-step { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 8px; padding: 5px 7px; font: inherit; font-size: 13px; cursor: pointer; }

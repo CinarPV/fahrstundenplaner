@@ -1299,6 +1299,9 @@ async function adminToday() {
         : el("span", { class: "tr-pill over" }, "abhaken"),
       phase === "next" && wa ? el("a", { class: "tr-icon", title: "Bin gleich da (WhatsApp)", target: "_blank", rel: "noopener",
         href: `https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${p.first_name || ""}, ich bin in ca. 5 Minuten am Treffpunkt.` + (meet ? ` 📍 ${meet}` : ""))}` }, "💬") : null,
+      el("button", { class: "tr-icon", title: "Löschen", "aria-label": "Fahrstunde löschen", onclick: async () => {
+        try { if (await deleteLessonSlot(s, b)) render(); } catch (e) { fail(e); }
+      } }, "🗑"),
       el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     if (phase === "done" || phase === "nothere") return el("div", { class: "tr " + phase }, head);
@@ -1714,6 +1717,26 @@ function newSlotForm(opts = {}) {
   return { node, setDate: (d) => { date.value = dateInput(d); setDays([weekdayIndex(d)]); refresh(); } };
 }
 
+// Termin samt Fahrstunde löschen (egal ob abgelehnt, Fehlstunde, gefahren …). Bestätigt und noch nicht gefahren
+// = ungewöhnlich → deutliche Rückfrage; der Schüler bekommt vorher eine Mitteilung „abgesagt“.
+async function deleteLessonSlot(slot, b) {
+  const p = (b && b.profiles) || {};
+  const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && new Date(slot.starts_at).getTime() > Date.now();
+  const who = b ? ` mit ${fullName(p)}` : "";
+  const msg = upcoming
+    ? `⚠️ Achtung: Die Fahrstunde${who} am ${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr ist BESTÄTIGT und hat noch nicht stattgefunden.\n\nWirklich löschen? Der Schüler bekommt eine Mitteilung, dass die Fahrstunde abgesagt ist.`
+    : b && b.status === "requested" ? `Anfrage${who} löschen? Der Termin verschwindet komplett.`
+    : `Diesen Termin${who} am ${fmtDate(slot.starts_at)} endgültig löschen?\n\nEr verschwindet auch aus Kontrolle und Statistik.`;
+  if (!confirm(msg)) return false;
+  if (upcoming || (b && b.status === "offered")) {
+    try { await sb.functions.invoke("notify", { body: { kind: "booking", ids: [b.id], event: "cancelled_teacher" } }); } catch { /* Mitteilung ist kein Muss */ }
+  }
+  const { error } = await sb.from("slots").delete().eq("id", slot.id);
+  if (error) throw error;
+  toast("🗑 Termin gelöscht.");
+  return true;
+}
+
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
     .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
@@ -1755,10 +1778,8 @@ async function openAdminSlot(slotId) {
     save.onclick = () => busy(save, async () => { await saveTime(); done("Gespeichert."); });
     const del = el("button", { class: "btn danger" }, "Termin löschen");
     del.onclick = () => busy(del, async () => {
-      if (!confirm("Diesen freien Termin wirklich löschen?")) return;
-      const { error } = await sb.from("slots").delete().eq("id", slot.id);
-      if (error) throw error;
-      done("Termin gelöscht.");
+      const last = (slot.bookings || []).slice().sort((x, y) => x.created_at.localeCompare(y.created_at)).pop();
+      if (await deleteLessonSlot(slot, last)) { closeModal(); render(); }
     });
     parts.push(el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
       timeFields, el("div", { class: "actions" }, save, del), el("hr"), await bookForStudentForm(slot, saveTime, () => meet.value()));
@@ -1832,6 +1853,12 @@ async function openAdminSlot(slotId) {
       }));
   }
 
+  // Gebuchte Termine (angefragt, angeboten, bestätigt, gefahren) ebenfalls löschbar
+  if (b) {
+    const delB = el("button", { class: "btn small ghost danger-text" }, "🗑 Fahrstunde löschen");
+    delB.onclick = () => busy(delB, async () => { if (await deleteLessonSlot(slot, b)) { closeModal(); render(); } });
+    parts.push(el("hr"), el("div", { class: "actions", style: "margin:0" }, delB));
+  }
   openModal(`${fmtDate(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)}`, ...parts);
 }
 
