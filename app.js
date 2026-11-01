@@ -1086,7 +1086,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", 
 async function adminCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
@@ -1106,7 +1106,7 @@ async function adminCalendar() {
     if (!b && notHeld) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
     if (!b && notHeld && past) tag = "nicht stattgefunden"; // angesetzt, aber abgesagt/krank – Grund steht im Text
-    if (b && b.status === "requested") { cls = "requested"; tag = "angefragt"; label = fullName(b.profiles) + glasses(b.profiles); }
+    if (b && b.status === "requested") { cls = "requested"; tag = b.over_limit ? "⚠️ Ausnahme" : "angefragt"; label = fullName(b.profiles) + glasses(b.profiles); }
     if (b && b.status === "offered") { cls = "offered"; tag = "angeboten"; label = fullName(b.profiles) + " – wartet auf Zusage"; }
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
@@ -1788,7 +1788,7 @@ async function openTraining(st, lessons) {
 async function adminRequests() {
   const weekAgo = addDays(new Date(), -7).toISOString();
   const [req, open, cancels, offers] = await Promise.all([
-    sb.from("bookings").select("id,student_note,created_at,meeting_point,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
+    sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
     sb.from("bookings").select("id,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
@@ -1812,7 +1812,7 @@ async function adminRequests() {
 
   // Anfrage direkt in der Liste bestätigen oder ablehnen (Details/Änderungen weiter über „Öffnen“)
   const decideButtons = (b) => {
-    const ok = el("button", { class: "btn small ok" }, "✓ Bestätigen");
+    const ok = el("button", { class: "btn small ok" }, b.over_limit ? "✓ Ausnahme gewähren" : "✓ Bestätigen");
     ok.onclick = () => busy(ok, async () => {
       const { error } = await sb.from("bookings").update({ status: "confirmed", decided_at: new Date().toISOString() }).eq("id", b.id);
       if (error) throw error;
@@ -1830,7 +1830,9 @@ async function adminRequests() {
 
   return el("div", {},
     el("h2", {}, "Offene Anfragen"),
-    req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
+    req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
+      b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Über der Höchstzahl – bittet um eine Ausnahme")) : null,
+      b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
     cancels.data.length ? [
       el("h2", { style: "margin-top:24px" }, "Absagen & abgelehnte Angebote (letzte 7 Tage)"),
@@ -2477,6 +2479,9 @@ function openBooking(s) {
   const btn = el("button", { class: "btn" }, "Fahrstunde anfragen");
   btn.onclick = () => busy(btn, async () => {
     const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value });
+    // Höchstzahl erreicht → Pop-up mit der Möglichkeit, um eine Ausnahme zu bitten
+    const limit = error && /LIMIT:(\d+):(\d+)/.exec(error.message || "");
+    if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2]);
     if (error) throw error;
     toast("Angefragt! Du siehst unter „Meine Fahrstunden“, sobald dein Fahrlehrer bestätigt.");
     closeModal();
@@ -2492,6 +2497,28 @@ function openBooking(s) {
       "Spätere Absagen werden als Fehlstunde berechnet und sind kostenpflichtig."),
     isLate(s.starts_at) ? el("div", { class: "notice danger" },
       "Kurzfristige Buchung: Die Absagefrist ist bereits abgelaufen. Wird diese Fahrstunde bestätigt, ist eine Absage kostenpflichtig.") : null,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+// Höchstzahl erreicht: Hinweis + kurze Nachricht an den Fahrlehrer → Anfrage als „Ausnahme gewünscht“
+function openLimitRequest(s, prevNote, open, max) {
+  const msg = el("textarea", { maxlength: 300, placeholder: "z. B. „Meine Prüfung ist bald – könnte ich diese Woche noch eine Stunde fahren?“" });
+  msg.value = prevNote || "";
+  const btn = el("button", { class: "btn" }, "📨 Trotzdem anfragen (Ausnahme)");
+  btn.onclick = () => busy(btn, async () => {
+    if (!msg.value.trim()) throw new Error("Bitte schreib kurz, warum du eine weitere Fahrstunde möchtest.");
+    const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: msg.value.trim(), p_exception: true });
+    if (error) throw error;
+    toast("Deine Bitte ist bei deinem Fahrlehrer angekommen. Er entscheidet, ob er eine Ausnahme macht.");
+    closeModal();
+    render();
+  });
+  openModal("Höchstzahl erreicht",
+    el("div", { class: "notice" }, el("b", {}, `Du hast schon ${open} offene bzw. anstehende Fahrstunde${open === 1 ? "" : "n"}`),
+      ` – mehr als ${max} gleichzeitig sind normalerweise nicht möglich.`),
+    el("p", {}, "Möchtest du diesen Termin trotzdem? Schreib deinem Fahrlehrer kurz, warum. Er kann dir eine Ausnahme erlauben."),
+    el("p", { class: "small" }, el("b", {}, fmtDate(s.starts_at)), ` · ${fmtRange(s.starts_at, s.duration_min)}`),
+    el("label", {}, "Nachricht an deinen Fahrlehrer"), msg,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 

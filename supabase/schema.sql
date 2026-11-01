@@ -90,6 +90,8 @@ alter table public.slots    add column if not exists meeting_point  text check (
 alter table public.settings add column if not exists time_presets   text check (char_length(time_presets) <= 400);
 -- Kontrolle: wann die Fahrstunde ins Fahrschulsystem übertragen wurde (NULL = noch nicht)
 alter table public.bookings add column if not exists transferred_at timestamptz;
+-- Anfrage über der Höchstzahl: Schüler bittet um eine Ausnahme (Fahrlehrer entscheidet)
+alter table public.bookings add column if not exists over_limit boolean not null default false;
 
 -- Urlaub / freie Tage eines Fahrlehrers: an diesen Tagen kann nichts angefragt werden
 create table if not exists public.time_off (
@@ -533,10 +535,11 @@ language sql stable security definer set search_path = public as $$
   order by s.starts_at;
 $$;
 
--- Termin anfragen
-create or replace function public.book_slot(p_slot uuid, p_note text)
+-- Termin anfragen. Über der Höchstzahl nur als Ausnahme-Bitte (p_exception) mit Nachricht an den Fahrlehrer.
+drop function if exists public.book_slot(uuid, text);
+create or replace function public.book_slot(p_slot uuid, p_note text, p_exception boolean default false)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare v_id uuid; v_start timestamptz; v_max int; v_open int;
+declare v_id uuid; v_start timestamptz; v_max int; v_open int; v_over boolean := false;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
   select starts_at into v_start from slots where id = p_slot and teacher_id = my_teacher_id();
@@ -551,12 +554,17 @@ begin
     where b.student_id = auth.uid() and s.starts_at > now()
       and (b.status = 'requested' or (b.status = 'confirmed' and b.actual_minutes is null));
     if v_open >= v_max then
-      raise exception 'Du hast schon % offene bzw. anstehende Termine – mehr sind gerade nicht möglich.', v_open;
+      if not coalesce(p_exception, false) then
+        -- „LIMIT:“ erkennt die App und bietet dann die Ausnahme-Bitte an
+        raise exception 'LIMIT:%:%', v_open, v_max;
+      end if;
+      if coalesce(trim(p_note), '') = '' then raise exception 'Bitte schreib deinem Fahrlehrer kurz, warum du eine weitere Fahrstunde möchtest'; end if;
+      v_over := true;
     end if;
   end if;
   begin
-    insert into bookings (slot_id, student_id, student_note)
-    values (p_slot, auth.uid(), nullif(left(trim(coalesce(p_note,'')), 300), ''))
+    insert into bookings (slot_id, student_id, student_note, over_limit)
+    values (p_slot, auth.uid(), nullif(left(trim(coalesce(p_note,'')), 300), ''), v_over)
     returning id into v_id;
   exception when unique_violation then
     raise exception 'Dieser Termin ist leider schon vergeben';
@@ -720,7 +728,7 @@ create policy time_off_teacher on public.time_off for all
 
 -- Rechte für Funktionen
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
-grant execute on function public.book_slot(uuid, text) to authenticated;
+grant execute on function public.book_slot(uuid, text, boolean) to authenticated;
 grant execute on function public.cancel_request(uuid) to authenticated;
 grant execute on function public.cancel_booking(uuid, text) to authenticated;
 grant execute on function public.respond_offer(uuid, boolean, text) to authenticated;
