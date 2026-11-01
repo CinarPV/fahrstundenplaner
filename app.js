@@ -756,11 +756,8 @@ function addPasswordEye(input) {
 new MutationObserver(() => document.querySelectorAll('input[type="password"]:not([data-eye])').forEach(addPasswordEye))
   .observe(document.body, { childList: true, subtree: true });
 
-// Hintergrund-Farbe der App – nur auf diesem Gerät gespeichert
-const BACKGROUNDS = [["", "Hell (Standard)", "#f2f8fa"], ["mint", "Mint", "#d7f0f1"], ["teal", "Türkis", "#28B5B9"], ["navy", "Dunkelblau", "#0b3d5c"],
-  ["sand", "Sand", "#f5efe6"], ["glass", "Glas", "linear-gradient(135deg,#eceeff,#e2f5f6)"], ["minimal", "Minimal", "linear-gradient(90deg,#111 0 70%,#e5484d 70% 80%,#f5a623 80% 90%,#2fb36d 90%)"],
-  ["night", "🌙 Nacht", "linear-gradient(135deg,#10263a,#0a1621)"], ["graphite", "🖤 Graphit", "linear-gradient(135deg,#22272c,#101214)"], ["ocean", "🌊 Ozean", "linear-gradient(135deg,#0b3a3e,#061c1e)"]];
-const DARK_BG = ["night", "graphite", "ocean"];
+// Design der App: Hell (Standard) oder Ozean (dunkel) – nur auf diesem Gerät gespeichert
+const DARK_BG = ["ocean"];
 function setDesign(key) {
   if (key) document.documentElement.dataset.bg = key; else delete document.documentElement.dataset.bg;
   document.documentElement.classList.toggle("dark", DARK_BG.includes(key));
@@ -768,23 +765,15 @@ function setDesign(key) {
 }
 function backgroundCard() {
   const cur = () => document.documentElement.dataset.bg || "";
-  // Schnell-Umschalter: Hell (Standard) ⇄ Ozean (dunkel)
   const sw = el("div", { class: "design-switch", role: "group", "aria-label": "Design umschalten" });
-  const box = el("div", { class: "bg-picks" });
-  const draw = () => {
-    sw.replaceChildren(...[["", "☀️ Hell"], ["ocean", "🌊 Ozean"]].map(([key, label]) => el("button", {
-      type: "button", class: cur() === key ? "on" : "", "aria-pressed": String(cur() === key), onclick: () => { setDesign(key); draw(); },
-    }, label)));
-    box.replaceChildren(...BACKGROUNDS.map(([key, label, color]) => el("button", {
-      type: "button", class: "bg-pick" + (cur() === key ? " active" : ""), onclick: () => { setDesign(key); draw(); },
-    }, el("i", { style: `background:${color}` }), label)));
-  };
+  const draw = () => sw.replaceChildren(...[["", "☀️ Hell"], ["ocean", "🌊 Ozean"]].map(([key, label]) => el("button", {
+    type: "button", class: cur() === key ? "on" : "", "aria-pressed": String(cur() === key), onclick: () => { setDesign(key); draw(); },
+  }, label)));
   draw();
   return el("div", { class: "card" },
     el("h3", {}, "🎨 Design"),
     el("p", { class: "muted small" }, "Mit einem Tipp zwischen Hell und Ozean wechseln. Gilt nur auf diesem Gerät."),
-    sw,
-    el("details", { class: "fold", style: "margin-top:12px" }, el("summary", {}, "Weitere Designs …"), box));
+    sw);
 }
 
 function installCard() {
