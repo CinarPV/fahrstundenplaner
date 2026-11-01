@@ -507,14 +507,30 @@ html.no-splash #splash { display: none; }
 .stat.next .next-line { font-size: 14px; margin-top: 2px; }
 .stat.next .next-line b { font-size: 16px; display: inline; }
 
-/* Prüfungs-Kasten beim Schüler: Treffpunkt, Mitbringen, Motivation */
-.exam-meet { display: block; margin: 10px 0 0; font-size: 14px; color: var(--exam-fg); font-weight: 600; text-decoration: none; }
-.exam-bring { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--exam-bd); }
-.exam-bring-h { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin-right: 2px; }
-.exam-bring .chip { background: #fff; border: 1px solid var(--exam-bd); border-radius: 999px; padding: 3px 10px; font-size: 13px; color: #3d2600; }
-.exam-bring .chip.wide { border-radius: 10px; }
-.exam-motto { margin-top: 12px; font-size: 19px; font-weight: 800; color: #0b3d5c; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 7px; }
+/* Prüfungs-Kasten beim Schüler als „Ticket“ */
+.exam-ticket { position: relative; margin-bottom: 14px; border-radius: 18px; color: #3d2600;
+  background: linear-gradient(135deg, #fff8e1 0%, #ffe7a8 100%); box-shadow: 0 6px 18px rgba(240, 180, 41, .28), inset 0 0 0 1.5px #f0b429; }
+.tk-head { display: flex; align-items: center; gap: 12px; padding: 12px 12px 10px; cursor: pointer; }
+.tk-date { flex: 0 0 52px; display: flex; flex-direction: column; align-items: center; padding: 6px 0; border-radius: 12px;
+  background: #0b3d5c; color: #fff; box-shadow: 0 3px 8px rgba(11, 61, 92, .3); }
+.tk-date span { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; opacity: .85; }
+.tk-date b { font-size: 22px; line-height: 1.1; }
+.tk-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tk-label { font-size: 12px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: #a66a00; }
+.tk-time { font-size: 17px; color: #0b3d5c; }
+.tk-meet { font-size: 13px; font-weight: 600; color: #7a4b00; text-decoration: none; line-height: 1.3; margin-top: 2px; }
+.tk-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.tk-count { background: #0b3d5c !important; color: #fff !important; font-size: 11px; white-space: nowrap; padding: 2px 8px; }
+.tk-cut { position: relative; height: 0; margin: 0 14px; border-top: 2px dashed rgba(166, 106, 0, .35); }
+.tk-cut::before, .tk-cut::after { content: ""; position: absolute; top: -10px; width: 18px; height: 18px; border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 1.5px #f0b429; }
+.tk-cut::before { left: -24px; clip-path: inset(0 0 0 50%); }
+.tk-cut::after { right: -24px; clip-path: inset(0 50% 0 0); }
+.tk-bring { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 10px 10px 4px; }
+.tk-item { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 1px; padding: 8px 4px; border-radius: 12px; background: rgba(255, 255, 255, .7); }
+.tk-ico { font-size: 22px; line-height: 1.1; }
+.tk-item b { font-size: 13px; color: #0b3d5c; }
+.tk-item small { font-size: 10.5px; line-height: 1.25; color: #7a4b00; }
+.tk-motto { display: flex; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 0 7px; padding: 6px 12px 12px; font-size: 18px; font-weight: 800; color: #0b3d5c; }
+.tk-luck { font-size: 14px; font-weight: 700; color: #a66a00; }
 .easy-word { display: inline-flex; align-items: baseline; }
-.easy-word svg { height: .78em; width: auto; margin-right: 1px; align-self: baseline; transform: translateY(1px); }
-.easy-word span { color: #0b3d5c; }
-.muted-motto { font-weight: 600; font-size: 15px; color: var(--exam-fg); }
+.easy-word svg { height: .78em; width: auto; margin-right: 1px; transform: translateY(1px); }

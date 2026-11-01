@@ -2474,19 +2474,26 @@ function examBanner(e) {
   const easy = el("span", { class: "easy-word", "aria-label": "Easy" });
   easy.innerHTML = EASY_E + "<span>asy!</span>";
   const meet = e.meeting_point;
-  return el("div", { class: "card exam-banner" },
-    el("div", { class: "exam-top", onclick: () => goTab("training") },
-      el("span", { class: "exam-icon" }, "🎓"),
-      el("span", {}, el("b", {}, `Deine ${examIn(e.kind)}`), el("br"),
-        `${fmtDay(e.exam_at)} · ${fmtRange(e.exam_at, e.duration_min || 55)} Uhr`),
-      countdownEl(e.exam_at, e.duration_min || 55)),
-    meet ? el("a", { class: "exam-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
-    el("div", { class: "exam-bring" },
-      el("span", { class: "exam-bring-h" }, "Mitbringen"),
-      el("span", { class: "chip" }, "🪪 Ausweis"),
-      state.profile.needs_glasses ? el("span", { class: "chip" }, "👓 Brille / Kontaktlinsen") : null,
-      el("span", { class: "chip wide" }, "🧾 Kontoauszug auf Papier – falls TÜV-Gebühr noch offen oder erst vor < 1 Woche bezahlt")),
-    el("div", { class: "exam-motto" }, el("span", {}, "Du schaffst es"), easy, el("span", { class: "muted-motto" }, "Viel Erfolg 🍀")));
+  const start = new Date(e.exam_at);
+  const item = (icon, title, sub) => el("div", { class: "tk-item" }, el("span", { class: "tk-ico" }, icon), el("b", {}, title), el("small", {}, sub));
+  // Wie ein Ticket: oben Termin, gestrichelte Abrisskante, unten „Mitbringen“ und Motivation
+  return el("div", { class: "exam-ticket" },
+    el("div", { class: "tk-head", onclick: () => goTab("training") },
+      el("div", { class: "tk-date" },
+        el("span", {}, start.toLocaleDateString("de-DE", { weekday: "short" })),
+        el("b", {}, start.getDate()),
+        el("span", {}, start.toLocaleDateString("de-DE", { month: "short" }))),
+      el("div", { class: "tk-main" },
+        el("span", { class: "tk-label" }, "🎓 Praktische Prüfung"),
+        el("div", { class: "tk-row" }, el("b", { class: "tk-time" }, `${fmtRange(e.exam_at, e.duration_min || 55)} Uhr`), countdownEl(e.exam_at, e.duration_min || 55, "tk-count")),
+        meet ? el("a", { class: "tk-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener",
+          onclick: (ev) => ev.stopPropagation() }, "📍 " + meet) : null)),
+    el("div", { class: "tk-cut" }),
+    el("div", { class: "tk-bring" },
+      item("🪪", "Ausweis", "Personalausweis oder Pass"),
+      item("👓", "Sehhilfe", "Brille/Linsen, falls nötig"),
+      item("🧾", "Kontoauszug", "auf Papier, falls TÜV-Zahlung < 1 Woche")),
+    el("div", { class: "tk-motto" }, el("span", {}, "Du schaffst es"), easy, el("span", { class: "tk-luck" }, "Viel Erfolg 🍀")));
 }
 
 function openBooking(s) {
