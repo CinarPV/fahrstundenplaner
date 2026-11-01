@@ -2620,15 +2620,16 @@ async function adminControl() {
     if (error) throw error;
     list.forEach((b) => (b.transferred_at = on ? new Date().toISOString() : null));
   }
-  // Eine Fahrstunde wie im Kalender: Uhrzeit links, Dauer rechts, darunter Name und Art; rechts Haken „übertragen“
+  // Eine Fahrstunde wie im Kalender: Beginn links, Dauer rechts, darunter der Name; rechts Haken „übertragen“
   const rowEl = (b) => {
     const ok = b.status === "confirmed";
     const box = el("input", { type: "checkbox", checked: !!b.transferred_at, "aria-label": "Ins Fahrschulsystem übertragen" });
     const entry = el("div", { class: "slot ctl " + (ok ? "done" : "ctl-late") + (b.transferred_at ? " transferred" : "") },
       el("div", { class: "ctl-main" },
-        slotHead(fmtRange(b.slots.starts_at, b.slots.duration_min), ok ? `${b.actual_minutes} Min.` : "Fehlstunde"),
-        el("div", {}, fullName(b.profiles), b.profiles && b.profiles.license_class ? el("span", { class: "muted" }, ` · ${b.profiles.license_class}`) : null),
-        el("div", { class: "small" }, ok ? `${LESSON_ICON[b.lesson_type] || ""} ${controlKind(b)}`.trim() : "kostenpflichtig" + (b.cancel_reason ? ` · ${b.cancel_reason}` : ""))),
+        // nur das Nötige: Beginn, Dauer, Schüler (Fehlstunde mit Hinweis)
+        slotHead(`${fmtTime(b.slots.starts_at)} Uhr`, ok ? `${b.actual_minutes} Min.` : "Fehlstunde"),
+        el("div", {}, fullName(b.profiles)),
+        ok ? null : el("div", { class: "small" }, "kostenpflichtig" + (b.cancel_reason ? ` · ${b.cancel_reason}` : ""))),
       el("label", { class: "ctl-check" }, box, el("span", {}, "übertragen")));
     box.addEventListener("change", async () => {
       box.disabled = true;
