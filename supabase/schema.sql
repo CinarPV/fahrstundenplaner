@@ -382,6 +382,33 @@ begin
   delete from auth.users where id = p_id;
 end $$;
 
+-- Aufräumen: alles, was älter als 15 Monate ist, wird gelöscht (nur die eigenen Daten des Fahrlehrers).
+-- Termine/Fahrstunden, Prüfungen und Urlaubstage – und Schüler, die seit 15 Monaten nichts mehr hatten
+-- (Konto wird komplett gelöscht). Die App ruft das beim Fahrlehrer einmal am Tag automatisch auf.
+create or replace function public.cleanup_old_data()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  me uuid := auth.uid();
+  v_cut timestamptz := now() - interval '15 months';
+  n_slots int; n_exams int; n_off int; n_students int;
+begin
+  if not is_teacher() then raise exception 'Nur Fahrlehrer können alte Daten löschen'; end if;
+  delete from slots where teacher_id = me and starts_at < v_cut;           -- Buchungen werden mitgelöscht
+  get diagnostics n_slots = row_count;
+  delete from exams where student_teacher(student_id) = me and exam_at < v_cut;
+  get diagnostics n_exams = row_count;
+  delete from time_off where teacher_id = me and to_day < v_cut::date;
+  get diagnostics n_off = row_count;
+  -- Schüler ohne jede Fahrstunde/Prüfung in den letzten 15 Monaten (und schon länger angemeldet)
+  delete from auth.users u where u.id in (
+    select p.id from profiles p
+    where p.role = 'student' and p.teacher_id = me and p.created_at < v_cut
+      and not exists (select 1 from bookings b join slots s on s.id = b.slot_id where b.student_id = p.id and s.starts_at >= v_cut)
+      and not exists (select 1 from exams e where e.student_id = p.id and e.exam_at >= v_cut));
+  get diagnostics n_students = row_count;
+  return jsonb_build_object('slots', n_slots, 'exams', n_exams, 'time_off', n_off, 'students', n_students);
+end $$;
+
 -- Sicherung wiederherstellen (nur die eigene!). Gelöschte Termine/Buchungen kommen zurück,
 -- geänderte werden auf den Stand der Sicherung gesetzt. Neu Hinzugekommenes bleibt bestehen.
 -- Schülerkonten, die inzwischen gelöscht wurden, können nicht neu angelegt werden (deren Buchungen werden übersprungen).
@@ -775,5 +802,6 @@ grant execute on function public.set_teacher_status(uuid, text) to authenticated
 grant execute on function public.delete_teacher(uuid) to authenticated;
 grant execute on function public.owner_set_teacher_password(uuid, text) to authenticated;
 grant execute on function public.restore_backup(jsonb) to authenticated;
+grant execute on function public.cleanup_old_data() to authenticated;
 grant execute on function public.password_changed() to authenticated;
 grant execute on function public.public_teachers() to anon, authenticated;

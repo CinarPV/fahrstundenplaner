@@ -452,6 +452,19 @@ async function loadUserAndRender() {
   state.tab = "calendar";
   renderUserbox();
   render();
+  if (isAdmin() && state.profile.status === "active") cleanupOldData();
+}
+
+// Daten älter als 15 Monate automatisch löschen – beim Fahrlehrer höchstens einmal am Tag (still im Hintergrund)
+async function cleanupOldData() {
+  const key = "fsp_cleanup_" + state.profile.id, today = dateInput(new Date());
+  try { if (localStorage.getItem(key) === today) return; } catch { /* egal */ }
+  const { data, error } = await sb.rpc("cleanup_old_data");
+  if (error) return;  // z. B. Datenbank noch nicht aktualisiert – nächstes Mal wieder versuchen
+  try { localStorage.setItem(key, today); } catch { /* egal */ }
+  const n = data || {};
+  const parts = [n.slots ? `${n.slots} Termin${n.slots === 1 ? "" : "e"}` : "", n.students ? `${n.students} Schüler` : ""].filter(Boolean);
+  if (parts.length) toast(`🧹 Älter als 15 Monate – gelöscht: ${parts.join(", ")}.`);
 }
 
 // Schüler ist (noch) nicht freigeschaltet oder wurde gesperrt
@@ -2348,6 +2361,7 @@ function backupCard() {
   csv.onclick = () => busy(csv, async () => { const n = await exportAllLessons(); toast(`${n} Einträge exportiert.`); });
   return el("div", { class: "card" },
     el("h3", {}, "💾 Datensicherung"),
+    el("p", { class: "notice small", style: "margin:0 0 10px" }, "🧹 Automatisch aufgeräumt: Termine, Fahrstunden, Prüfungen und Urlaubstage, die älter als 15 Monate sind, werden gelöscht – ebenso Schülerkonten ohne Fahrstunde in den letzten 15 Monaten. Wer etwas länger aufheben möchte: vorher eine Sicherung herunterladen."),
     backupOverdue() ? el("div", { class: "notice danger" }, last
       ? `Deine letzte Sicherung auf diesem Gerät ist vom ${new Date(last).toLocaleDateString("de-DE")} – mehr als 30 Tage her. Bitte neu sichern.`
       : "Auf diesem Gerät wurde noch keine Sicherung gemacht.") :
@@ -2913,7 +2927,7 @@ function studentProfile() {
     el("h2", {}, "Mein Profil"),
     el("p", { class: "muted small" }, state.profile.email || ""),
     f.node, el("div", { class: "actions" }, save),
-    el("hr"), passwordCard(), installHint());
+    el("hr"), passwordCard(), backgroundCard(), installHint());
 }
 
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */

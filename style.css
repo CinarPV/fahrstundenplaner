@@ -596,7 +596,7 @@ html[data-bg="ocean"] {
   --page-bg: radial-gradient(120% 60% at 50% 0%, #0b3a3e 0%, #061c1e 65%) fixed;
   --bg: #0b2628; --card: #0d2b2e; --raise: #123538; --head-bg: #133c40;
   --text: #e4f4f3; --muted: #8fb2b0; --border: #1d4649;
-  --brand: #22a39a; --brand-dark: #1a8a82; --teal: #4fd1c5; --teal-text: #6fe0d6;
+  --brand: #177a73; --brand-dark: #12645e; --teal: #4fd1c5; --teal-text: #6fe0d6;
   --bar1: #062022; --bar2: #0a3436;
 }
 
@@ -604,3 +604,15 @@ html[data-bg="ocean"] {
 .design-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); max-width: 360px; }
 .design-switch button { border: none; border-radius: 999px; padding: 10px 8px; font: inherit; font-weight: 700; background: transparent; color: var(--muted); cursor: pointer; }
 .design-switch button.on { background: var(--brand); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .15); }
+
+/* Ozean: Knöpfe gedeckter (gut lesbare weiße Schrift) und etwas kleiner */
+html.dark .add-btn, html.dark .btn.ok { background: var(--brand); border-color: var(--brand); color: #fff; }
+html.dark .add-btn { font-size: 15px; padding: 9px 14px; }
+html.dark .btn { padding: 7px 12px; }
+html.dark .btn.small { padding: 4px 9px; }
+html.dark .tab { padding: 6px 12px; font-size: 14px; }
+html.dark .tab.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+html.dark .past-bar { background: var(--brand); border-color: var(--brand); border-bottom-color: #0e4f4a; color: #fff; padding: 9px 10px; }
+html.dark .countdown { background: var(--brand); color: #fff; }
+html.dark .design-switch button.on { background: var(--brand); }
+html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first .countdown, html.dark .countdown.ok { background: var(--brand) !important; color: #fff !important; }
