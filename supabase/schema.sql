@@ -63,9 +63,9 @@ create table if not exists public.bookings (
                   -- cancelled  = unbestätigte Anfrage vom Schüler zurückgezogen
                   -- offered    = vom Fahrlehrer angeboten, wartet auf Zusage des Schülers
                   -- declined   = Angebot vom Schüler abgelehnt
-                  -- sick / cancelled_student / cancelled_teacher = Fahrstunde nicht zustande gekommen
+                  -- sick / cancelled_student / cancelled_teacher / no_show = Fahrstunde nicht zustande gekommen
                   check (status in ('requested','confirmed','rejected','cancelled','offered','declined',
-                                    'sick','cancelled_student','cancelled_teacher')),
+                                    'sick','cancelled_student','cancelled_teacher','no_show')),
   cancel_reason   text check (char_length(cancel_reason) <= 300),
   late_cancel     boolean not null default false,  -- Fehlstunde (kostenpflichtig)
   lesson_type     text not null default 'normal'
@@ -77,6 +77,12 @@ create table if not exists public.bookings (
   decided_at      timestamptz
 );
 -- Pro Termin höchstens EINE offene, angebotene oder bestätigte Buchung
+-- Status „no_show“ (Schüler nicht erschienen) für bestehende Datenbanken nachrüsten
+alter table public.bookings drop constraint if exists bookings_status_check;
+alter table public.bookings add constraint bookings_status_check
+  check (status in ('requested','confirmed','rejected','cancelled','offered','declined',
+                    'sick','cancelled_student','cancelled_teacher','no_show'));
+
 create unique index if not exists bookings_one_active_per_slot
   on public.bookings (slot_id) where status in ('requested','confirmed','offered');
 create index if not exists bookings_student_idx on public.bookings (student_id);

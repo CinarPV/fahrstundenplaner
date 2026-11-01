@@ -85,15 +85,16 @@ const fullName = (p) => (p ? `${p.first_name || ""} ${p.last_name || ""}`.trim()
 const STATUS_TEXT = {
   requested: "Angefragt", confirmed: "Bestätigt", rejected: "Abgelehnt", cancelled: "Anfrage zurückgezogen",
   offered: "Angeboten – wartet auf Zusage", declined: "Angebot abgelehnt",
-  sick: "Krank gemeldet", cancelled_student: "Vom Schüler abgesagt", cancelled_teacher: "Vom Fahrlehrer abgesagt",
+  sick: "Krank gemeldet", cancelled_student: "Vom Schüler abgesagt", cancelled_teacher: "Vom Fahrlehrer abgesagt", no_show: "Nicht erschienen",
 };
 // Gründe, warum eine bestätigte Fahrstunde nicht zustande kam
 const NOT_HELD = [
   ["sick", "🤒 Krank gemeldet"],
   ["cancelled_student", "🙋 Schüler hat abgesagt"],
+  ["no_show", "🚷 Nicht erschienen"],
   ["cancelled_teacher", "🚫 Ich habe abgesagt"],
 ];
-const NOT_HELD_ICON = { sick: "🤒", cancelled_student: "🙋", cancelled_teacher: "🚫" };
+const NOT_HELD_ICON = { sick: "🤒", cancelled_student: "🙋", cancelled_teacher: "🚫", no_show: "🚷" };
 
 // Kostenlose Absage bis Vortag 18:00 Uhr – danach Fehlstunde (kostenpflichtig)
 function cancelDeadline(start) {
@@ -292,7 +293,7 @@ function exportPrint(p, rows) {
   const counts = SPECIAL_TYPES.map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
   d.body.append(tag("h1", "Fahrstunden – " + fullName(p)),
     tag("div", [p.license_class ? "Klasse " + p.license_class : "", `Stand: ${new Date().toLocaleDateString("de-DE")}`].filter(Boolean).join(" · ")),
-    tag("p", `Gefahren: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termine · ${total} Min. · ${counts}`),
+    tag("p", `Gefahren: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termine · ${total} Min. · Fehlstunden: ${r.filter((x) => x.late === "ja").length} · ${counts}`),
     table);
   setTimeout(() => w.print(), 300);
 }
@@ -1605,7 +1606,10 @@ function doneControls(slot, b, after, opts = {}) {
   const lateWrap = el("label", { class: "check" }, late, "Fehlstunde – kostenpflichtig",
     el("span", { class: "muted small" }, ` (Frist: ${fmtDeadline(slot.starts_at)})`));
   const chosen = () => (radios.find((x) => x.r.checked) || {}).r;
-  radios.forEach((x) => x.r.addEventListener("change", () => (lateWrap.hidden = chosen().value === "cancelled_teacher")));
+  radios.forEach((x) => x.r.addEventListener("change", () => {
+    lateWrap.hidden = chosen().value === "cancelled_teacher";
+    if (chosen().value === "no_show") late.checked = true;  // nicht erschienen = Fehlstunde
+  }));
   const saveNo = el("button", { class: "btn danger" }, "Speichern – nicht gefahren");
   saveNo.onclick = () => busy(saveNo, async () => {
     const r = chosen();
@@ -2863,6 +2867,7 @@ function studentProfile() {
 
 // Übersicht aller abgehakten Fahrstunden – nummeriert, mit Datum, Uhrzeit und Minuten
 function doneList(rows, total) {
+  const late = rows.filter((b) => b.late_cancel).length;
   const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null)
     .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
   if (!done.length) return null;
@@ -2877,7 +2882,7 @@ function doneList(rows, total) {
         el("td", {}, typeLabel(b.lesson_type)),
         el("td", { class: "num" }, b.actual_minutes)))),
       el("tfoot", {}, el("tr", {},
-        el("th", { colspan: 4 }, `Gesamt: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termin${done.length === 1 ? "" : "e"}`),
+        el("th", { colspan: 4 }, `Gesamt: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termin${done.length === 1 ? "" : "e"} · ${late} Fehlstunde${late === 1 ? "" : "n"}`),
         el("th", { class: "num" }, `${total} Min.`))))));
 }
 
@@ -3003,7 +3008,7 @@ async function studentMine() {
     el("div", { class: "stat-row" },
       nextTile(),
       stat(fmtLessons(total).replace(/ Fahrstunden?$/, ""), "Fahrstunden gefahren"),
-      lateRows.length ? stat(String(lateRows.length), lateRows.length === 1 ? "Fehlstunde" : "Fehlstunden", "warn") : null),
+      stat(String(lateRows.length), lateRows.length === 1 ? "Fehlstunde" : "Fehlstunden", "warn")),
     !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin:12px 0 0" },
       "Bitte trage unter „Profil“ deine WhatsApp-Nummer ein, damit dein Fahrlehrer dich erreichen kann.") : null,
     offers.length ? el("h2", { class: "mine-h" }, `📨 Angebote für dich (${offers.length})`) : null,
@@ -3019,7 +3024,7 @@ async function studentMine() {
       el("summary", {}, `⚠️ Fehlstunden (${lateRows.length})`),
       lateRows.map((b) => el("div", { class: "small", style: "padding:6px 0;border-bottom:1px solid var(--border)" },
         el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
-        " – kurzfristig abgesagt, kostenpflichtig", b.cancel_reason ? ` (${b.cancel_reason})` : ""))) : null,
+        b.status === "no_show" ? " – nicht erschienen, kostenpflichtig" : " – kurzfristig abgesagt, kostenpflichtig", b.cancel_reason ? ` (${b.cancel_reason})` : ""))) : null,
     wa ? el("div", { class: "actions", style: "margin-top:16px" }, wa) : null,
   );
 }
