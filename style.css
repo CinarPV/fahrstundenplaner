@@ -661,3 +661,8 @@ html[data-bg="ocean"] {
   --brand: #22a39a; --brand-dark: #1a8a82; --teal: #4fd1c5; --teal-text: #6fe0d6;
   --bar1: #062022; --bar2: #0a3436;
 }
+
+/* Design-Umschalter Hell ⇄ Ozean */
+.design-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); max-width: 360px; }
+.design-switch button { border: none; border-radius: 999px; padding: 10px 8px; font: inherit; font-weight: 700; background: transparent; color: var(--muted); cursor: pointer; }
+.design-switch button.on { background: var(--brand); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .15); }
