@@ -758,7 +758,9 @@ new MutationObserver(() => document.querySelectorAll('input[type="password"]:not
 
 // Hintergrund-Farbe der App – nur auf diesem Gerät gespeichert
 const BACKGROUNDS = [["", "Hell (Standard)", "#f2f8fa"], ["mint", "Mint", "#d7f0f1"], ["teal", "Türkis", "#28B5B9"], ["navy", "Dunkelblau", "#0b3d5c"],
-  ["night", "🌙 Nacht", "linear-gradient(135deg,#10263a,#0a1621)"], ["graphite", "🖤 Graphit", "linear-gradient(135deg,#22272c,#101214)"]];
+  ["sand", "Sand", "#f5efe6"], ["glass", "Glas", "linear-gradient(135deg,#eceeff,#e2f5f6)"], ["minimal", "Minimal", "linear-gradient(90deg,#111 0 70%,#e5484d 70% 80%,#f5a623 80% 90%,#2fb36d 90%)"],
+  ["night", "🌙 Nacht", "linear-gradient(135deg,#10263a,#0a1621)"], ["graphite", "🖤 Graphit", "linear-gradient(135deg,#22272c,#101214)"], ["ocean", "🌊 Ozean", "linear-gradient(135deg,#0b3a3e,#061c1e)"]];
+const DARK_BG = ["night", "graphite", "ocean"];
 function backgroundCard() {
   const cur = () => document.documentElement.dataset.bg || "";
   const box = el("div", { class: "bg-picks" });
@@ -766,6 +768,7 @@ function backgroundCard() {
     type: "button", class: "bg-pick" + (cur() === key ? " active" : ""),
     onclick: () => {
       if (key) document.documentElement.dataset.bg = key; else delete document.documentElement.dataset.bg;
+      document.documentElement.classList.toggle("dark", DARK_BG.includes(key));
       try { key ? localStorage.setItem("fsp_bg", key) : localStorage.removeItem("fsp_bg"); } catch { /* privater Modus */ }
       draw();
     },

@@ -588,7 +588,7 @@ html[data-bg="graphite"] {
   --brand: #28B5B9; --brand-dark: #1f969a; --teal-text: #5fd6d9;
   --bar1: #15181b; --bar2: #1d2226;
 }
-:is(html[data-bg="night"], html[data-bg="graphite"]) {
+html.dark {
   color-scheme: dark;
   --accent: var(--brand);
   --free-bg: #0f3a3c; --free-fg: #7fe3e5; --free-bd: #1e6d70;
@@ -599,38 +599,65 @@ html[data-bg="graphite"] {
   --exam-bg: #3a2c08; --exam-fg: #ffd57a; --exam-bd: #d6a019;
   --danger: #ff6b6b;
 }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .topbar { background: linear-gradient(100deg, var(--bar1), var(--bar2)); box-shadow: 0 2px 14px rgba(0, 0, 0, .45); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .footer { background: var(--bar1); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .day-head { background: var(--head-bg); color: var(--text); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .day.today:not(:has(> .empty)) .day-head { background: var(--teal); color: #06272a; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .day.today:not(:has(> .empty)) .day-head .plus { color: #06272a; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .day-head .plus { color: var(--teal-text); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .tab { border-color: var(--border); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .tab.active { color: #fff; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .weekbar .title { color: var(--text); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .badge.sick, :is(html[data-bg="night"], html[data-bg="graphite"]) .badge.cancelled_student,
-:is(html[data-bg="night"], html[data-bg="graphite"]) .badge.cancelled_teacher { background: #3b1717; color: #ffb3b3; border-color: #7a2a2a; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .lv i, :is(html[data-bg="night"], html[data-bg="graphite"]) .time-chip,
-:is(html[data-bg="night"], html[data-bg="graphite"]) .own-topic .unpin { background: var(--raise); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .repeat-toggle { background: var(--raise); border-color: var(--border); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .next-row.first { background: var(--free-bg); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .note.meeting { background: var(--raise); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .exam-card { background: linear-gradient(180deg, var(--exam-bg), var(--card) 120px); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .slot.off { background: repeating-linear-gradient(135deg, #1c232b, #1c232b 6px, #232b34 6px, #232b34 12px); color: var(--muted); border-color: #475262; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .slot.ctl-late { background: #3b1717; color: #ffb3b3; border-color: #7a2a2a; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .stage-head { background: var(--raise); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .btn.ghost { color: var(--text); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .card, :is(html[data-bg="night"], html[data-bg="graphite"]) .day { box-shadow: none; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .exam-ticket { box-shadow: 0 6px 18px rgba(0, 0, 0, .35), inset 0 0 0 1.5px #f0b429; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .tk-cut::before, :is(html[data-bg="night"], html[data-bg="graphite"]) .tk-cut::after { background: var(--page-bg); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .stat b { color: var(--teal-text); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .stat.warn b { color: #ff7b7b; }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .lesson-meet { color: var(--teal-text); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .date-chip { background: var(--raise); box-shadow: inset 0 0 0 1px var(--border); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .past-bar { box-shadow: none; }
+html.dark .topbar { background: linear-gradient(100deg, var(--bar1), var(--bar2)); box-shadow: 0 2px 14px rgba(0, 0, 0, .45); }
+html.dark .footer { background: var(--bar1); }
+html.dark .day-head { background: var(--head-bg); color: var(--text); }
+html.dark .day.today:not(:has(> .empty)) .day-head { background: var(--teal); color: #06272a; }
+html.dark .day.today:not(:has(> .empty)) .day-head .plus { color: #06272a; }
+html.dark .day-head .plus { color: var(--teal-text); }
+html.dark .tab { border-color: var(--border); }
+html.dark .tab.active { color: #fff; }
+html.dark .weekbar .title { color: var(--text); }
+html.dark .badge.sick, html.dark .badge.cancelled_student,
+html.dark .badge.cancelled_teacher { background: #3b1717; color: #ffb3b3; border-color: #7a2a2a; }
+html.dark .lv i, html.dark .time-chip,
+html.dark .own-topic .unpin { background: var(--raise); }
+html.dark .repeat-toggle { background: var(--raise); border-color: var(--border); }
+html.dark .next-row.first { background: var(--free-bg); }
+html.dark .note.meeting { background: var(--raise); }
+html.dark .exam-card { background: linear-gradient(180deg, var(--exam-bg), var(--card) 120px); }
+html.dark .slot.off { background: repeating-linear-gradient(135deg, #1c232b, #1c232b 6px, #232b34 6px, #232b34 12px); color: var(--muted); border-color: #475262; }
+html.dark .slot.ctl-late { background: #3b1717; color: #ffb3b3; border-color: #7a2a2a; }
+html.dark .stage-head { background: var(--raise); }
+html.dark .btn.ghost { color: var(--text); }
+html.dark .card, html.dark .day { box-shadow: none; }
+html.dark .exam-ticket { box-shadow: 0 6px 18px rgba(0, 0, 0, .35), inset 0 0 0 1.5px #f0b429; }
+html.dark .tk-cut::before, html.dark .tk-cut::after { background: var(--page-bg); }
+html.dark .stat b { color: var(--teal-text); }
+html.dark .stat.warn b { color: #ff7b7b; }
+html.dark .lesson-meet { color: var(--teal-text); }
+html.dark .date-chip { background: var(--raise); box-shadow: inset 0 0 0 1px var(--border); }
+html.dark .past-bar { box-shadow: none; }
 /* Graphit: jugendlicher – Akzent Türkis, aktive Elemente als Pillen mit leichtem Leuchten */
 html[data-bg="graphite"] .tab.active { background: var(--teal); border-color: var(--teal); color: #06272a; box-shadow: 0 0 0 3px rgba(40, 181, 185, .18); }
 html[data-bg="graphite"] .btn:not(.ghost):not(.danger):not(.ok) { color: #06272a; }
 html[data-bg="graphite"] .topbar { border-bottom-color: var(--teal); }
 html[data-bg="graphite"] .day.today { box-shadow: 0 0 0 1px var(--teal), 0 0 18px rgba(40, 181, 185, .18); }
-:is(html[data-bg="night"], html[data-bg="graphite"]) .day:has(> .empty) .day-head { background: none; color: var(--muted); }
+html.dark .day:has(> .empty) .day-head { background: none; color: var(--muted); }
+
+/* ---------- Weitere Designs ---------- */
+/* Sand: warmes Off-White, ruhig und edel */
+html[data-bg="sand"] { --page-bg: #f5efe6; --bg: #fbf7f1; --border: #e9dfd1; --muted: #76695a; }
+html[data-bg="sand"] .day-head { background: #f4ece0; }
+html[data-bg="sand"] .card, html[data-bg="sand"] .day { box-shadow: 0 1px 0 rgba(120, 90, 50, .06); }
+/* Glas: zarter Lavendel-Aqua-Verlauf, schwebende Karten, runde Formen – sehr zeitgemäß */
+html[data-bg="glass"] { --page-bg: linear-gradient(160deg, #eceeff 0%, #e2f5f6 55%, #f3f0ff 100%) fixed; --bg: #f5f6fe; --border: #e1e4f6; --radius: 16px; }
+html[data-bg="glass"] .card, html[data-bg="glass"] .day { border-color: transparent; border-radius: 18px; box-shadow: 0 6px 20px rgba(76, 84, 170, .09); }
+html[data-bg="glass"] .day-head { background: linear-gradient(90deg, #eef0ff, #e6f7f7); }
+html[data-bg="glass"] .tab { border-color: transparent; box-shadow: 0 2px 8px rgba(76, 84, 170, .08); }
+html[data-bg="glass"] .topbar { background: linear-gradient(100deg, #4b4fc7 0%, #05679A 55%, #1597a8 100%); }
+/* Minimal: Schwarz-Weiß mit Ampel-Akzent wie im Logo */
+html[data-bg="minimal"] { --page-bg: #ffffff; --bg: #f5f5f5; --border: #e4e4e4; --brand: #111; --brand-dark: #000; --teal: #111; --teal-text: #1e8a4c; --muted: #6b6b6b; }
+html[data-bg="minimal"] .topbar { background: #111; border-bottom: 4px solid transparent; border-image: linear-gradient(90deg, #e5484d 0 33%, #f5a623 33% 66%, #2fb36d 66%) 1; box-shadow: none; }
+html[data-bg="minimal"] .footer { background: #111; border-top: 4px solid #2fb36d; }
+html[data-bg="minimal"] .day-head { background: #fafafa; border-bottom-color: #111; color: #111; }
+html[data-bg="minimal"] .card { box-shadow: none; }
+html[data-bg="minimal"] h2, html[data-bg="minimal"] h3 { border-left-color: #2fb36d; }
+/* Ozean: dunkles Petrol, Akzent Mint */
+html[data-bg="ocean"] {
+  --page-bg: radial-gradient(120% 60% at 50% 0%, #0b3a3e 0%, #061c1e 65%) fixed;
+  --bg: #0b2628; --card: #0d2b2e; --raise: #123538; --head-bg: #133c40;
+  --text: #e4f4f3; --muted: #8fb2b0; --border: #1d4649;
+  --brand: #22a39a; --brand-dark: #1a8a82; --teal: #4fd1c5; --teal-text: #6fe0d6;
+  --bar1: #062022; --bar2: #0a3436;
+}
