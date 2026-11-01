@@ -3,7 +3,7 @@
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
    Daten (Supabase) werden NIE zwischengespeichert. */
-const CACHE = "fsp-v42";
+const CACHE = "fsp-v43";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
@@ -37,9 +37,9 @@ self.addEventListener("fetch", (e) => {
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data && e.data.text() }; }
-  e.waitUntil(self.registration.showNotification(d.title || "Easy Fahrstundenplaner", {
-    body: d.body || "", icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: d.tag, data: { url: d.url || "./" },
-  }));
+  const opts = { body: d.body || "", icon: "icons/icon-192.png", data: { url: d.url || "./" } };
+  if (d.tag) opts.tag = d.tag;
+  e.waitUntil(self.registration.showNotification(d.title || "Easy Fahrstundenplaner", opts));
 });
 // Antippen der Mitteilung → App öffnen (bzw. vorhandenes Fenster nach vorn holen)
 self.addEventListener("notificationclick", (e) => {

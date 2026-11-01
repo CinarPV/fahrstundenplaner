@@ -790,6 +790,7 @@ function pushNotify(kind, ids, event) {
 }
 // Test-Mitteilung an die eigenen Geräte – mit sichtbarem Ergebnis (zur Fehlersuche)
 async function pushTest() {
+  toast("🔔 Test kommt in ca. 10 Sekunden – jetzt das Handy sperren.");
   try {
     const { data, error } = await sb.functions.invoke("notify", { body: { kind: "test", ids: [], event: "test" } });
     if (error) {

@@ -94,6 +94,8 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Test: 10 Sekunden warten, damit man das Handy sperren kann (iPhone zeigt bei offener App oft kein Banner)
+    if (kind === "test") await new Promise((r) => setTimeout(r, 10000));
     let sent = 0;
     for (const m of messages) {
       const { data: subs } = await admin.from("push_subscriptions").select("id,endpoint,p256dh,auth").eq("user_id", m.to);
