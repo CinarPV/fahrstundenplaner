@@ -2620,49 +2620,56 @@ async function adminControl() {
     if (error) throw error;
     list.forEach((b) => (b.transferred_at = on ? new Date().toISOString() : null));
   }
+  // Eine Fahrstunde wie im Kalender: Uhrzeit links, Dauer rechts, darunter Name und Art; rechts Haken „übertragen“
   const rowEl = (b) => {
+    const ok = b.status === "confirmed";
     const box = el("input", { type: "checkbox", checked: !!b.transferred_at, "aria-label": "Ins Fahrschulsystem übertragen" });
-    const line = el("label", { class: "control-row" + (b.transferred_at ? " done" : "") + (b.status !== "confirmed" ? " late" : "") }, box,
-      el("span", { class: "c-time" }, fmtRange(b.slots.starts_at, b.slots.duration_min)),
-      el("span", { class: "c-name" }, fullName(b.profiles), b.profiles && b.profiles.license_class ? el("span", { class: "muted small" }, ` · ${b.profiles.license_class}`) : null),
-      el("span", { class: "c-what" }, b.status === "confirmed" ? `${b.actual_minutes} Min. · ${controlKind(b)}` : controlKind(b)));
+    const entry = el("div", { class: "slot ctl " + (ok ? "done" : "ctl-late") + (b.transferred_at ? " transferred" : "") },
+      el("div", { class: "ctl-main" },
+        slotHead(fmtRange(b.slots.starts_at, b.slots.duration_min), ok ? `${b.actual_minutes} Min.` : "Fehlstunde"),
+        el("div", {}, fullName(b.profiles), b.profiles && b.profiles.license_class ? el("span", { class: "muted" }, ` · ${b.profiles.license_class}`) : null),
+        el("div", { class: "small" }, ok ? `${LESSON_ICON[b.lesson_type] || ""} ${controlKind(b)}`.trim() : "kostenpflichtig" + (b.cancel_reason ? ` · ${b.cancel_reason}` : ""))),
+      el("label", { class: "ctl-check" }, box, el("span", {}, "übertragen")));
     box.addEventListener("change", async () => {
       box.disabled = true;
-      try { await setTransferred([b], box.checked); line.classList.toggle("done", box.checked); updateOpen(); }
+      try { await setTransferred([b], box.checked); entry.classList.toggle("transferred", box.checked); updateOpen(); }
       catch (e) { box.checked = !box.checked; fail(e); }
       box.disabled = false;
     });
-    return line;
+    return entry;
   };
 
-  // Nach Wochen, darin nach Tagen gruppieren
+  // Ganzer Monat wie im Kalender: jede Woche (KW) mit allen Tagen untereinander, leere Tage schmal
+  const today = new Date();
   const weeks = [];
-  for (const b of shown) {
-    const d = new Date(b.slots.starts_at), ws = startOfWeek(d).getTime();
-    let w = weeks.find((x) => x.start === ws);
-    if (!w) weeks.push((w = { start: ws, list: [] }));
-    w.list.push(b);
+  for (let ws = startOfWeek(from); ws < to; ws = addDays(ws, 7)) {
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const day = addDays(ws, i);
+      if (day < from || day >= to) continue;
+      days.push({ day, list: shown.filter((b) => sameDay(new Date(b.slots.starts_at), day)) });
+    }
+    weeks.push({ start: ws, days, list: days.flatMap((d) => d.list) });
   }
+  // Kurz für die Tageszeile: „2 × · 180 Min.“ bzw. Fehlstunden
+  const daySum = (list) => {
+    const min = list.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.actual_minutes, 0), late = list.filter((b) => b.status !== "confirmed").length;
+    return [min ? `${min} Min.` : "", late ? `${late} Fehlstd.` : ""].filter(Boolean).join(" · ");
+  };
   const weekCard = (w) => {
     const start = new Date(w.start), end = addDays(start, 6);
-    const allDone = w.list.every((b) => b.transferred_at);
-    const all = el("button", { class: "btn small ghost" }, allDone ? "Woche: alle Haken entfernen" : "✓ Ganze Woche übertragen");
-    all.onclick = () => busy(all, async () => { await setTransferred(w.list, !allDone); render(); });
-    const days = [];
-    for (const b of w.list) {
-      const key = dateInput(b.slots.starts_at);
-      let d = days.find((x) => x.key === key);
-      if (!d) days.push((d = { key, list: [] }));
-      d.list.push(b);
-    }
-    return el("div", { class: "card" },
+    const allDone = w.list.length && w.list.every((b) => b.transferred_at);
+    const all = w.list.length ? el("button", { class: "btn small ghost" }, allDone ? "Woche: alle Haken entfernen" : "✓ Ganze Woche übertragen") : null;
+    if (all) all.onclick = () => busy(all, async () => { await setTransferred(w.list, !allDone); render(); });
+    const days = openOnly ? w.days.filter((d) => d.list.length) : w.days;
+    return el("div", { class: "card ctl-week" },
       el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
         el("h3", { style: "margin:0" }, `KW ${isoWeek(start)} · ${fmtDay(start)} – ${fmtDay(end)}`), all),
-      el("p", { class: "muted small", style: "margin:4px 0 8px" }, sumLine(w.list)),
-      days.map((d) => el("div", { class: "control-day" },
-        el("div", { class: "control-day-head" }, new Date(d.list[0].slots.starts_at).toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit" }),
-          el("span", { class: "muted small" }, ` · ${sumLine(d.list)}`)),
-        d.list.map(rowEl))));
+      el("p", { class: "muted small", style: "margin:4px 0 8px" }, w.list.length ? sumLine(w.list) : "Keine Fahrstunden"),
+      el("div", { class: "ctl-days" }, days.map((d) => el("div", { class: "day" + (sameDay(d.day, today) ? " today" : "") },
+        el("div", { class: "day-head" }, el("span", {}, fmtDay(d.day)),
+          d.list.length ? el("span", { class: "ctl-sum" }, daySum(d.list)) : null),
+        d.list.length ? d.list.map(rowEl) : el("div", { class: "empty" }, "—")))));
   };
 
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
@@ -2675,7 +2682,7 @@ async function adminControl() {
   return el("div", {},
     el("div", { class: "card" },
       el("h2", {}, "✅ Kontrolle"),
-      el("p", { class: "muted small" }, "Alle abgehakten Fahrstunden (und Fehlstunden) des Monats – nach Wochen und Tagen. Haken setzen, sobald die Fahrstunde im Fahrschulsystem eingetragen ist."),
+      el("p", { class: "muted small" }, "Alle gefahrenen Fahrstunden (und Fehlstunden) des Monats – Tag für Tag wie im Kalender. Haken „übertragen“ setzen, sobald die Fahrstunde im Fahrschulsystem eingetragen ist."),
       el("div", { class: "done-row" }, prev, el("b", { style: "min-width:150px;text-align:center" }, monthName(m)), next, now),
       el("p", { style: "margin:10px 0 4px" }, el("b", {}, "Monat: "), sumLine(rows)),
       el("p", { class: "small", style: "margin:0 0 8px" }, special),
@@ -2684,8 +2691,9 @@ async function adminControl() {
       el("div", { class: "actions" },
         el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows) }, "📊 Monat als Excel-Liste"),
         el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows) }, "🖨️ Monat drucken / PDF"))),
-    weeks.length ? weeks.map(weekCard)
-      : el("p", { class: "muted" }, openOnly && rows.length ? "Alles übertragen – nichts mehr offen. 👍" : "In diesem Monat gibt es noch keine abgehakten Fahrstunden."));
+    !rows.length ? el("p", { class: "muted" }, "In diesem Monat gibt es noch keine abgehakten Fahrstunden.")
+      : openOnly && !shown.length ? el("p", { class: "muted" }, "Alles übertragen – nichts mehr offen. 👍")
+      : weeks.filter((w) => !openOnly || w.list.length).map(weekCard));
 }
 
 const controlTable = (rows) => rows.map((b) => [

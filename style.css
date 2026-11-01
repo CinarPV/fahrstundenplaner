@@ -534,3 +534,16 @@ html.no-splash #splash { display: none; }
 .tk-luck { font-size: 14px; font-weight: 700; color: #a66a00; }
 .easy-word { display: inline-flex; align-items: baseline; }
 .easy-word svg { height: .78em; width: auto; margin-right: 1px; transform: translateY(1px); }
+
+/* Kontrolle: Monat Tag für Tag wie im Kalender */
+.ctl-days { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.ctl-days .day { min-height: 0; }
+.ctl-days .day:has(> .empty) { display: flex; justify-content: space-between; align-items: center; padding: 0 10px; }
+.ctl-days .day:has(> .empty) .day-head { background: none; border: none; margin: 0; padding: 6px 0; color: var(--muted); font-weight: 500; }
+.ctl-sum { font-size: 12px; font-weight: 600; opacity: .85; }
+.slot.ctl { display: flex; align-items: center; gap: 10px; cursor: default; }
+.ctl-main { flex: 1; min-width: 0; }
+.slot.ctl > .ctl-check { display: flex; flex-direction: column; align-items: center; gap: 2px; width: auto; font-size: 11px; color: var(--muted); cursor: pointer; margin: 0; padding: 0; }
+.ctl-check input { width: 22px; height: 22px; margin: 0; }
+.slot.ctl.transferred { opacity: .6; }
+.slot.ctl-late { background: #fdecec; color: #8a1f1f; border-color: #f2b8b8; }
