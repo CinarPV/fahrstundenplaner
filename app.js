@@ -704,17 +704,36 @@ function installHint() {
   return el("p", { class: "small", style: "margin-top:12px" },
     el("a", { href: "#", onclick: (e) => { e.preventDefault(); openInstallHelp(); } }, "📲 Als App auf dem Handy installieren"));
 }
-// Startbildschirm: einmal pro App-Start ~3 Sek. zeigen, dann sanft ausblenden (Antippen überspringt)
-(function splash() {
-  const sp = document.getElementById("splash");
-  if (!sp) return;
-  if (document.documentElement.classList.contains("no-splash")) { sp.remove(); return; }
-  try { sessionStorage.setItem("fsp_splash", "1"); } catch { /* privater Modus */ }
+// Startbildschirm: beim App-Start und jedes Mal, wenn die App aus dem Hintergrund wieder geöffnet wird
+// (~3 Sek., Antippen überspringt). Nicht beim bloßen Neuladen und nie mitten in einem offenen Fenster oder beim Tippen.
+const splash = (() => {
+  const first = document.getElementById("splash");
+  if (!first) return { show() {} };
+  const tpl = first.cloneNode(true);  // unberührte Vorlage, damit die Animation jedes Mal neu startet
   const quick = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const close = () => { sp.classList.add("hide"); setTimeout(() => sp.remove(), 500); };
-  sp.addEventListener("click", close);
-  setTimeout(close, quick ? 800 : 3000);
+  function run(sp) {
+    const close = () => { sp.classList.add("hide"); setTimeout(() => sp.remove(), 500); };
+    sp.addEventListener("click", close);
+    setTimeout(close, quick ? 800 : 3000);
+  }
+  if (document.documentElement.classList.contains("no-splash")) first.remove();
+  else { try { sessionStorage.setItem("fsp_splash", "1"); } catch { /* privater Modus */ } run(first); }
+  return {
+    show() {
+      if (document.getElementById("splash") || document.querySelector("dialog[open]") || state.dirty) return;
+      document.documentElement.classList.remove("no-splash");
+      const sp = tpl.cloneNode(true);
+      document.body.prepend(sp);
+      run(sp);
+    },
+  };
 })();
+// App kommt aus dem Hintergrund zurück → Startbildschirm noch einmal zeigen
+let hiddenAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") hiddenAt = Date.now();
+  else if (hiddenAt && Date.now() - hiddenAt > 1500) splash.show();
+});
 
 // Passwortfelder: Auge-Knopf zum Anzeigen/Verbergen – gilt automatisch für jedes Passwortfeld der App
 function addPasswordEye(input) {
