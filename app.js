@@ -527,6 +527,8 @@ function renderUserbox() {
 async function logout(btn) {
   if (btn) { btn.disabled = true; btn.textContent = "Abmelden …"; }
   if (modal.open) modal.close();
+  // Mitteilungen für dieses Gerät abmelden (sonst bekäme der nächste Nutzer am Gerät fremde Mitteilungen)
+  try { if (pushSupported()) await Promise.race([disablePush(), new Promise((r) => setTimeout(r, 1500))]); } catch { /* egal */ }
   const timeout = new Promise((r) => setTimeout(r, 3000));
   try { await Promise.race([sb.auth.signOut({ scope: "local" }), timeout]); } catch { /* egal – unten wird trotzdem abgemeldet */ }
   try { Object.keys(localStorage).filter((k) => k.startsWith("sb-")).forEach((k) => localStorage.removeItem(k)); } catch { /* privater Modus */ }
@@ -778,6 +780,64 @@ function setDesign(key) {
   document.documentElement.classList.toggle("dark", DARK_BG.includes(key));
   try { key ? localStorage.setItem("fsp_bg", key) : localStorage.removeItem("fsp_bg"); } catch { /* privater Modus */ }
 }
+/* ---------------- Push-Mitteilungen ---------------- */
+
+// Nach einer Aktion den Empfänger benachrichtigen (Server-Funktion „notify“ baut den Text selbst). Fehler stören nie.
+function pushNotify(kind, ids, event) {
+  ids = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+  if (!ids.length && kind !== "test") return;
+  sb.functions.invoke("notify", { body: { kind, ids, event } }).catch(() => {});
+}
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const b64ToBytes = (b64) => {
+  const s = atob((b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+};
+async function enablePush() {
+  if (!pushSupported()) throw new Error("Dieses Gerät/dieser Browser unterstützt keine Mitteilungen.");
+  if (Notification.permission === "denied") throw new Error("Mitteilungen sind in den Handy-Einstellungen für diese App blockiert.");
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Mitteilungen wurden nicht erlaubt.");
+  const reg = await navigator.serviceWorker.ready;
+  const sub = (await reg.pushManager.getSubscription()) ||
+    await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(cfg.VAPID_PUBLIC_KEY) });
+  const j = sub.toJSON();
+  const { error } = await sb.from("push_subscriptions").upsert({ user_id: state.profile.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }, { onConflict: "endpoint" });
+  if (error) throw error;
+}
+async function disablePush() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) { await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); }
+}
+function pushCard() {
+  const box = el("div", {});
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  async function draw() {
+    if (ios && !installed) return box.replaceChildren(el("p", { class: "muted small" }, "Auf dem iPhone gehen Mitteilungen nur mit der installierten App (Teilen → „Zum Home-Bildschirm“). Danach hier einschalten."));
+    if (!pushSupported()) return box.replaceChildren(el("p", { class: "muted small" }, "Dieses Gerät unterstützt keine Mitteilungen."));
+    let on = false;
+    try { on = Notification.permission === "granted" && !!(await (await navigator.serviceWorker.ready).pushManager.getSubscription()); } catch { /* egal */ }
+    const btn = el("button", { class: "btn" + (on ? " ghost" : " ok") }, on ? "Mitteilungen ausschalten" : "🔔 Mitteilungen einschalten");
+    btn.onclick = () => busy(btn, async () => {
+      if (on) { await disablePush(); toast("Mitteilungen auf diesem Gerät ausgeschaltet."); }
+      else { await enablePush(); toast("🔔 Mitteilungen sind an."); pushNotify("test", [], "test"); }
+      draw();
+    });
+    const test = on ? el("button", { class: "btn ghost", onclick: () => { pushNotify("test", [], "test"); toast("Test-Mitteilung verschickt."); } }, "Test senden") : null;
+    box.replaceChildren(
+      el("p", { class: "small", style: "margin:0 0 8px" }, on ? "✅ Auf diesem Gerät eingeschaltet." : "Aus – du bekommst keine Mitteilungen auf dieses Gerät."),
+      el("div", { class: "actions", style: "margin:0" }, btn, test));
+  }
+  draw();
+  return el("div", { class: "card" },
+    el("h3", {}, "🔔 Mitteilungen aufs Handy"),
+    el("p", { class: "muted small" }, isAdmin()
+      ? "Sofort Bescheid bei neuen Anfragen, Ausnahme-Bitten, Absagen und Zusagen deiner Schüler."
+      : "Sofort Bescheid, wenn dein Fahrlehrer bestätigt, ablehnt, etwas anbietet, absagt oder eine Prüfung einträgt."),
+    box);
+}
+
 // Tab „☀️ Heute“ ein-/ausschalten (pro Fahrlehrer gespeichert)
 function todayCard() {
   const box = el("input", { type: "checkbox", checked: !!state.settings.show_today });
@@ -1154,7 +1214,10 @@ async function adminToday() {
       const late = v === "no_show" || (v !== "cancelled_teacher" && isLate(s.starts_at));
       if (!confirm(`${fullName(p)} – ${STATUS_TEXT[v]}${late ? " (zählt als Fehlstunde)" : ""}. Speichern?`)) { why.value = ""; return; }
       why.disabled = true;
-      try { await save(b, { status: v, late_cancel: late, actual_minutes: null, decided_at: new Date().toISOString() }, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " – Fehlstunde" : ""}`); }
+      try {
+        await save(b, { status: v, late_cancel: late, actual_minutes: null, decided_at: new Date().toISOString() }, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " – Fehlstunde" : ""}`);
+        if (v === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
+      }
       catch (e) { fail(e); why.disabled = false; why.value = ""; }
     });
     return el("div", { class: "tr " + phase }, head, meetLine,
@@ -1486,8 +1549,9 @@ function newSlotForm(opts = {}) {
       const at = fromInputs(date.value, examTime.value);
       if (isNaN(at)) throw new Error("Bitte Datum und Beginn angeben");
       const meet = examNote.value() || null, note = examHint.value.trim() || null;
-      const { error } = await sb.from("exams").insert({ student_id: student.id, kind: examKind.value, exam_at: at.toISOString(), duration_min: examDur.value, meeting_point: meet, note });
+      const { data: madeExam, error } = await sb.from("exams").insert({ student_id: student.id, kind: examKind.value, exam_at: at.toISOString(), duration_min: examDur.value, meeting_point: meet, note }).select("id");
       if (error) throw error;
+      pushNotify("exam", (madeExam || []).map((x) => x.id), "exam");
       showDate(at);
       const text = `Hallo ${student.first_name || ""}, deine ${examIn(examKind.value)} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
         + (meet ? `\n📍 Treffpunkt: ${meet}` : "") + (note ? `\n${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App: ${appLink()}\n\n` + teacherSignature();
@@ -1504,10 +1568,11 @@ function newSlotForm(opts = {}) {
     if (!res.rows.length) throw new Error("Alle diese Termine gibt es schon – nichts eingetragen.");
     const note = reply.value.trim() || null;
     const kind = how.offer() ? "offered" : "confirmed";
-    const { error } = await sb.from("bookings").insert(res.rows.map((r) => ({
+    const { data: made, error } = await sb.from("bookings").insert(res.rows.map((r) => ({
       slot_id: r.id, student_id: student.id, status: kind, admin_reply: note, decided_at: new Date().toISOString(),
-    })));
+    }))).select("id");
     if (error) throw error;
+    pushNotify("booking", (made || []).map((x) => x.id), kind === "offered" ? "offered" : "assigned");
     let lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
     const n = res.rows.length, pl = n === 1 ? "" : "n";
     const meet = meetingOf({ meeting_point: meetSlot.value() });
@@ -1645,6 +1710,7 @@ async function openAdminSlot(slotId) {
         await saveTime();
         const { error } = await sb.from("bookings").update({ status: "confirmed", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
+        pushNotify("booking", b.id, "confirmed");
         const newSlot = { starts_at: fromInputs(date.value, time.value).toISOString(), duration_min: dur.value };
         notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, reply.value.trim(), meetingOf({ meeting_point: meet.value() })));
       });
@@ -1653,6 +1719,7 @@ async function openAdminSlot(slotId) {
         if (!confirm("Anfrage ablehnen? Der Termin wird danach wieder frei.")) return;
         const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
+        pushNotify("booking", b.id, "rejected");
         notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, slot, reply.value.trim()));
       });
       parts.push(el("div", { class: "actions" }, ok, no));
@@ -1722,11 +1789,12 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
     if (!st) throw new Error("Bitte einen Schüler wählen");
     await saveTime();
     const kind = how.offer() ? "offered" : "confirmed";
-    const { error } = await sb.from("bookings").insert({
+    const { data: made, error } = await sb.from("bookings").insert({
       slot_id: slot.id, student_id: st.id, status: kind,
       admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString(),
-    });
+    }).select("id");
     if (error) throw new Error(error.code === "23505" ? "Der Termin wurde gerade schon vergeben." : error.message);
+    pushNotify("booking", (made || []).map((x) => x.id), kind === "offered" ? "offered" : "assigned");
     const { data: fresh } = await sb.from("slots").select("starts_at,duration_min").eq("id", slot.id).single();
     notifyStep(kind === "offered" ? `Angebot an ${fullName(st)} gespeichert` : `${fullName(st)} eingetragen`,
       st.phone, waTextForStudent(kind, st, fresh || slot, reply.value.trim(), meetingOf({ meeting_point: meetVal() })));
@@ -1786,6 +1854,7 @@ function doneControls(slot, b, after, opts = {}) {
     }).eq("id", b.id);
     if (error) throw error;
     if (r.value === "cancelled_teacher") {
+      pushNotify("booking", b.id, "cancelled_teacher");
       notifyStep("Fahrstunde abgesagt", b.profiles && b.profiles.phone, waTextForStudent("cancelled_teacher", b.profiles, slot, reason.value.trim()));
     } else after(`Gespeichert: ${STATUS_TEXT[r.value]}${isLateCancel ? " (Fehlstunde)" : ""}.`);
   });
@@ -1985,6 +2054,7 @@ async function adminRequests() {
     ok.onclick = () => busy(ok, async () => {
       const { error } = await sb.from("bookings").update({ status: "confirmed", decided_at: new Date().toISOString() }).eq("id", b.id);
       if (error) throw error;
+      pushNotify("booking", b.id, "confirmed");
       notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, b.slots, "", meetingOf(b)));
     });
     const no = el("button", { class: "btn small danger" }, "✗ Ablehnen");
@@ -1992,6 +2062,7 @@ async function adminRequests() {
       if (!confirm(`Anfrage von ${fullName(b.profiles)} ablehnen? Der Termin wird danach wieder frei.`)) return;
       const { error } = await sb.from("bookings").update({ status: "rejected", decided_at: new Date().toISOString() }).eq("id", b.id);
       if (error) throw error;
+      pushNotify("booking", b.id, "rejected");
       notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, b.slots, ""));
     });
     return el("div", { class: "actions", style: "margin-top:8px" }, ok, no);
@@ -2611,6 +2682,7 @@ function adminSettings() {
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
     installCard(),
+    pushCard(),
     todayCard(),
     backgroundCard(),
     passwordCard(),
@@ -2712,11 +2784,12 @@ function openBooking(s) {
   note.addEventListener("input", () => (counter.textContent = `${note.value.length} / 300`));
   const btn = el("button", { class: "btn" }, "Fahrstunde anfragen");
   btn.onclick = () => busy(btn, async () => {
-    const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value });
+    const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value });
     // Höchstzahl erreicht → Pop-up mit der Möglichkeit, um eine Ausnahme zu bitten
     const limit = error && /LIMIT:(\d+):(\d+):?([\d:]+-[\d:]+)?\|?([UN])?/.exec(error.message || "");
     if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2], limit[3], limit[4] === "U");
     if (error) throw error;
+    pushNotify("booking", newId, "request");
     toast("Angefragt! Du siehst unter „Meine Fahrstunden“, sobald dein Fahrlehrer bestätigt.");
     closeModal();
     render();
@@ -2743,9 +2816,10 @@ function openLimitRequest(s, prevNote, open, max, win, used) {
   const btn = el("button", { class: "btn" }, "📨 Trotzdem anfragen (Ausnahme)");
   btn.onclick = () => busy(btn, async () => {
     if (!msg.value.trim()) throw new Error("Bitte schreib kurz, warum du eine weitere Fahrstunde möchtest.");
-    const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: msg.value.trim(), p_exception: true });
+    const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: msg.value.trim(), p_exception: true });
     if (error && /LIMIT:.*\|U/.test(error.message || "")) return openLimitRequest(s, msg.value, open, max, win, true);
     if (error) throw error;
+    pushNotify("booking", newId, "exception");
     toast("Deine Bitte ist bei deinem Fahrlehrer angekommen. Er entscheidet, ob er eine Ausnahme macht.");
     closeModal();
     render();
@@ -3082,7 +3156,7 @@ function studentProfile() {
     el("h2", {}, "Mein Profil"),
     el("p", { class: "muted small" }, state.profile.email || ""),
     f.node, el("div", { class: "actions" }, save),
-    el("hr"), passwordCard(), backgroundCard(), installHint());
+    el("hr"), passwordCard(), pushCard(), backgroundCard(), installHint());
 }
 
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */
@@ -3115,6 +3189,7 @@ function answerOffer(b, accept) {
   btn.onclick = () => busy(btn, async () => {
     const { error } = await sb.rpc("respond_offer", { p_booking: b.id, p_accept: accept, p_note: note.value.trim() });
     if (error) throw error;
+    pushNotify("booking", b.id, accept ? "accept" : "decline");
     const when = `${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr`;
     const text = `Hallo, hier ist ${fullName(state.profile)}. ` + (accept ? `Ich sage die Fahrstunde am ${when} zu. 👍` : `Ich kann die Fahrstunde am ${when} leider nicht.`) +
       (note.value.trim() ? `\n${note.value.trim()}` : "");
@@ -3140,6 +3215,7 @@ function openStudentCancel(b) {
   btn.onclick = () => busy(btn, async () => {
     const { data: wasLate, error } = await sb.rpc("cancel_booking", { p_booking: b.id, p_reason: reason.value.trim() });
     if (error) throw error;
+    pushNotify("booking", b.id, "cancel");
     const text = `Hallo, hier ist ${fullName(state.profile)}. Ich habe meine Fahrstunde am ${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr abgesagt.\nGrund: ${reason.value.trim()}`;
     notifyStep(wasLate ? "Abgesagt – als Fehlstunde vermerkt (kostenpflichtig)" : "Fahrstunde abgesagt",
       state.settings.admin_phone, text, "deinen Fahrlehrer");
@@ -3183,6 +3259,7 @@ async function studentMine() {
       if (!confirm("Anfrage wirklich zurückziehen?")) return;
       const { error } = await sb.rpc("cancel_request", { p_booking: b.id });
       if (error) throw error;
+      pushNotify("booking", b.id, "withdraw");
       toast("Anfrage zurückgezogen.");
       render();
     });

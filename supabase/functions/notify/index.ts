@@ -1,0 +1,116 @@
+// Easy Fahrstundenplaner – Push-Mitteilungen verschicken (Supabase Edge Function „notify“)
+//
+// Die App ruft diese Funktion nach einer Aktion auf, z. B. „Schüler hat angefragt“ oder
+// „Fahrlehrer hat bestätigt“. Die Funktion prüft, wer anfragt, sucht den richtigen Empfänger
+// (Schüler ↔ sein Fahrlehrer) und schickt an alle seine Geräte eine Mitteilung.
+// Den Text baut die Funktion selbst – die App kann keine beliebigen Nachrichten verschicken.
+//
+// Benötigte Secrets (Supabase → Edge Functions → Secrets):
+//   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (z. B. mailto:deine@adresse.de)
+// SUPABASE_URL, SUPABASE_ANON_KEY und SUPABASE_SERVICE_ROLE_KEY stellt Supabase automatisch bereit.
+
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+// @ts-types="npm:@types/web-push@3.6.4"
+import webpush from "npm:web-push@3.6.7";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+
+// Wer darf welches Ereignis auslösen – und was steht in der Mitteilung?
+type Ctx = { name: string; when: string; meet: string; late: boolean };
+const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
+  request: (c) => ["📥 Neue Anfrage", `${c.name} möchte am ${c.when} fahren.`],
+  exception: (c) => ["⚠️ Ausnahme-Bitte", `${c.name} bittet um eine Ausnahme: ${c.when}.`],
+  withdraw: (c) => ["↩️ Anfrage zurückgezogen", `${c.name} hat die Anfrage für ${c.when} zurückgezogen.`],
+  cancel: (c) => ["❌ Fahrstunde abgesagt", `${c.name} hat ${c.when} abgesagt${c.late ? " – Fehlstunde" : ""}.`],
+  accept: (c) => ["✅ Angebot angenommen", `${c.name} hat ${c.when} zugesagt.`],
+  decline: (c) => ["🚫 Angebot abgelehnt", `${c.name} kann ${c.when} leider nicht.`],
+};
+const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
+  confirmed: (c) => ["✅ Fahrstunde bestätigt", `${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
+  rejected: (c) => ["Anfrage abgelehnt", `Deine Anfrage für ${c.when} wurde leider abgelehnt.`],
+  offered: (c) => ["📨 Neues Angebot", `Dein Fahrlehrer bietet dir ${c.when} an – bitte zusagen oder absagen.`],
+  assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
+  cancelled_teacher: (c) => ["Fahrstunde abgesagt", `Dein Fahrlehrer hat die Fahrstunde am ${c.when} abgesagt.`],
+};
+
+const fmtWhen = (iso: string) =>
+  new Date(iso).toLocaleString("de-DE", {
+    timeZone: "Europe/Berlin", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  }) + " Uhr";
+const fullName = (p: { first_name?: string; last_name?: string } | null) =>
+  `${p?.first_name ?? ""} ${p?.last_name ?? ""}`.trim() || "Ein Schüler";
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },
+    });
+    const { data: { user } } = await userClient.auth.getUser();
+    if (!user) return json({ error: "Nicht angemeldet" }, 401);
+
+    const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    webpush.setVapidDetails(Deno.env.get("VAPID_SUBJECT")!, Deno.env.get("VAPID_PUBLIC_KEY")!, Deno.env.get("VAPID_PRIVATE_KEY")!);
+
+    const { kind, ids, event } = await req.json();
+    const messages: { to: string; title: string; body: string }[] = [];
+
+    if (kind === "test") {
+      messages.push({ to: user.id, title: "🔔 Mitteilungen sind an", body: "So sehen Mitteilungen vom Easy Fahrstundenplaner aus." });
+    } else if (kind === "booking" && Array.isArray(ids) && ids.length && ids.length <= 60) {
+      const { data: rows } = await admin.from("bookings")
+        .select("id,student_id,late_cancel,meeting_point,profiles(first_name,last_name),slots(starts_at,teacher_id,meeting_point)")
+        .in("id", ids);
+      for (const b of rows ?? []) {
+        // deno-lint-ignore no-explicit-any
+        const slot: any = b.slots, student: any = b.profiles;
+        if (!slot) continue;
+        let meet = b.meeting_point || slot.meeting_point || "";
+        if (!meet) {
+          const { data: st } = await admin.from("settings").select("meeting_point").eq("teacher_id", slot.teacher_id).maybeSingle();
+          meet = st?.meeting_point ?? "";
+        }
+        const ctx: Ctx = { name: fullName(student), when: fmtWhen(slot.starts_at), meet, late: !!b.late_cancel };
+        if (user.id === b.student_id && STUDENT_EVENTS[event]) {
+          const [title, body] = STUDENT_EVENTS[event](ctx);
+          messages.push({ to: slot.teacher_id, title, body });
+        } else if (user.id === slot.teacher_id && TEACHER_EVENTS[event]) {
+          const [title, body] = TEACHER_EVENTS[event](ctx);
+          messages.push({ to: b.student_id, title, body });
+        }
+      }
+    } else if (kind === "exam" && Array.isArray(ids) && ids.length === 1) {
+      const { data: e } = await admin.from("exams").select("id,exam_at,meeting_point,student_id,profiles(teacher_id)").eq("id", ids[0]).maybeSingle();
+      // deno-lint-ignore no-explicit-any
+      if (e && (e.profiles as any)?.teacher_id === user.id) {
+        messages.push({ to: e.student_id, title: "🎓 Prüfungstermin", body: `Praktische Prüfung: ${fmtWhen(e.exam_at)}${e.meeting_point ? ` · 📍 ${e.meeting_point}` : ""}` });
+      }
+    }
+
+    let sent = 0;
+    for (const m of messages) {
+      const { data: subs } = await admin.from("push_subscriptions").select("id,endpoint,p256dh,auth").eq("user_id", m.to);
+      for (const s of subs ?? []) {
+        try {
+          await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+            JSON.stringify({ title: m.title, body: m.body }), { TTL: 60 * 60 * 24 });
+          sent++;
+        } catch (err) {
+          // Gerät abgemeldet / App gelöscht → Abo entfernen
+          const code = (err as { statusCode?: number }).statusCode;
+          if (code === 404 || code === 410) await admin.from("push_subscriptions").delete().eq("id", s.id);
+        }
+      }
+    }
+    return json({ sent });
+  } catch (err) {
+    return json({ error: String((err as Error).message ?? err) }, 500);
+  }
+});

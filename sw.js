@@ -3,7 +3,7 @@
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
    Daten (Supabase) werden NIE zwischengespeichert. */
-const CACHE = "fsp-v40";
+const CACHE = "fsp-v41";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
@@ -31,4 +31,21 @@ self.addEventListener("fetch", (e) => {
   }).catch(() => caches.match(req, { ignoreSearch: true })
     .then((hit) => hit || (req.mode === "navigate" ? caches.match("index.html") : undefined))
     .then((hit) => hit || Response.error())));
+});
+
+// Push-Mitteilung empfangen (vom Server „notify“) und anzeigen
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Easy Fahrstundenplaner", {
+    body: d.body || "", icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: d.tag, data: { url: d.url || "./" },
+  }));
+});
+// Antippen der Mitteilung → App öffnen (bzw. vorhandenes Fenster nach vorn holen)
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    for (const c of list) if ("focus" in c) return c.focus();
+    return self.clients.openWindow((e.notification.data && e.notification.data.url) || "./");
+  }));
 });
