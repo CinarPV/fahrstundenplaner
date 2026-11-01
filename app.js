@@ -788,6 +788,19 @@ function pushNotify(kind, ids, event) {
   if (!ids.length && kind !== "test") return;
   sb.functions.invoke("notify", { body: { kind, ids, event } }).catch(() => {});
 }
+// Test-Mitteilung an die eigenen Geräte – mit sichtbarem Ergebnis (zur Fehlersuche)
+async function pushTest() {
+  try {
+    const { data, error } = await sb.functions.invoke("notify", { body: { kind: "test", ids: [], event: "test" } });
+    if (error) {
+      let detail = error.message || String(error);
+      try { const body = await error.context.json(); if (body && body.error) detail = body.error; } catch { /* keine Details */ }
+      return toast("Test fehlgeschlagen: " + detail, true);
+    }
+    const n = (data && data.sent) || 0;
+    toast(n ? `🔔 Test an ${n} Gerät${n === 1 ? "" : "e"} geschickt – kommt gleich.` : "Test: kein Gerät gefunden – bitte Mitteilungen neu einschalten.", !n);
+  } catch (e) { toast("Test fehlgeschlagen: " + (e.message || e), true); }
+}
 const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 const b64ToBytes = (b64) => {
   const s = atob((b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
@@ -821,10 +834,11 @@ function pushCard() {
     const btn = el("button", { class: "btn" + (on ? " ghost" : " ok") }, on ? "Mitteilungen ausschalten" : "🔔 Mitteilungen einschalten");
     btn.onclick = () => busy(btn, async () => {
       if (on) { await disablePush(); toast("Mitteilungen auf diesem Gerät ausgeschaltet."); }
-      else { await enablePush(); toast("🔔 Mitteilungen sind an."); pushNotify("test", [], "test"); }
+      else { await enablePush(); await pushTest(); }
       draw();
     });
-    const test = on ? el("button", { class: "btn ghost", onclick: () => { pushNotify("test", [], "test"); toast("Test-Mitteilung verschickt."); } }, "Test senden") : null;
+    const test = on ? el("button", { class: "btn ghost" }, "Test senden") : null;
+    if (test) test.onclick = () => busy(test, pushTest);
     box.replaceChildren(
       el("p", { class: "small", style: "margin:0 0 8px" }, on ? "✅ Auf diesem Gerät eingeschaltet." : "Aus – du bekommst keine Mitteilungen auf dieses Gerät."),
       el("div", { class: "actions", style: "margin:0" }, btn, test));
