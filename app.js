@@ -2461,7 +2461,7 @@ async function studentCalendar() {
     const label = s.mine
       ? (s.status === "confirmed" ? "Deine Fahrstunde"
         : s.status === "offered" ? "📨 Für dich – bitte zusagen" : "Deine Anfrage – wartet")
-      : s.status === "requested" ? "Von jemandem angefragt"
+      : s.status === "requested" ? el("span", {}, "Von jemandem angefragt", el("div", { class: "slot-hint" }, "↻ Wird evtl. wieder frei – schau später nochmal rein"))
       : "Antippen zum Anfragen";
     const tag = s.mine && past ? "gefahren"
       : { free: "frei", requested: "angefragt", offered: "angeboten", confirmed: "bestätigt" }[s.status] || "";
