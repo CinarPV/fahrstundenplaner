@@ -757,7 +757,8 @@ new MutationObserver(() => document.querySelectorAll('input[type="password"]:not
   .observe(document.body, { childList: true, subtree: true });
 
 // Hintergrund-Farbe der App – nur auf diesem Gerät gespeichert
-const BACKGROUNDS = [["", "Hell", "#f2f8fa"], ["mint", "Mint", "#d7f0f1"], ["teal", "Türkis", "#28B5B9"], ["navy", "Dunkelblau", "#0b3d5c"]];
+const BACKGROUNDS = [["", "Hell (Standard)", "#f2f8fa"], ["mint", "Mint", "#d7f0f1"], ["teal", "Türkis", "#28B5B9"], ["navy", "Dunkelblau", "#0b3d5c"],
+  ["night", "🌙 Nacht", "linear-gradient(135deg,#10263a,#0a1621)"], ["graphite", "🖤 Graphit", "linear-gradient(135deg,#22272c,#101214)"]];
 function backgroundCard() {
   const cur = () => document.documentElement.dataset.bg || "";
   const box = el("div", { class: "bg-picks" });
@@ -771,8 +772,8 @@ function backgroundCard() {
   }, el("i", { style: `background:${color}` }), label)));
   draw();
   return el("div", { class: "card" },
-    el("h3", {}, "🎨 Hintergrund"),
-    el("p", { class: "muted small" }, "Farbe hinter Kalender und Karten. Gilt nur auf diesem Gerät – jederzeit änderbar."),
+    el("h3", {}, "🎨 Design"),
+    el("p", { class: "muted small" }, "Hintergrund bzw. komplettes Dunkel-Design (Nacht, Graphit). Gilt nur auf diesem Gerät – jederzeit änderbar."),
     box);
 }
 
