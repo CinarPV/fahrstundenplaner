@@ -292,7 +292,7 @@ function exportPrint(p, rows) {
   const counts = SPECIAL_TYPES.map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
   d.body.append(tag("h1", "Fahrstunden – " + fullName(p)),
     tag("div", [p.license_class ? "Klasse " + p.license_class : "", `Stand: ${new Date().toLocaleDateString("de-DE")}`].filter(Boolean).join(" · ")),
-    tag("p", `Gefahren: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termine · ${total} Min. (${fmtMinutes(total)}) · ${counts}`),
+    tag("p", `Gefahren: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termine · ${total} Min. · ${counts}`),
     table);
   setTimeout(() => w.print(), 300);
 }
@@ -786,7 +786,7 @@ async function render() {
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]]
       .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
-    : [["calendar", "Kalender"], ["mine", "Stunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
+    : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
     el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => goTab(id) }, label)));
@@ -1788,7 +1788,7 @@ async function openTraining(st, lessons) {
 async function adminRequests() {
   const weekAgo = addDays(new Date(), -7).toISOString();
   const [req, open, cancels, offers] = await Promise.all([
-    sb.from("bookings").select("id,student_note,created_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)").eq("status", "requested").order("created_at"),
+    sb.from("bookings").select("id,student_note,created_at,meeting_point,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
     sb.from("bookings").select("id,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
@@ -1810,9 +1810,27 @@ async function adminRequests() {
       el("button", { class: "btn small", onclick: () => openAdminSlot(b.slots.id) }, "Öffnen")),
     extra);
 
+  // Anfrage direkt in der Liste bestätigen oder ablehnen (Details/Änderungen weiter über „Öffnen“)
+  const decideButtons = (b) => {
+    const ok = el("button", { class: "btn small ok" }, "✓ Bestätigen");
+    ok.onclick = () => busy(ok, async () => {
+      const { error } = await sb.from("bookings").update({ status: "confirmed", decided_at: new Date().toISOString() }).eq("id", b.id);
+      if (error) throw error;
+      notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, b.slots, "", meetingOf(b)));
+    });
+    const no = el("button", { class: "btn small danger" }, "✗ Ablehnen");
+    no.onclick = () => busy(no, async () => {
+      if (!confirm(`Anfrage von ${fullName(b.profiles)} ablehnen? Der Termin wird danach wieder frei.`)) return;
+      const { error } = await sb.from("bookings").update({ status: "rejected", decided_at: new Date().toISOString() }).eq("id", b.id);
+      if (error) throw error;
+      notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, b.slots, ""));
+    });
+    return el("div", { class: "actions", style: "margin-top:8px" }, ok, no);
+  };
+
   return el("div", {},
     el("h2", {}, "Offene Anfragen"),
-    req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, b.student_note ? el("div", { class: "note" }, b.student_note) : null))
+    req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
     cancels.data.length ? [
       el("h2", { style: "margin-top:24px" }, "Absagen & abgelehnte Angebote (letzte 7 Tage)"),
@@ -2809,7 +2827,7 @@ function doneList(rows, total) {
         el("td", { class: "num" }, b.actual_minutes)))),
       el("tfoot", {}, el("tr", {},
         el("th", { colspan: 4 }, `Gesamt: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termin${done.length === 1 ? "" : "e"}`),
-        el("th", { class: "num" }, `${total} Min. (${fmtMinutes(total)})`))))));
+        el("th", { class: "num" }, `${total} Min.`))))));
 }
 
 // Angebot zusagen oder absagen – danach Fahrlehrer per WhatsApp informieren
@@ -2919,11 +2937,21 @@ async function studentMine() {
   const wa = waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer schreiben");
   if (wa) wa.className = "btn small ghost";
   const stat = (num, label, cls = "") => el("div", { class: "stat " + cls }, el("b", {}, num), el("span", {}, label));
+  // Nächste bestätigte Fahrstunde – klein und schlicht: Termin, Dauer, Treffpunkt
+  const nextTile = () => {
+    const n = planned.find((b) => b.status === "confirmed");
+    if (!n) return el("div", { class: "stat next" }, el("span", {}, "Nächste Fahrstunde"), el("div", { class: "next-line" }, "noch keine"));
+    const meet = meetingOf(n);
+    return el("div", { class: "stat next" },
+      el("span", {}, "Nächste Fahrstunde"),
+      el("div", { class: "next-line" }, el("b", {}, `${fmtDay(n.slots.starts_at)}, ${fmtTime(n.slots.starts_at)} Uhr`)),
+      el("div", { class: "next-line muted" }, `${n.slots.duration_min} Min.` + (meet ? ` · 📍 ${meet}` : "")));
+  };
   return el("div", {},
     // Auf einen Blick: wie viel gefahren, was steht an, ggf. Fehlstunden
     el("div", { class: "stat-row" },
+      nextTile(),
       stat(fmtLessons(total).replace(/ Fahrstunden?$/, ""), "Fahrstunden gefahren"),
-      stat(String(planned.length + offers.length), "anstehend"),
       lateRows.length ? stat(String(lateRows.length), lateRows.length === 1 ? "Fehlstunde" : "Fehlstunden", "warn") : null),
     !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin:12px 0 0" },
       "Bitte trage unter „Profil“ deine WhatsApp-Nummer ein, damit dein Fahrlehrer dich erreichen kann.") : null,
