@@ -119,6 +119,8 @@ function studentTags(p) {
 // "Admin" = Fahrlehrer (verwaltet eigene Schüler); "Owner" = Haupt-Admin (legt Fahrlehrer an)
 const isAdmin = () => !!state.profile && state.profile.role === "teacher" && state.profile.status === "active";
 const isOwner = () => isAdmin() && state.profile.is_owner;
+// Fahrschul-Admin: vom Haupt-Admin angelegt, verwaltet die Fahrlehrer seiner eigenen Fahrschule
+const isSchoolAdmin = () => isAdmin() && state.profile.is_school_admin;
 const teacherSignature = () => `Dein Fahrlehrer ${state.settings.display_name || ""}`.trim();
 // Ein Link für alle – Schüler wählen ihren Fahrlehrer bei der Registrierung aus
 const studentLink = () => location.origin + location.pathname;
@@ -513,7 +515,7 @@ function renderUserbox() {
   if (!state.profile) { userbox.replaceChildren(); return; }
   userbox.replaceChildren(...[
     el("span", {}, fullName(state.profile)),
-    isAdmin() ? el("span", { class: "badge admin" }, isOwner() ? "Haupt-Admin" : "Fahrlehrer") : null,
+    isAdmin() ? el("span", { class: "badge admin" }, isOwner() ? "Haupt-Admin" : isSchoolAdmin() ? "Fahrschul-Admin" : "Fahrlehrer") : null,
     isAdmin() ? el("button", { class: "btn small", onclick: openLinkModal, "aria-label": "Schüler-Link", title: "Schüler-Link" }, "🔗", el("span", { class: "hide-sm" }, " Schüler-Link")) : null,
     !isAdmin() && state.settings.display_name ? el("span", { class: "small muted" }, "· Fahrlehrer " + state.settings.display_name) : null,
     el("button", { class: "btn small ghost", onclick: (e) => logout(e.currentTarget) }, "Abmelden"),
@@ -819,7 +821,7 @@ async function render() {
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
     ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]]
-      .concat(isOwner() ? [["teachers", "Fahrlehrer"]] : [])
+      .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
   const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
@@ -2088,9 +2090,12 @@ function randomPassword() {
 const appLink = () => location.origin + location.pathname;
 
 async function ownerTeachers() {
-  const { data: teachers, error } = await sb.from("profiles")
-    .select("id,first_name,last_name,email,slug,status,is_owner,created_at").eq("role", "teacher").order("last_name");
+  const { data: all, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,email,slug,status,is_owner,is_school_admin,school_id,created_at").eq("role", "teacher").order("last_name");
   if (error) throw error;
+  const owner = isOwner(), me = state.profile.id;
+  // Fahrschul-Admin sieht nur die Fahrlehrer seiner eigenen Fahrschule
+  const teachers = owner ? all : all.filter((t) => t.school_id === me);
 
   // Neuen Fahrlehrer anlegen
   const first = el("input", { autocomplete: "off" });
@@ -2106,9 +2111,11 @@ async function ownerTeachers() {
   [first, slug].forEach((i) => i.addEventListener("input", updatePreview));
   updatePreview();
 
+  const asSchool = el("input", { type: "checkbox" });
   const btn = el("button", { class: "btn ok" }, "Fahrlehrer anlegen");
+  asSchool.addEventListener("change", () => (btn.textContent = asSchool.checked ? "Fahrschul-Admin anlegen" : "Fahrlehrer anlegen"));
   btn.onclick = () => busy(btn, async () => {
-    const v = { first: first.value.trim(), last: last.value.trim(), email: email.value.trim(), pw: pw.value, slug: slugify(slug.value) };
+    const v = { first: first.value.trim(), last: last.value.trim(), email: email.value.trim(), pw: pw.value, slug: slugify(slug.value), school: owner && asSchool.checked };
     if (!v.first || !v.last) throw new Error("Bitte Vor- und Nachnamen angeben");
     if (!v.email.includes("@")) throw new Error("Bitte eine gültige E-Mail angeben");
     if (v.pw.length < 6) throw new Error("Passwort: mindestens 6 Zeichen");
@@ -2120,7 +2127,7 @@ async function ownerTeachers() {
     const { data: su, error: e1 } = await tmp.auth.signUp({ email: v.email, password: v.pw, options: { data: { first_name: v.first, last_name: v.last } } });
     if (e1) throw e1;
     if (!su.user || (su.user.identities && su.user.identities.length === 0)) throw new Error("Mit dieser E-Mail gibt es schon ein Konto.");
-    const { error: e2 } = await sb.rpc("create_teacher", { p_id: su.user.id, p_slug: v.slug, p_first: v.first, p_last: v.last });
+    const { error: e2 } = await sb.rpc("create_teacher", { p_id: su.user.id, p_slug: v.slug, p_first: v.first, p_last: v.last, p_school_admin: v.school });
     if (e2) throw e2;
     showTeacherCredentials(v, !su.session);
   });
@@ -2128,7 +2135,9 @@ async function ownerTeachers() {
   const row = (t) => {
     const toggle = el("button", { class: "btn small " + (t.status === "active" ? "danger" : "ok") }, t.status === "active" ? "Sperren" : "Freischalten");
     toggle.onclick = () => busy(toggle, async () => {
-      if (t.status === "active" && !confirm(`${fullName(t)} sperren? Er und alle seine Schüler sehen dann nichts mehr, bis du ihn wieder freischaltest.`)) return;
+      if (t.status === "active" && !confirm(t.is_school_admin
+        ? `Fahrschule von ${fullName(t)} sperren? Der Fahrschul-Admin, alle seine Fahrlehrer und deren Schüler sehen dann nichts mehr, bis du wieder freischaltest.`
+        : `${fullName(t)} sperren? Er und alle seine Schüler sehen dann nichts mehr, bis du ihn wieder freischaltest.`)) return;
       const { error } = await sb.rpc("set_teacher_status", { p_id: t.id, p_status: t.status === "active" ? "blocked" : "active" });
       if (error) throw error;
       render();
@@ -2148,14 +2157,18 @@ async function ownerTeachers() {
       el("div", { class: "head" },
         el("div", {}, el("b", {}, fullName(t)), " ",
           t.is_owner ? el("span", { class: "badge admin" }, "Haupt-Admin") : null,
+          t.is_school_admin ? el("span", { class: "badge admin" }, "Fahrschul-Admin") : null,
           t.status !== "active" ? el("span", { class: "badge rejected" }, "Gesperrt") : null,
           el("div", { class: "small muted" }, t.email || "")),
         t.is_owner ? null : el("div", { class: "actions", style: "margin:0" }, pwBtn, toggle, del)));
   };
 
+  // Haupt-Admin: eigene Fahrschule + je Fahrschul-Admin eine eigene Gruppe; Fahrschul-Admin: nur seine Fahrlehrer
+  const schools = owner ? teachers.filter((t) => t.is_school_admin) : [];
+  const ownSchool = owner ? teachers.filter((t) => !t.is_school_admin && !t.school_id) : teachers;
   return el("div", {},
     el("div", { class: "card" },
-      el("h2", {}, "Neuen Fahrlehrer anlegen"),
+      el("h2", {}, owner ? "Neuen Fahrlehrer anlegen" : "Neuen Fahrlehrer für deine Fahrschule anlegen"),
       el("p", { class: "muted small" }, "Der Fahrlehrer bekommt einen eigenen Bereich mit eigenen Schülern, Terminen und Einstellungen. Du siehst seine Schüler nicht – und er deine nicht."),
       el("div", { class: "row" },
         el("div", {}, el("label", {}, "Vorname"), first),
@@ -2166,12 +2179,22 @@ async function ownerTeachers() {
           el("div", { class: "linkbox" }, pw, el("button", { type: "button", class: "btn ghost", title: "Neues Passwort erzeugen", onclick: () => (pw.value = randomPassword()) }, "🎲"))),
         el("div", {}, el("label", {}, "Kürzel (intern)"), slug)),
       linkPreview,
+      owner ? el("label", { class: "check", style: "margin-top:12px" }, asSchool,
+        el("span", {}, el("b", {}, "Als Fahrschul-Admin anlegen"), " – für eine andere Fahrschule. Darf eigene Fahrlehrer anlegen, sperren und löschen, sieht aber nichts von dir oder anderen Fahrschulen.")) : null,
       el("div", { class: "actions" }, btn)),
     el("div", { class: "card" },
-      el("h2", {}, `Fahrlehrer (${teachers.length})`),
+      el("h2", {}, owner ? `Deine Fahrschule (${ownSchool.length})` : `Deine Fahrlehrer (${ownSchool.length})`),
       el("p", { class: "muted small" }, "Sperren: Der Fahrlehrer und seine Schüler sehen nichts mehr, bis du ihn wieder freischaltest – die Daten bleiben erhalten. Löschen: Fahrlehrer mit allen Schülern und Terminen endgültig entfernen."),
-      teachers.map(row),
+      ownSchool.length ? ownSchool.map(row) : el("p", { class: "muted" }, "Noch keine Fahrlehrer angelegt."),
       el("p", { class: "muted small" }, "Alle nutzen denselben Link: ", el("code", {}, appLink()))),
+    schools.map((a) => {
+      const list = teachers.filter((t) => t.school_id === a.id);
+      return el("div", { class: "card" },
+        el("h2", {}, `🏫 Fahrschule ${fullName(a)} (${list.length} Fahrlehrer)`),
+        el("p", { class: "muted small" }, "Sperren des Fahrschul-Admins sperrt die ganze Fahrschule. Löschen geht erst, wenn keine Fahrlehrer mehr darin sind."),
+        row(a),
+        list.length ? list.map(row) : el("p", { class: "muted small" }, "Noch keine Fahrlehrer in dieser Fahrschule."));
+    }),
   );
 }
 
@@ -2204,6 +2227,7 @@ function showTeacherCredentials(v, needsConfirm) {
   const text = `Hallo ${v.first}, hier sind deine Zugangsdaten für den Easy Fahrstundenplaner:\n\n` +
     `Anmelden: ${appLink()}\nE-Mail: ${v.email}\nPasswort: ${v.pw}\n\n` +
     `Deine Schüler nutzen denselben Link und wählen bei der Registrierung „${v.first}“ als Fahrlehrer aus.\n\n` +
+    (v.school ? `Du bist Fahrschul-Admin: Unter „Fahrlehrer“ kannst du die Fahrlehrer deiner Fahrschule selbst anlegen und verwalten.\n\n` : "") +
     `Bitte ändere dein Passwort nach der ersten Anmeldung unter „Einstellungen“.`;
   openModal(`✓ ${v.first} ${v.last} angelegt`,
     el("p", {}, "Schick ihm diese Zugangsdaten – z. B. per WhatsApp:"),

@@ -31,6 +31,10 @@ create table if not exists public.profiles (
   created_at     timestamptz not null default now()
 );
 create index if not exists profiles_teacher_idx on public.profiles (teacher_id);
+-- Fahrschul-Admins: vom Haupt-Admin angelegt, dürfen Fahrlehrer ihrer eigenen Fahrschule anlegen/verwalten.
+-- school_id = der Fahrschul-Admin, zu dessen Fahrschule ein Fahrlehrer gehört (leer = Fahrschule des Haupt-Admins)
+alter table public.profiles add column if not exists is_school_admin boolean not null default false;
+alter table public.profiles add column if not exists school_id uuid references public.profiles(id) on delete set null;
 
 -- Einstellungen: eine Zeile pro Fahrlehrer
 create table if not exists public.settings (
@@ -204,6 +208,20 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (select 1 from profiles where id = auth.uid() and is_owner and status = 'active');
 $$;
 
+create or replace function public.is_school_admin()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from profiles where id = auth.uid() and role = 'teacher' and is_school_admin and status = 'active');
+$$;
+
+-- Darf ich diesen Fahrlehrer verwalten? Haupt-Admin: alle (außer sich selbst);
+-- Fahrschul-Admin: nur Fahrlehrer seiner eigenen Fahrschule.
+create or replace function public.can_manage_teacher(p_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select p_id <> auth.uid() and exists (
+    select 1 from profiles t where t.id = p_id and t.role = 'teacher' and not t.is_owner
+      and (public.is_owner() or (public.is_school_admin() and t.school_id = auth.uid() and not t.is_school_admin)));
+$$;
+
 -- Zu welchem Fahrlehrer gehöre ich? (Fahrlehrer: ich selbst)
 create or replace function public.my_teacher_id()
 returns uuid language sql stable security definer set search_path = public as $$
@@ -293,10 +311,18 @@ revoke execute on function public.make_owner(text, text) from public, anon, auth
 -- ---------- Funktionen für den Haupt-Admin ----------------------------
 
 -- Frisch registriertes Konto zum Fahrlehrer machen (die App legt das Konto vorher mit E-Mail + Passwort an)
-create or replace function public.create_teacher(p_id uuid, p_slug text, p_first text, p_last text)
+drop function if exists public.create_teacher(uuid, text, text, text);
+create or replace function public.create_teacher(p_id uuid, p_slug text, p_first text, p_last text, p_school_admin boolean default false)
 returns void language plpgsql security definer set search_path = public as $$
+declare v_owner boolean := is_owner();
 begin
-  if not is_owner() then raise exception 'Nur der Haupt-Admin darf Fahrlehrer anlegen'; end if;
+  if not v_owner and not is_school_admin() then raise exception 'Nur der Haupt-Admin oder ein Fahrschul-Admin darf Fahrlehrer anlegen'; end if;
+  if coalesce(p_school_admin, false) and not v_owner then raise exception 'Nur der Haupt-Admin darf Fahrschul-Admins anlegen'; end if;
+  -- Fahrschul-Admins dürfen nur ein gerade neu registriertes Konto zum Fahrlehrer machen (kein bestehendes übernehmen)
+  if not v_owner and not exists (select 1 from profiles where id = p_id and role = 'student' and status = 'pending'
+                                   and teacher_id is null and created_at > now() - interval '1 hour') then
+    raise exception 'Dieses Konto kann nicht als Fahrlehrer angelegt werden';
+  end if;
   if lower(trim(p_slug)) !~ '^[a-z0-9-]{2,30}$' then
     raise exception 'Link-Kürzel: nur Kleinbuchstaben, Zahlen und Bindestrich (2–30 Zeichen)';
   end if;
@@ -307,6 +333,8 @@ begin
     raise exception 'Dieses Konto ist bereits als Schüler aktiv';
   end if;
   update profiles set role = 'teacher', status = 'active', teacher_id = null, is_owner = false,
+         is_school_admin = v_owner and coalesce(p_school_admin, false),
+         school_id = case when v_owner then null else auth.uid() end,   -- Fahrschul-Admin: Fahrlehrer gehört zu seiner Schule
          slug = lower(trim(p_slug)), first_name = trim(p_first), last_name = trim(p_last),
          must_change_password = true
   where id = p_id;
@@ -319,20 +347,23 @@ end $$;
 create or replace function public.set_teacher_status(p_id uuid, p_status text)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  if not is_owner() then raise exception 'Nur der Haupt-Admin'; end if;
   if p_id = auth.uid() then raise exception 'Du kannst dich nicht selbst sperren'; end if;
+  if not can_manage_teacher(p_id) then raise exception 'Diesen Fahrlehrer darfst du nicht verwalten'; end if;
   if p_status not in ('active','blocked') then raise exception 'Ungültiger Status'; end if;
   update profiles set status = p_status where id = p_id and role = 'teacher';
+  -- Fahrschul-Admin gesperrt/freigeschaltet → seine ganze Fahrschule mit
+  update profiles set status = p_status where school_id = p_id and role = 'teacher'
+    and exists (select 1 from profiles a where a.id = p_id and a.is_school_admin);
 end $$;
 
 -- Fahrlehrer endgültig löschen – mit ALLEN seinen Schülern, Terminen und Buchungen
 create or replace function public.delete_teacher(p_id uuid)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  if not is_owner() then raise exception 'Nur der Haupt-Admin'; end if;
   if p_id = auth.uid() then raise exception 'Du kannst dich nicht selbst löschen'; end if;
-  if not exists (select 1 from profiles where id = p_id and role = 'teacher') then
-    raise exception 'Kein Fahrlehrer';
+  if not can_manage_teacher(p_id) then raise exception 'Diesen Fahrlehrer darfst du nicht verwalten'; end if;
+  if exists (select 1 from profiles where school_id = p_id and role = 'teacher') then
+    raise exception 'Diese Fahrschule hat noch Fahrlehrer – bitte zuerst diese löschen';
   end if;
   delete from auth.users where id in (select id from profiles where teacher_id = p_id);
   delete from auth.users where id = p_id;
@@ -343,11 +374,8 @@ end $$;
 create or replace function public.owner_set_teacher_password(p_id uuid, p_password text)
 returns void language plpgsql security definer set search_path = public, extensions as $$
 begin
-  if not is_owner() then raise exception 'Nur der Haupt-Admin'; end if;
   if p_id = auth.uid() then raise exception 'Dein eigenes Passwort änderst du unter Einstellungen'; end if;
-  if not exists (select 1 from profiles where id = p_id and role = 'teacher') then
-    raise exception 'Passwörter können nur für Fahrlehrer neu gesetzt werden';
-  end if;
+  if not can_manage_teacher(p_id) then raise exception 'Passwörter können nur für eigene Fahrlehrer neu gesetzt werden'; end if;
   if char_length(coalesce(p_password, '')) < 6 then raise exception 'Passwort: mindestens 6 Zeichen'; end if;
   update auth.users set encrypted_password = crypt(p_password, gen_salt('bf')), updated_at = now()
   where id = p_id;
@@ -708,7 +736,8 @@ drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles for select
   using (id = auth.uid()
          or (public.is_teacher() and teacher_id = auth.uid())
-         or (public.is_owner() and role = 'teacher'));
+         or (public.is_owner() and role = 'teacher')
+         or (public.is_school_admin() and role = 'teacher' and school_id = auth.uid()));
 -- Fahrlehrer ändern nur eigene Schüler – und können sie nicht zu Fahrlehrern machen oder weitergeben
 drop policy if exists profiles_teacher_update on public.profiles;
 create policy profiles_teacher_update on public.profiles for update
@@ -797,7 +826,9 @@ grant execute on function public.student_teacher(uuid) to authenticated;
 grant execute on function public.has_own_booking(uuid) to authenticated;
 grant execute on function public.is_time_off(uuid, timestamptz) to authenticated;
 grant execute on function public.delete_student(uuid) to authenticated;
-grant execute on function public.create_teacher(uuid, text, text, text) to authenticated;
+grant execute on function public.create_teacher(uuid, text, text, text, boolean) to authenticated;
+grant execute on function public.is_school_admin() to authenticated;
+grant execute on function public.can_manage_teacher(uuid) to authenticated;
 grant execute on function public.set_teacher_status(uuid, text) to authenticated;
 grant execute on function public.delete_teacher(uuid) to authenticated;
 grant execute on function public.owner_set_teacher_password(uuid, text) to authenticated;
