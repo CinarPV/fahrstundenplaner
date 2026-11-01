@@ -203,7 +203,7 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
     rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen. Schau gern nach einem anderen freien Termin.`,
     cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
   }[kind];
-  return body + (reply ? `\n${reply}` : "") + `\n\nZur App: ${appLink()}\n\n` + teacherSignature();
+  return body + (reply ? `\n${reply}` : "") + `\n\nAlle Infos findest du in der App „Easy Fahrstundenplaner“.\n\n` + teacherSignature();
 }
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
 function notifyStep(msg, phone, text, who = "den Schüler") {
@@ -1625,7 +1625,7 @@ function newSlotForm(opts = {}) {
       pushNotify("exam", (madeExam || []).map((x) => x.id), "exam");
       showDate(at);
       const text = `Hallo ${student.first_name || ""}, deine ${examIn(examKind.value)} ist am ${fmtDate(at.toISOString())} um ${fmtTime(at.toISOString())} Uhr (${examDur.value} Min.).`
-        + (meet ? `\n📍 Treffpunkt: ${meet}` : "") + (note ? `\n${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App: ${appLink()}\n\n` + teacherSignature();
+        + (meet ? `\n📍 Treffpunkt: ${meet}` : "") + (note ? `\n${note}` : "") + `\nViel Erfolg! Du siehst den Termin auch in der App „Easy Fahrstundenplaner“.\n\n` + teacherSignature();
       notifyStep(`Prüfung für ${fullName(student)} eingetragen`, student.phone, text);
       return;
     }
@@ -1650,9 +1650,9 @@ function newSlotForm(opts = {}) {
     if (meet) lines += `\n📍 Treffpunkt: ${meet}`;
     const text = kind === "offered"
       ? `Hallo ${student.first_name || ""}, ich biete dir folgende Fahrstunde${pl} an:\n${lines}` + (note ? `\n${note}` : "") +
-        `\n\nBitte schau in die App und sag zu oder ab: ${appLink()}\n\n` + teacherSignature()
+        `\n\nBitte schau in die App „Easy Fahrstundenplaner“ und sag dort zu oder ab.\n\n` + teacherSignature()
       : `Hallo ${student.first_name || ""}, ich habe dir folgende Fahrstunde${pl} eingetragen:\n${lines}` + (note ? `\n${note}` : "") +
-        `\n\nZur App: ${appLink()}\n\n` + teacherSignature();
+        `\n\nAlle Infos findest du in der App „Easy Fahrstundenplaner“.\n\n` + teacherSignature();
     notifyStep(`${n} Fahrstunde${pl} ${kind === "offered" ? "angeboten" : "eingetragen"} – ${fullName(student)}` + (res.skipped ? ` (${res.skipped} gab es schon)` : ""),
       student.phone, text);
   });
