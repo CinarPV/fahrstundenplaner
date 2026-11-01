@@ -2524,8 +2524,8 @@ function openBooking(s) {
   btn.onclick = () => busy(btn, async () => {
     const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value });
     // Höchstzahl erreicht → Pop-up mit der Möglichkeit, um eine Ausnahme zu bitten
-    const limit = error && /LIMIT:(\d+):(\d+):?([\d:]+-[\d:]+)?/.exec(error.message || "");
-    if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2], limit[3]);
+    const limit = error && /LIMIT:(\d+):(\d+):?([\d:]+-[\d:]+)?\|?([UN])?/.exec(error.message || "");
+    if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2], limit[3], limit[4] === "U");
     if (error) throw error;
     toast("Angefragt! Du siehst unter „Meine Fahrstunden“, sobald dein Fahrlehrer bestätigt.");
     closeModal();
@@ -2545,7 +2545,8 @@ function openBooking(s) {
 }
 
 // Höchstzahl erreicht: Hinweis + kurze Nachricht an den Fahrlehrer → Anfrage als „Ausnahme gewünscht“
-function openLimitRequest(s, prevNote, open, max, win) {
+// used = Ausnahme-Bitte in dieser Woche schon gestellt → nur noch Hinweis, keine weitere Bitte
+function openLimitRequest(s, prevNote, open, max, win, used) {
   const span = win ? ` zwischen ${win.replace("-", " und ")} Uhr` : "";
   const msg = el("textarea", { maxlength: 300, placeholder: "z. B. „Meine Prüfung ist bald – könnte ich diese Woche noch eine Stunde fahren?“" });
   msg.value = prevNote || "";
@@ -2553,15 +2554,20 @@ function openLimitRequest(s, prevNote, open, max, win) {
   btn.onclick = () => busy(btn, async () => {
     if (!msg.value.trim()) throw new Error("Bitte schreib kurz, warum du eine weitere Fahrstunde möchtest.");
     const { error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: msg.value.trim(), p_exception: true });
+    if (error && /LIMIT:.*\|U/.test(error.message || "")) return openLimitRequest(s, msg.value, open, max, win, true);
     if (error) throw error;
     toast("Deine Bitte ist bei deinem Fahrlehrer angekommen. Er entscheidet, ob er eine Ausnahme macht.");
     closeModal();
     render();
   });
-  openModal("Wochen-Höchstzahl erreicht",
-    el("div", { class: "notice" }, el("b", {}, `Du hast in dieser Woche schon ${open} Fahrstunde${open === 1 ? "" : "n"}${span}`),
-      ` – die Höchstzahl pro Woche${span ? " für diese Uhrzeit" : ""} ist ${max}.`, win ? " Termine zu anderen Uhrzeiten kannst du ganz normal anfragen." : ""),
-    el("p", {}, "Möchtest du diesen Termin trotzdem? Bitte deinen Fahrlehrer um eine Ausnahme und schreib kurz, warum. Die Ausnahme gilt nur für diesen einen Termin."),
+  const info = el("div", { class: "notice" }, el("b", {}, `Du hast in dieser Woche schon ${open} Fahrstunde${open === 1 ? "" : "n"}${span}`),
+    ` – die Höchstzahl pro Woche${span ? " für diese Uhrzeit" : ""} ist ${max}.`, win ? " Termine zu anderen Uhrzeiten kannst du ganz normal anfragen." : "");
+  if (used) return openModal("Wochen-Höchstzahl erreicht", info,
+    el("div", { class: "notice danger" }, el("b", {}, "Ausnahme schon genutzt: "),
+      "Du hast in dieser Woche bereits um eine Ausnahme gebeten. Pro Woche ist nur eine Ausnahme-Bitte möglich – ab nächster Woche kannst du wieder normal anfragen."),
+    el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "Verstanden")));
+  openModal("Wochen-Höchstzahl erreicht", info,
+    el("p", {}, "Möchtest du diesen Termin trotzdem? Bitte deinen Fahrlehrer um eine Ausnahme und schreib kurz, warum. Die Ausnahme gilt nur für diesen einen Termin – und pro Woche ist nur eine Ausnahme-Bitte möglich."),
     el("p", { class: "small" }, el("b", {}, fmtDate(s.starts_at)), ` · ${fmtRange(s.starts_at, s.duration_min)}`),
     el("label", {}, "Nachricht an deinen Fahrlehrer"), msg,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));

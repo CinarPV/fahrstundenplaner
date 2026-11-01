@@ -551,7 +551,7 @@ drop function if exists public.book_slot(uuid, text);
 create or replace function public.book_slot(p_slot uuid, p_note text, p_exception boolean default false)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_start timestamptz; v_max int; v_open int; v_over boolean := false;
-        v_from time; v_to time; v_window boolean;
+        v_from time; v_to time; v_window boolean; v_used boolean;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
   select starts_at into v_start from slots where id = p_slot and teacher_id = my_teacher_id();
@@ -574,10 +574,16 @@ begin
       and b.status in ('requested', 'offered', 'confirmed')
       and (not v_window or ((s.starts_at at time zone 'Europe/Berlin')::time >= v_from and (s.starts_at at time zone 'Europe/Berlin')::time < v_to));
     if v_open >= v_max then
-      if not coalesce(p_exception, false) then
-        -- „LIMIT:“ erkennt die App und bietet dann die Ausnahme-Bitte an (mit Zeitfenster, falls eingestellt)
-        raise exception 'LIMIT:%:%:%', v_open, v_max,
-          case when v_window then to_char(v_from, 'HH24:MI') || '-' || to_char(v_to, 'HH24:MI') else '' end;
+      -- Pro Woche nur EINE Ausnahme-Bitte – egal, ob sie gewährt, abgelehnt oder zurückgezogen wurde
+      select exists (select 1 from bookings b join slots s on s.id = b.slot_id
+        where b.student_id = auth.uid() and b.over_limit
+          and date_trunc('week', s.starts_at at time zone 'Europe/Berlin') = date_trunc('week', v_start at time zone 'Europe/Berlin'))
+        into v_used;
+      if not coalesce(p_exception, false) or v_used then
+        -- „LIMIT:“ erkennt die App und zeigt das Pop-up (mit Zeitfenster; |U = Ausnahme diese Woche schon genutzt)
+        raise exception 'LIMIT:%:%:%|%', v_open, v_max,
+          case when v_window then to_char(v_from, 'HH24:MI') || '-' || to_char(v_to, 'HH24:MI') else '' end,
+          case when v_used then 'U' else 'N' end;
       end if;
       if coalesce(trim(p_note), '') = '' then raise exception 'Bitte schreib deinem Fahrlehrer kurz, warum du eine weitere Fahrstunde möchtest'; end if;
       v_over := true;
