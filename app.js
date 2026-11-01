@@ -1253,10 +1253,13 @@ function weekGrid(slots, renderSlot, onAddDay, extras = []) {
 /* ---------------- Admin: Heute – der Fahrtag auf einen Blick, mit Abhaken per Tipp ---------------- */
 
 async function adminToday() {
-  // Zwei Tage untereinander (Start: heute) – wischen oder ‹ › blättert tageweise
-  const DAYS = 2;
-  const first = dayStart(state.todayDate || new Date());
-  const from = first, to = addDays(first, DAYS), now = Date.now();
+  // Die nächsten 6 Tage ohne Sonntag untereinander (Start: heute) – wischen oder ‹ › blättert tageweise
+  const DAYS = 6;
+  const noSunday = (d, dir = 1) => { while (d.getDay() === 0) d = addDays(d, dir); return d; };
+  const first = noSunday(dayStart(state.todayDate || new Date()));
+  const dayList = [];
+  for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (d.getDay() !== 0) dayList.push(d);
+  const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }] = await Promise.all([
     sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
@@ -1271,7 +1274,7 @@ async function adminToday() {
     return b ? { s, b } : null;
   }).filter(Boolean);
   const mapsLink = (p) => "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(p);
-  const go = (n) => { state.todayDate = addDays(first, n); render(); };
+  const go = (n) => { state.todayDate = noSunday(addDays(first, n), n); render(); };
 
   const save = async (b, patch, msg) => {
     const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
@@ -1331,8 +1334,7 @@ async function adminToday() {
     e.meeting_point ? el("a", { class: "tr-meet", href: mapsLink(e.meeting_point), target: "_blank", rel: "noopener" }, "📍 " + e.meeting_point) : null);
 
   const days = [];
-  for (let i = 0; i < DAYS; i++) {
-    const day = addDays(first, i);
+  for (const day of dayList) {
     const items = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day)).map((x) => ({ at: x.s.starts_at, node: row(x) }))
       .concat((exams || []).filter((e) => sameDay(new Date(e.exam_at), day)).map((e) => ({ at: e.exam_at, node: examRow(e) })))
       .sort((a, b) => a.at.localeCompare(b.at));
@@ -1347,7 +1349,7 @@ async function adminToday() {
   const view = el("div", { class: "today-view" },
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
-      el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(addDays(first, DAYS - 1))}`),
+      el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
         el("div", { class: "small muted" }, "Wischen ← → wechselt den Tag")),
       el("button", { class: "btn small ghost", onclick: () => go(1), "aria-label": "Einen Tag weiter" }, "›")),
     !sameDay(first, new Date()) ? el("div", { class: "actions", style: "margin:0 0 10px" }, el("button", { class: "btn small ghost", onclick: () => { state.todayDate = null; render(); } }, "Zurück zu heute")) : null,
