@@ -393,8 +393,9 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 .slot.exam { background: var(--exam-bg); color: var(--exam-fg); border: 2px solid var(--exam-bd); font-weight: 600; }
 .exam-card { border: 2px solid var(--exam-bd); background: linear-gradient(180deg, var(--exam-bg), #fff 120px); }
 .exam-card h2, .exam-card h3 { color: var(--exam-fg); }
-.exam-banner { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; cursor: pointer;
+.exam-banner { display: block; width: 100%; text-align: left; font: inherit;
   border: 2px solid var(--exam-bd); background: var(--exam-bg); color: var(--exam-fg); }
+.exam-top { display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .exam-banner .exam-icon { font-size: 32px; line-height: 1; }
 .exam-banner .countdown { margin-left: auto; background: var(--exam-bd); color: #3d2600; }
 .exam-btn { background: var(--exam-bd); color: #3d2600; border-color: var(--exam-bd); }
@@ -505,3 +506,15 @@ html.no-splash #splash { display: none; }
 .stat.next { grid-column: 1 / -1; text-align: left; padding: 10px 12px; }
 .stat.next .next-line { font-size: 14px; margin-top: 2px; }
 .stat.next .next-line b { font-size: 16px; display: inline; }
+
+/* Prüfungs-Kasten beim Schüler: Treffpunkt, Mitbringen, Motivation */
+.exam-meet { display: block; margin: 10px 0 0; font-size: 14px; color: var(--exam-fg); font-weight: 600; text-decoration: none; }
+.exam-bring { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--exam-bd); }
+.exam-bring-h { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin-right: 2px; }
+.exam-bring .chip { background: #fff; border: 1px solid var(--exam-bd); border-radius: 999px; padding: 3px 10px; font-size: 13px; color: #3d2600; }
+.exam-bring .chip.wide { border-radius: 10px; }
+.exam-motto { margin-top: 12px; font-size: 19px; font-weight: 800; color: #0b3d5c; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 7px; }
+.easy-word { display: inline-flex; align-items: baseline; }
+.easy-word svg { height: .78em; width: auto; margin-right: 1px; align-self: baseline; transform: translateY(1px); }
+.easy-word span { color: #0b3d5c; }
+.muted-motto { font-weight: 600; font-size: 15px; color: var(--exam-fg); }

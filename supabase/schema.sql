@@ -37,7 +37,7 @@ create table if not exists public.settings (
   teacher_id        uuid primary key references public.profiles(id) on delete cascade,
   display_name      text not null default 'Fahrlehrer' check (char_length(display_name) <= 60),
   default_duration  int not null default 90 check (default_duration between 5 and 600),
-  max_open          int not null default 3 check (max_open between 0 and 50),  -- max. Termine pro Schüler, 0 = unbegrenzt
+  max_open          int not null default 3 check (max_open between 0 and 50),  -- max. Fahrstunden pro Schüler und Woche, 0 = unbegrenzt
   admin_phone       text check (char_length(admin_phone) <= 30)
 );
 
@@ -546,13 +546,16 @@ begin
   if v_start is null then raise exception 'Termin nicht gefunden'; end if;
   if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
   if is_time_off(my_teacher_id(), v_start) then raise exception 'An diesem Tag ist dein Fahrlehrer nicht verfügbar (Urlaub/frei).'; end if;
-  -- Obergrenze: eigene Höchstzahl des Schülers, sonst Standard seines Fahrlehrers
+  -- Obergrenze PRO WOCHE (Mo–So, deutsche Zeit): eigene Höchstzahl des Schülers, sonst Standard seines Fahrlehrers.
+  -- Gezählt werden alle Anfragen, Angebote und Fahrstunden (auch schon gefahrene) in der Woche des gewünschten Termins.
+  -- Eine gewährte Ausnahme gilt nur für diesen einen Termin – die Höchstzahl bleibt.
   select coalesce(p.max_open, st.max_open) into v_max
   from profiles p join settings st on st.teacher_id = p.teacher_id where p.id = auth.uid();
   if coalesce(v_max, 0) > 0 then
     select count(*) into v_open from bookings b join slots s on s.id = b.slot_id
-    where b.student_id = auth.uid() and s.starts_at > now()
-      and (b.status = 'requested' or (b.status = 'confirmed' and b.actual_minutes is null));
+    where b.student_id = auth.uid()
+      and date_trunc('week', s.starts_at at time zone 'Europe/Berlin') = date_trunc('week', v_start at time zone 'Europe/Berlin')
+      and b.status in ('requested', 'offered', 'confirmed');
     if v_open >= v_max then
       if not coalesce(p_exception, false) then
         -- „LIMIT:“ erkennt die App und bietet dann die Ausnahme-Bitte an

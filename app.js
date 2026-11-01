@@ -1831,7 +1831,7 @@ async function adminRequests() {
   return el("div", {},
     el("h2", {}, "Offene Anfragen"),
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
-      b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Über der Höchstzahl – bittet um eine Ausnahme")) : null,
+      b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
       b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
     cancels.data.length ? [
@@ -1951,7 +1951,7 @@ function moreToggle(st) {
   return el("label", { class: "check", style: "margin:0;align-items:center" }, box, hint);
 }
 
-// Höchstzahl offener TERMINE (nicht Fahrstunden): null = Standard, 0 = unbegrenzt, sonst Zahl
+// Höchstzahl Termine PRO WOCHE: null = Standard, 0 = unbegrenzt, sonst Zahl
 const limitLabel = (v) => (v === null || v === undefined ? `Standard (${state.settings.max_open || "∞"})` : v === 0 ? "∞ unbegrenzt" : String(v));
 function limitControl(st) {
   const name = "limit-" + st.id;
@@ -1970,7 +1970,7 @@ function limitControl(st) {
     if (error) throw error;
     st.max_open = v;
     state.renderOnClose = true;
-    toast(`${fullName(st)}: ${limitLabel(v)} offene Termine.`);
+    toast(`${fullName(st)}: ${limitLabel(v)} Termine pro Woche.`);
   });
   return el("div", {},
     el("h3", {}, "Wie viele Termine darf dieser Schüler gleichzeitig haben?"),
@@ -2381,8 +2381,8 @@ function adminSettings() {
       el("h3", {}, "Standarddauer für neue Termine"),
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
       dur.node,
-      el("h3", { style: "margin-top:18px" }, "Höchstzahl Termine pro Schüler"),
-      el("p", { class: "muted small" }, "So viele Termine (offene Anfragen + anstehende) darf ein Schüler gleichzeitig haben, z. B. 2 oder 3. 0 = unbegrenzt. Einzelne Schüler (z. B. vor der Prüfung) per Häkchen „Mehr erlauben“ in der Schülerliste komplett freigeben."),
+      el("h3", { style: "margin-top:18px" }, "Höchstzahl Fahrstunden pro Woche"),
+      el("p", { class: "muted small" }, "So viele Termine darf ein Schüler pro Woche (Mo–So) anfragen bzw. haben, z. B. 2 oder 3. 0 = unbegrenzt. Will er mehr, kann er um eine Ausnahme bitten – die gewährst oder ablehnst du unter „Anfragen“. Einzelne Schüler (z. B. vor der Prüfung) kannst du in der Schülerliste dauerhaft freigeben."),
       maxOpen,
       el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler"),
       el("p", { class: "muted small" }, "So erscheinst du bei der Registrierung und in Nachrichten, z. B. „Kürsat“."),
@@ -2456,11 +2456,7 @@ async function studentCalendar() {
     nextOff ? el("div", { class: "notice off-banner", style: "margin-bottom:12px" },
       el("b", {}, `🏖️ Dein Fahrlehrer ist nicht verfügbar (${nextOff.note || "frei"}): `), offRange(nextOff),
       ". An diesen Tagen kannst du nichts anfragen.") : null,
-    nextExam ? el("button", { class: "card exam-banner", onclick: () => goTab("training") },
-      el("span", { class: "exam-icon" }, "🎓"),
-      el("span", {}, el("b", {}, `Deine ${examIn(nextExam.kind)}`), el("br"),
-        `${fmtDate(nextExam.exam_at)} · ${fmtRange(nextExam.exam_at, nextExam.duration_min || 55)} Uhr`, nextExam.meeting_point ? ` · 📍 ${nextExam.meeting_point}` : ""),
-      countdownEl(nextExam.exam_at, nextExam.duration_min || 55)) : null,
+    nextExam ? examBanner(nextExam) : null,
     nextOwn ? el("div", { class: "card next-card" },
       el("div", { class: "next-row first", style: "cursor:default" },
         countdownEl(nextOwn.slots.starts_at, nextOwn.slots.duration_min),
@@ -2470,6 +2466,27 @@ async function studentCalendar() {
     grid,
     slots.length === 0 ? el("p", { class: "muted", style: "margin-top:12px" }, "In dieser Woche gibt es keine freien Termine. Schau in der nächsten Woche (›) nach.") : null,
   );
+}
+
+// Prüfungs-Kasten für den Schüler: Termin, Treffpunkt, was mitbringen, Motivation
+const EASY_E = '<svg viewBox="13 9 35.5 46" aria-hidden="true"><rect x="14" y="10" width="8" height="44" rx="4" fill="#0b3d5c"/><rect x="14" y="13.5" width="22" height="7" rx="3.5" fill="#0b3d5c"/><rect x="14" y="28.5" width="22" height="7" rx="3.5" fill="#0b3d5c"/><rect x="14" y="43.5" width="22" height="7" rx="3.5" fill="#0b3d5c"/><circle cx="40" cy="17" r="7" fill="#e5484d"/><circle cx="40" cy="32" r="7" fill="#f5a623"/><circle cx="40" cy="47" r="7" fill="#2fb36d"/></svg>';
+function examBanner(e) {
+  const easy = el("span", { class: "easy-word", "aria-label": "Easy" });
+  easy.innerHTML = EASY_E + "<span>asy!</span>";
+  const meet = e.meeting_point;
+  return el("div", { class: "card exam-banner" },
+    el("div", { class: "exam-top", onclick: () => goTab("training") },
+      el("span", { class: "exam-icon" }, "🎓"),
+      el("span", {}, el("b", {}, `Deine ${examIn(e.kind)}`), el("br"),
+        `${fmtDay(e.exam_at)} · ${fmtRange(e.exam_at, e.duration_min || 55)} Uhr`),
+      countdownEl(e.exam_at, e.duration_min || 55)),
+    meet ? el("a", { class: "exam-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
+    el("div", { class: "exam-bring" },
+      el("span", { class: "exam-bring-h" }, "Mitbringen"),
+      el("span", { class: "chip" }, "🪪 Ausweis"),
+      state.profile.needs_glasses ? el("span", { class: "chip" }, "👓 Brille / Kontaktlinsen") : null,
+      el("span", { class: "chip wide" }, "🧾 Kontoauszug auf Papier – falls TÜV-Gebühr noch offen oder erst vor < 1 Woche bezahlt")),
+    el("div", { class: "exam-motto" }, el("span", {}, "Du schaffst es"), easy, el("span", { class: "muted-motto" }, "Viel Erfolg 🍀")));
 }
 
 function openBooking(s) {
@@ -2513,10 +2530,10 @@ function openLimitRequest(s, prevNote, open, max) {
     closeModal();
     render();
   });
-  openModal("Höchstzahl erreicht",
-    el("div", { class: "notice" }, el("b", {}, `Du hast schon ${open} offene bzw. anstehende Fahrstunde${open === 1 ? "" : "n"}`),
-      ` – mehr als ${max} gleichzeitig sind normalerweise nicht möglich.`),
-    el("p", {}, "Möchtest du diesen Termin trotzdem? Schreib deinem Fahrlehrer kurz, warum. Er kann dir eine Ausnahme erlauben."),
+  openModal("Wochen-Höchstzahl erreicht",
+    el("div", { class: "notice" }, el("b", {}, `Du hast in dieser Woche schon ${open} Fahrstunde${open === 1 ? "" : "n"}`),
+      ` – die Höchstzahl pro Woche ist ${max}.`),
+    el("p", {}, "Möchtest du diesen Termin trotzdem? Bitte deinen Fahrlehrer um eine Ausnahme und schreib kurz, warum. Die Ausnahme gilt nur für diesen einen Termin."),
     el("p", { class: "small" }, el("b", {}, fmtDate(s.starts_at)), ` · ${fmtRange(s.starts_at, s.duration_min)}`),
     el("label", {}, "Nachricht an deinen Fahrlehrer"), msg,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
