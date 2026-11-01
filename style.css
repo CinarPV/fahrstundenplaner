@@ -616,3 +616,30 @@ html.dark .past-bar { background: var(--brand); border-color: var(--brand); bord
 html.dark .countdown { background: var(--brand); color: #fff; }
 html.dark .design-switch button.on { background: var(--brand); }
 html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first .countdown, html.dark .countdown.ok { background: var(--brand) !important; color: #fff !important; }
+
+/* Heute-Ansicht: kompakte Zeilen pro Fahrstunde */
+.today-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; text-align: center; }
+.today-head b { font-size: 16px; }
+.today-view .day { padding-bottom: 6px; }
+.tr { border: 1px solid var(--border); border-left: 4px solid var(--conf-bd); border-radius: 10px; padding: 6px 8px; margin: 6px 0; background: var(--card); }
+.tr.live { border-left-color: #2fb36d; }
+.tr.over { border-left-color: #f5a623; }
+.tr.done { border-left-color: var(--done-bd); background: var(--done-bg); }
+.tr.nothere { border-left-color: #e5484d; background: var(--bg); }
+.tr.exam { border-left-color: var(--exam-bd); background: var(--exam-bg); }
+.tr-head { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.tr-time { font-size: 15px; min-width: 44px; }
+.tr-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-pill { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--bg); white-space: nowrap; }
+.tr-pill.ok { background: #2fb36d22; color: #1e8a4c; }
+.tr-pill.no { background: #e5484d1f; color: #c0392b; }
+.tr-pill.live { background: #2fb36d; color: #fff; }
+.tr-pill.over { background: #f5a623; color: #3d2600; }
+.tr .countdown.small { margin: 0; }
+.tr-icon { border: none; background: none; font-size: 18px; padding: 2px 4px; cursor: pointer; text-decoration: none; color: var(--muted); line-height: 1; }
+.tr-meet { display: block; font-size: 12px; color: var(--teal-text); text-decoration: none; margin: 0 0 2px 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-act { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.tr-step { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 8px; padding: 5px 7px; font: inherit; font-size: 13px; cursor: pointer; }
+.tr-min { min-width: 58px; text-align: center; font-size: 14px; }
+.tr-ok { margin-left: auto; padding: 6px 10px; white-space: nowrap; }
+.tr-why { width: 46px; flex: 0 0 46px; padding: 5px 4px; font-size: 15px; border-radius: 8px; color: #c0392b; font-weight: 700; text-align: center; }

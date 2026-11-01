@@ -778,6 +778,24 @@ function setDesign(key) {
   document.documentElement.classList.toggle("dark", DARK_BG.includes(key));
   try { key ? localStorage.setItem("fsp_bg", key) : localStorage.removeItem("fsp_bg"); } catch { /* privater Modus */ }
 }
+// Tab „☀️ Heute“ ein-/ausschalten (pro Fahrlehrer gespeichert)
+function todayCard() {
+  const box = el("input", { type: "checkbox", checked: !!state.settings.show_today });
+  box.addEventListener("change", async () => {
+    box.disabled = true;
+    const { error } = await sb.from("settings").update({ show_today: box.checked }).eq("teacher_id", state.profile.id);
+    box.disabled = false;
+    if (error) { box.checked = !box.checked; return fail(error); }
+    state.settings.show_today = box.checked;
+    toast(box.checked ? "☀️ Tab „Heute“ ist jetzt oben neben „Kalender“." : "Tab „Heute“ ausgeblendet.");
+    render();
+  });
+  return el("div", { class: "card" },
+    el("h3", {}, "☀️ Heute-Ansicht"),
+    el("label", { class: "check" }, box, el("span", {}, el("b", {}, "Tab „Heute“ anzeigen"),
+      " – deine Fahrstunden von heute und morgen kompakt untereinander. Direkt abhaken (Minuten anpassen) oder „nicht gefahren“ mit Grund wählen. Wischen wechselt den Tag.")));
+}
+
 function backgroundCard() {
   const cur = () => document.documentElement.dataset.bg || "";
   const sw = el("div", { class: "design-switch", role: "group", "aria-label": "Design umschalten" });
@@ -820,7 +838,7 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!isAdmin() && !state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? [["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]]
+    ? [["calendar", "Kalender"]].concat(state.settings.show_today ? [["today", "☀️ Heute"]] : []).concat([["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
       .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -846,6 +864,7 @@ async function render() {
     else if (state.tab === "profile") view = studentProfile();
     else if (state.tab === "training") view = isAdmin() ? await adminTraining() : await studentTraining();
     else if (state.tab === "control") view = await adminControl();
+    else if (state.tab === "today") view = await adminToday();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -1067,6 +1086,117 @@ function weekGrid(slots, renderSlot, onAddDay, extras = []) {
   bar.onclick = () => { state.showPast = !state.showPast; paint(); };
   paint();
   return el("div", { class: "week" }, bar, past, days.slice(PAST_DAYS));
+}
+
+/* ---------------- Admin: Heute – der Fahrtag auf einen Blick, mit Abhaken per Tipp ---------------- */
+
+async function adminToday() {
+  // Zwei Tage untereinander (Start: heute) – wischen oder ‹ › blättert tageweise
+  const DAYS = 2;
+  const first = dayStart(state.todayDate || new Date());
+  const from = first, to = addDays(first, DAYS), now = Date.now();
+  const [{ data: slots, error }, { data: exams }] = await Promise.all([
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+      .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
+    sb.from("exams").select("id,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
+      .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
+  ]);
+  if (error) throw error;
+  // je Termin: bestätigte Fahrstunde oder (falls ausgefallen) der zuletzt eingetragene Ausfall
+  const lessons = (slots || []).map((s) => {
+    const list = s.bookings || [];
+    const b = list.find((x) => x.status === "confirmed") || list.filter((x) => NOT_HELD_ICON[x.status]).pop();
+    return b ? { s, b } : null;
+  }).filter(Boolean);
+  const mapsLink = (p) => "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(p);
+  const go = (n) => { state.todayDate = addDays(first, n); render(); };
+
+  const save = async (b, patch, msg) => {
+    const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
+    if (error) throw error;
+    toast(msg);
+    render();
+  };
+  // Kompakte Zeile pro Fahrstunde
+  const row = ({ s, b }) => {
+    const start = new Date(s.starts_at).getTime(), end = start + s.duration_min * 60000;
+    const p = b.profiles || {}, held = b.status === "confirmed", done = held && b.actual_minutes !== null;
+    const meet = b.meeting_point || s.meeting_point || state.settings.meeting_point || "";
+    const phase = !held ? "nothere" : done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
+    const wa = waNumber(p.phone);
+    const head = el("div", { class: "tr-head" },
+      el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
+      el("span", { class: "tr-name" }, fullName(p), p.needs_glasses ? " 👓" : ""),
+      phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
+        : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
+        : phase === "live" ? el("span", { class: "tr-pill live" }, "läuft")
+        : phase === "next" ? el("span", { class: "tr-pill" }, `${s.duration_min} Min.`)
+        : el("span", { class: "tr-pill over" }, "abhaken"),
+      phase === "next" && wa ? el("a", { class: "tr-icon", title: "Bin gleich da (WhatsApp)", target: "_blank", rel: "noopener",
+        href: `https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${p.first_name || ""}, ich bin in ca. 5 Minuten am Treffpunkt.` + (meet ? ` 📍 ${meet}` : ""))}` }, "💬") : null,
+      el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
+    const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
+    if (phase === "done" || phase === "nothere") return el("div", { class: "tr " + phase }, head);
+    if (phase === "next") return el("div", { class: "tr next" }, head, meetLine);  // abhaken erst ab Beginn
+    // Abhaken: Minuten direkt anpassen, bestätigen – oder Ausfall-Grund wählen
+    let mins = s.duration_min;
+    const minEl = el("b", { class: "tr-min" }, `${mins} Min.`);
+    const step = (d) => el("button", { type: "button", class: "tr-step", onclick: () => { mins = Math.max(5, Math.min(600, mins + d)); minEl.textContent = `${mins} Min.`; } }, d > 0 ? `+${d}` : `−${-d}`);
+    const ok = el("button", { class: "btn small ok tr-ok" }, "✓ Gefahren");
+    ok.title = "Gefahren – mit der eingestellten Minutenzahl abhaken";
+    ok.onclick = () => busy(ok, () => save(b, { actual_minutes: mins, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${mins} Min. gefahren`));
+    const why = el("select", { class: "tr-why", "aria-label": "Nicht gefahren – Grund" },
+      el("option", { value: "" }, "✗"),
+      NOT_HELD.map(([v, t]) => el("option", { value: v }, t)));
+    why.addEventListener("change", async () => {
+      const v = why.value;
+      if (!v) return;
+      const late = v === "no_show" || (v !== "cancelled_teacher" && isLate(s.starts_at));
+      if (!confirm(`${fullName(p)} – ${STATUS_TEXT[v]}${late ? " (zählt als Fehlstunde)" : ""}. Speichern?`)) { why.value = ""; return; }
+      why.disabled = true;
+      try { await save(b, { status: v, late_cancel: late, actual_minutes: null, decided_at: new Date().toISOString() }, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " – Fehlstunde" : ""}`); }
+      catch (e) { fail(e); why.disabled = false; why.value = ""; }
+    });
+    return el("div", { class: "tr " + phase }, head, meetLine,
+      el("div", { class: "tr-act" }, step(-5), minEl, step(5), ok, why));
+  };
+  const examRow = (e) => el("div", { class: "tr exam" },
+    el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
+      el("span", { class: "tr-name" }, "🎓 " + fullName(e.profiles || {})), el("span", { class: "tr-pill" }, "Prüfung")),
+    e.meeting_point ? el("a", { class: "tr-meet", href: mapsLink(e.meeting_point), target: "_blank", rel: "noopener" }, "📍 " + e.meeting_point) : null);
+
+  const days = [];
+  for (let i = 0; i < DAYS; i++) {
+    const day = addDays(first, i);
+    const items = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day)).map((x) => ({ at: x.s.starts_at, node: row(x) }))
+      .concat((exams || []).filter((e) => sameDay(new Date(e.exam_at), day)).map((e) => ({ at: e.exam_at, node: examRow(e) })))
+      .sort((a, b) => a.at.localeCompare(b.at));
+    const dayLessons = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day));
+    const minutes = dayLessons.reduce((n, x) => n + (x.b.actual_minutes || 0), 0);
+    const todo = dayLessons.filter((x) => x.b.status === "confirmed" && x.b.actual_minutes === null && new Date(x.s.starts_at).getTime() <= now).length;
+    days.push(el("div", { class: "day" + (sameDay(day, new Date()) ? " today" : "") },
+      el("div", { class: "day-head" }, el("span", {}, (sameDay(day, new Date()) ? "Heute · " : "") + fmtDay(day)),
+        el("span", { class: "ctl-sum" }, [dayLessons.length ? `${dayLessons.length} Std.` : "", minutes ? `${minutes} Min. ✓` : "", todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
+      items.length ? items.map((x) => x.node) : el("div", { class: "empty" }, "—")));
+  }
+  const view = el("div", { class: "today-view" },
+    el("div", { class: "today-head" },
+      el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
+      el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(addDays(first, DAYS - 1))}`),
+        el("div", { class: "small muted" }, "Wischen ← → wechselt den Tag")),
+      el("button", { class: "btn small ghost", onclick: () => go(1), "aria-label": "Einen Tag weiter" }, "›")),
+    !sameDay(first, new Date()) ? el("div", { class: "actions", style: "margin:0 0 10px" }, el("button", { class: "btn small ghost", onclick: () => { state.todayDate = null; render(); } }, "Zurück zu heute")) : null,
+    el("div", { class: "ctl-days" }, days));
+  // Wischen nach links/rechts = nächster/vorheriger Tag
+  let sx = null, sy = null;
+  view.addEventListener("touchstart", (e) => { if (e.target.closest("select,input")) return; sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  view.addEventListener("touchend", (e) => {
+    if (sx === null) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    sx = null;
+    if (Math.abs(dx) > 70 && Math.abs(dy) < 50) go(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  return view;
 }
 
 /* ---------------- Admin: Kalender ---------------- */
@@ -2481,6 +2611,7 @@ function adminSettings() {
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
     backupCard(),
     installCard(),
+    todayCard(),
     backgroundCard(),
     passwordCard(),
   );

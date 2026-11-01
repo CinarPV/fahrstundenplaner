@@ -101,6 +101,8 @@ alter table public.settings add column if not exists time_presets   text check (
 -- Wochen-Höchstzahl nur in einem Zeitfenster (z. B. 14–18 Uhr); beide leer = ganzer Tag
 alter table public.settings add column if not exists limit_from time;
 alter table public.settings add column if not exists limit_to   time;
+-- Tab „☀️ Heute“ (Fahrtag mit Abhaken per Tipp) – jeder Fahrlehrer kann ihn in den Einstellungen einschalten
+alter table public.settings add column if not exists show_today boolean not null default false;
 -- Kontrolle: wann die Fahrstunde ins Fahrschulsystem übertragen wurde (NULL = noch nicht)
 alter table public.bookings add column if not exists transferred_at timestamptz;
 -- Anfrage über der Höchstzahl: Schüler bittet um eine Ausnahme (Fahrlehrer entscheidet)
