@@ -698,3 +698,20 @@ html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first 
 .access-badge.ok { background: #2fb36d22; color: #1e8a4c; }
 .access-badge.warn { background: #f5a62333; color: #8a5a00; }
 .access-badge.bad { background: #e5484d22; color: #c0392b; }
+
+/* Schnellzugriff: Nachtragen + Krank */
+.quick-btn { background: linear-gradient(135deg, #5b7c8f 0%, #3d5a6b 100%); }
+.quick-btn.sick { background: linear-gradient(135deg, #e0645c 0%, #b8423b 100%); }
+/* Übersicht auf der Schüler-Seite */
+.ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 10px 0 14px; }
+.ov-tile { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.ov-tile .ov-ic { font-size: 18px; line-height: 1.3; }
+.ov-tile b { display: block; font-size: 15px; }
+.ov-tile small { display: block; font-size: 11.5px; }
+.ov-tile.ok { border-color: #2fb36d66; background: #2fb36d12; }
+.ov-tile.warn { border-color: #f5a62388; background: #f5a62314; }
+/* Wunschzeit & Arten-Auswahl */
+.wish-tabs, .type-tabs { flex-wrap: wrap; }
+.notice.wish { background: #e8f4fb; border-color: #a9c9dd; color: var(--brand); }
+.del-list { max-height: 320px; }
+.wa-list .btn { font-size: 13px; padding: 6px 10px; }

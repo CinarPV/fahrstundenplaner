@@ -79,7 +79,7 @@ create table if not exists public.bookings (
   cancel_reason   text check (char_length(cancel_reason) <= 300),
   late_cancel     boolean not null default false,  -- Fehlstunde (kostenpflichtig)
   lesson_type     text not null default 'normal'
-                  check (lesson_type in ('normal','ueberland','autobahn','nacht')),  -- Sonderfahrten
+                  check (lesson_type in ('normal','ueberland','autobahn','nacht','schalt','schaltpruefung')),  -- Sonderfahrten, B197
   student_note    text check (char_length(student_note) <= 300),
   admin_reply     text check (char_length(admin_reply) <= 1000),
   actual_minutes  int check (actual_minutes between 0 and 1000),
@@ -92,6 +92,13 @@ alter table public.bookings drop constraint if exists bookings_status_check;
 alter table public.bookings add constraint bookings_status_check
   check (status in ('requested','confirmed','rejected','cancelled','offered','declined',
                     'sick','cancelled_student','cancelled_teacher','no_show'));
+
+-- B197: Schaltstunden und Schaltkompetenz-Test (15 Min.) als eigene Fahrt-Arten
+alter table public.bookings drop constraint if exists bookings_lesson_type_check;
+alter table public.bookings add constraint bookings_lesson_type_check
+  check (lesson_type in ('normal','ueberland','autobahn','nacht','schalt','schaltpruefung'));
+-- Wunschzeit des Schülers: höchstens 60 Min. vor/nach dem angebotenen Beginn
+alter table public.bookings add column if not exists wish_start timestamptz;
 
 create unique index if not exists bookings_one_active_per_slot
   on public.bookings (slot_id) where status in ('requested','confirmed','offered');
@@ -662,7 +669,8 @@ $$;
 
 -- Termin anfragen. Über der Höchstzahl nur als Ausnahme-Bitte (p_exception) mit Nachricht an den Fahrlehrer.
 drop function if exists public.book_slot(uuid, text);
-create or replace function public.book_slot(p_slot uuid, p_note text, p_exception boolean default false)
+drop function if exists public.book_slot(uuid, text, boolean);
+create or replace function public.book_slot(p_slot uuid, p_note text, p_exception boolean default false, p_wish timestamptz default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_start timestamptz; v_max int; v_open int; v_over boolean := false;
         v_from time; v_to time; v_window boolean; v_used boolean;
@@ -672,6 +680,13 @@ begin
   if v_start is null then raise exception 'Termin nicht gefunden'; end if;
   if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
   if is_time_off(my_teacher_id(), v_start) then raise exception 'An diesem Tag ist dein Fahrlehrer nicht verfügbar (Urlaub/frei).'; end if;
+  -- Wunschzeit: nur Abweichung bis höchstens 1 Stunde und nicht in der Vergangenheit
+  if p_wish is not null and p_wish <> v_start then
+    if abs(extract(epoch from p_wish - v_start)) > 3600 then raise exception 'Die Wunschzeit darf höchstens 1 Stunde abweichen'; end if;
+    if p_wish < now() then raise exception 'Die Wunschzeit liegt in der Vergangenheit'; end if;
+  else
+    p_wish := null;
+  end if;
   -- Obergrenze PRO WOCHE (Mo–So, deutsche Zeit): eigene Höchstzahl des Schülers, sonst Standard seines Fahrlehrers.
   -- Gezählt werden alle Anfragen, Angebote und Fahrstunden (auch schon gefahrene) in der Woche des gewünschten Termins.
   -- Eine gewährte Ausnahme gilt nur für diesen einen Termin – die Höchstzahl bleibt.
@@ -704,8 +719,8 @@ begin
     end if;
   end if;
   begin
-    insert into bookings (slot_id, student_id, student_note, over_limit)
-    values (p_slot, auth.uid(), nullif(left(trim(coalesce(p_note,'')), 300), ''), v_over)
+    insert into bookings (slot_id, student_id, student_note, over_limit, wish_start)
+    values (p_slot, auth.uid(), nullif(left(trim(coalesce(p_note,'')), 300), ''), v_over, p_wish)
     returning id into v_id;
   exception when unique_violation then
     raise exception 'Dieser Termin ist leider schon vergeben';
@@ -885,7 +900,7 @@ create policy time_off_teacher on public.time_off for all
 
 -- Rechte für Funktionen
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
-grant execute on function public.book_slot(uuid, text, boolean) to authenticated;
+grant execute on function public.book_slot(uuid, text, boolean, timestamptz) to authenticated;
 grant execute on function public.cancel_request(uuid) to authenticated;
 grant execute on function public.cancel_booking(uuid, text) to authenticated;
 grant execute on function public.respond_offer(uuid, boolean, text) to authenticated;

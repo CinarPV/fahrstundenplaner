@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
     const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     webpush.setVapidDetails(Deno.env.get("VAPID_SUBJECT")!, Deno.env.get("VAPID_PUBLIC_KEY")!, Deno.env.get("VAPID_PRIVATE_KEY")!);
 
-    const { kind, ids, event } = await req.json();
+    const { kind, ids, event, text } = await req.json();
     const messages: { to: string; title: string; body: string }[] = [];
 
     if (kind === "test") {
@@ -85,6 +85,13 @@ Deno.serve(async (req) => {
           const [title, body] = TEACHER_EVENTS[event](ctx);
           messages.push({ to: b.student_id, title, body });
         }
+      }
+    } else if (kind === "broadcast" && Array.isArray(ids) && ids.length && ids.length <= 500) {
+      // Rundnachricht des Fahrlehrers (z. B. Krankmeldung) – nur an seine eigenen Schüler
+      const msg = String(text ?? "").trim().slice(0, 400);
+      if (msg) {
+        const { data: own } = await admin.from("profiles").select("id").in("id", ids).eq("teacher_id", user.id).eq("role", "student");
+        for (const s of own ?? []) messages.push({ to: s.id, title: "📢 Nachricht von deinem Fahrlehrer", body: msg });
       }
     } else if (kind === "exam" && Array.isArray(ids) && ids.length === 1) {
       const { data: e } = await admin.from("exams").select("id,exam_at,meeting_point,student_id,profiles(teacher_id)").eq("id", ids[0]).maybeSingle();

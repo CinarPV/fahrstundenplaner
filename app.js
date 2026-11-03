@@ -144,9 +144,15 @@ const teacherSignature = () => `Dein Fahrlehrer ${state.settings.display_name ||
 const studentLink = () => location.origin + location.pathname;
 
 // Sonderfahrten
-const LESSON_TYPES = { normal: "Übungsfahrt", ueberland: "Überlandfahrt", autobahn: "Autobahnfahrt", nacht: "Nachtfahrt" };
-const LESSON_ICON = { normal: "", ueberland: "🌳", autobahn: "🛣️", nacht: "🌙" };
+const LESSON_TYPES = { normal: "Übungsfahrt", ueberland: "Überlandfahrt", autobahn: "Autobahnfahrt", nacht: "Nachtfahrt",
+  schalt: "Schaltstunde", schaltpruefung: "Schaltkompetenz-Test" };
+const LESSON_ICON = { normal: "", ueberland: "🌳", autobahn: "🛣️", nacht: "🌙", schalt: "⚙️", schaltpruefung: "🏁" };
 const SPECIAL_TYPES = ["ueberland", "autobahn", "nacht"];
+// B197: mind. 10 Schaltstunden à 45 Min. + Schaltkompetenz-Test (15 Min.) auf dem Schaltwagen
+const B197_TYPES = ["schalt", "schaltpruefung"];
+const B197_MIN_LESSONS = 10;
+const isB197 = (p) => !!p && p.license_class === "B197";
+const typesFor = (p, current) => Object.keys(LESSON_TYPES).filter((t) => !B197_TYPES.includes(t) || isB197(p) || t === current);
 const typeLabel = (t) => `${LESSON_ICON[t || "normal"]} ${LESSON_TYPES[t || "normal"]}`.trim();
 
 // WhatsApp: Handynummer in internationales Format bringen (0151… → 49151…)
@@ -317,7 +323,7 @@ function exportPrint(p, rows) {
   const hr = tag("tr"); ["Nr.", "Datum", "Uhrzeit", "Art", "Minuten", "Status", "Fehlstunde", "Grund"].forEach((h) => hr.append(tag("th", h)));
   table.append(hr);
   r.forEach((x, i) => { const tr = tag("tr"); [i + 1, x.date, x.time, x.type, x.minutes, x.status, x.late, x.reason].forEach((v, j) => tr.append(tag("td", v, j === 4 ? "r" : ""))); table.append(tr); });
-  const counts = SPECIAL_TYPES.map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
+  const counts = SPECIAL_TYPES.concat(isB197(p) ? B197_TYPES : []).map((t) => `${LESSON_TYPES[t]}: ${done.filter((x) => x.type === LESSON_TYPES[t]).length}`).join(" · ");
   d.body.append(tag("h1", "Fahrstunden – " + fullName(p)),
     tag("div", [p.license_class ? "Klasse " + p.license_class : "", `Stand: ${new Date().toLocaleDateString("de-DE")}`].filter(Boolean).join(" · ")),
     tag("p", `Gefahren: ${fmtLessons(total)} (à 45 Min.) · ${done.length} Termine · ${total} Min. · Fehlstunden: ${r.filter((x) => x.late === "ja").length} · ${counts}`),
@@ -330,12 +336,39 @@ function exportButtons(p, rows) {
     el("button", { class: "btn small ghost", onclick: () => exportPrint(p, rows) }, "🖨 Drucken / PDF"));
 }
 // Sonderfahrten zählen
-function specialSummary(rows) {
+function specialSummary(rows, p) {
   const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null);
-  return SPECIAL_TYPES.map((t) => {
+  const types = SPECIAL_TYPES.concat(isB197(p) || done.some((b) => B197_TYPES.includes(b.lesson_type)) ? B197_TYPES : []);
+  return types.map((t) => {
     const list = done.filter((b) => b.lesson_type === t);
     return `${LESSON_ICON[t]} ${LESSON_TYPES[t]}: ${list.length}× (${list.reduce((s, b) => s + b.actual_minutes, 0)} Min.)`;
   }).join(" · ");
+}
+
+// Übersicht auf der Schüler-Seite: alles Gefahrene auf einen Blick (Sonderfahrten, bei B197 Schaltstunden + Test)
+function lessonOverview(p, rows) {
+  const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null && b.slots);
+  const sum = (list) => list.reduce((x, b) => x + b.actual_minutes, 0);
+  const of = (t) => done.filter((b) => (b.lesson_type || "normal") === t);
+  const fs = (m) => (Math.round((m / LESSON_MIN) * 10) / 10).toLocaleString("de-DE");
+  const tile = (icon, title, value, sub, cls = "") => el("div", { class: "ov-tile " + cls },
+    el("span", { class: "ov-ic" }, icon), el("div", {}, el("small", {}, title), el("b", {}, value), sub ? el("small", { class: "muted" }, sub) : null));
+  const total = sum(done);
+  const tiles = [
+    tile("🚗", "Gefahren gesamt", `${fs(total)} FS`, `${done.length} Termine · ${total} Min.`),
+    tile("🚙", "Übungsfahrten", `${of("normal").length}×`, `${sum(of("normal"))} Min.`),
+    ...SPECIAL_TYPES.map((t) => tile(LESSON_ICON[t], LESSON_TYPES[t], `${of(t).length}×`, `${sum(of(t))} Min.`)),
+  ];
+  if (isB197(p) || done.some((b) => B197_TYPES.includes(b.lesson_type))) {
+    const sm = sum(of("schalt")), n = sm / LESSON_MIN;
+    const test = of("schaltpruefung").sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at))[0];
+    tiles.push(
+      tile("⚙️", "Schaltstunden (B197)", `${fs(sm)} von ${B197_MIN_LESSONS} FS`, `${of("schalt").length} Termine · ${sm} Min.`, n >= B197_MIN_LESSONS ? "ok" : "warn"),
+      tile("🏁", "Schaltkompetenz-Test", test ? "✓ gemacht" : "offen", test ? `${fmtDate(test.slots.starts_at)} · ${test.actual_minutes} Min.` : "15 Min. auf dem Schaltwagen", test ? "ok" : "warn"));
+  }
+  const missed = rows.filter((b) => b.late_cancel).length;
+  tiles.push(tile("⚠️", "Fehlstunden", `${missed}×`, "kostenpflichtig", missed ? "warn" : ""));
+  return el("div", { class: "ov-grid" }, tiles);
 }
 
 // Minuten-Auswahl: Wert vorbelegt (Standard 90), mit −/+ im 5-Minuten-Takt änderbar.
@@ -358,7 +391,7 @@ function durationControl(initial, opts = {}) {
   );
   input.addEventListener("focus", () => input.select());           // Antippen markiert die Zahl → direkt überschreiben
   input.addEventListener("change", () => (input.value = clamp(input.value)));
-  return { node, input, get value() { return clamp(input.value); } };
+  return { node, input, set, get value() { return clamp(input.value); } };
 }
 
 function openModal(title, ...content) {
@@ -1179,6 +1212,108 @@ const slotHead = (time, tag) => el("div", { class: "slot-head" }, el("b", {}, ti
 /* ---------------- Urlaub / freie Tage ---------------- */
 
 // Gesperrte Zeiträume des (eigenen) Fahrlehrers – werden beim Laden des Kalenders gefüllt
+// Krankmeldung: Fahrstunden im Zeitraum absagen, Tage sperren und alle (oder nur betroffene) Schüler benachrichtigen –
+// per Push-Mitteilung, E-Mail (alle auf einmal, als Bcc) und WhatsApp (Text vorbereitet, je Schüler ein Knopf)
+async function openSick() {
+  const today = dateInput(new Date());
+  const from = el("input", { type: "date", value: today, min: today });
+  const to = el("input", { type: "date", value: today, min: today });
+  const name = state.settings.display_name || "";
+  const text = el("textarea", { maxlength: 300 },
+    "Ich bin leider krank. Deine Fahrstunde in diesem Zeitraum fällt aus – die Absage ist für dich kostenlos. Such dir in der App gern einen neuen Termin aus. Danke für dein Verständnis!");
+  const cancel = el("input", { type: "checkbox" }); cancel.checked = true;
+  const block = el("input", { type: "checkbox" }); block.checked = true;
+  const rAll = el("input", { type: "radio", name: "sick-who" }), rHit = el("input", { type: "radio", name: "sick-who" });
+  rHit.checked = true;
+  const info = el("p", { class: "small muted" });
+  let students = [], hit = [];
+  const range = () => {
+    const a = new Date(from.value + "T00:00:00"), b = addDays(new Date((to.value || from.value) + "T00:00:00"), 1);
+    if (isNaN(a) || isNaN(b) || b <= a) throw new Error("Bitte einen gültigen Zeitraum wählen");
+    return [a, b];
+  };
+  const load = async () => {
+    try {
+      const [a, b] = range();
+      const [st, bk] = await Promise.all([
+        students.length ? { data: students } : sb.from("profiles").select("id,first_name,last_name,email,phone").eq("role", "student").eq("status", "active").order("last_name"),
+        sb.from("bookings").select("id,status,student_id,slots!inner(starts_at,duration_min)").in("status", ["requested", "offered", "confirmed"])
+          .is("actual_minutes", null).gte("slots.starts_at", a.toISOString()).lt("slots.starts_at", b.toISOString()),
+      ]);
+      if (st.error) throw st.error;
+      if (bk.error) throw bk.error;
+      students = st.data || []; hit = bk.data || [];
+      const n = new Set(hit.map((x) => x.student_id)).size;
+      info.textContent = `Im Zeitraum: ${hit.length} Fahrstunde${hit.length === 1 ? "" : "n"}/Anfrage${hit.length === 1 ? "" : "n"} bei ${n} Schüler${n === 1 ? "" : "n"}.`;
+      rHit.nextSibling.textContent = ` Nur betroffene Schüler (${n})`;
+      rAll.nextSibling.textContent = ` Alle meine Schüler (${students.length})`;
+    } catch (e) { info.textContent = e.message || String(e); }
+  };
+  from.addEventListener("change", () => { if (to.value < from.value) to.value = from.value; load(); });
+  to.addEventListener("change", load);
+  const btn = el("button", { class: "btn danger" }, "🤒 Krankmeldung senden");
+  btn.onclick = () => busy(btn, async () => {
+    const [a, b] = range();
+    if (!text.value.trim()) throw new Error("Bitte einen kurzen Text schreiben");
+    const hitIds = new Set(hit.map((x) => x.student_id));
+    const who = rAll.checked ? students : students.filter((x) => hitIds.has(x.id));
+    const span = from.value === to.value ? fmtDayStr(from.value) : `${fmtDayStr(from.value)} – ${fmtDayStr(to.value)}`;
+    if (!confirm(`Krankmeldung für ${span} senden?` + (cancel.checked && hit.length ? `\n\n${hit.length} Fahrstunde(n)/Anfrage(n) werden abgesagt.` : ""))) return;
+    if (cancel.checked && hit.length) {
+      const now = new Date().toISOString(), reason = "Fahrlehrer krank";
+      const conf = hit.filter((x) => x.status !== "requested").map((x) => x.id), req = hit.filter((x) => x.status === "requested").map((x) => x.id);
+      if (conf.length) { const { error } = await sb.from("bookings").update({ status: "cancelled_teacher", cancel_reason: reason, decided_at: now }).in("id", conf); if (error) throw error; }
+      if (req.length) { const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reason, decided_at: now }).in("id", req); if (error) throw error; }
+    }
+    if (block.checked) {
+      const { error } = await sb.from("time_off").insert({ from_day: from.value, to_day: to.value || from.value, note: "krank" });
+      if (error) throw error;
+    }
+    const msg = `🤒 ${span}: ${text.value.trim()}`;
+    let sent = 0;
+    if (who.length) {
+      try {
+        const { data } = await sb.functions.invoke("notify", { body: { kind: "broadcast", ids: who.map((x) => x.id), text: msg } });
+        sent = (data && data.sent) || 0;
+      } catch { /* Mitteilung ist kein Muss */ }
+    }
+    sickShare(who, msg, sent, b > a);
+  });
+  openModal("🤒 Krank melden",
+    el("p", { class: "muted small" }, "Sagt deine Fahrstunden im Zeitraum ab und benachrichtigt deine Schüler – per Mitteilung aufs Handy, E-Mail und WhatsApp."),
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis"), to)),
+    info,
+    el("label", { class: "check" }, cancel, "Fahrstunden und Anfragen in diesem Zeitraum absagen (kostenlos für die Schüler)"),
+    el("label", { class: "check" }, block, "Tage sperren – Schüler können dort nichts anfragen"),
+    el("label", {}, "Wer soll benachrichtigt werden?"),
+    el("label", { class: "check" }, rHit, " Nur betroffene Schüler"),
+    el("label", { class: "check" }, rAll, " Alle meine Schüler"),
+    el("label", {}, "Nachricht"), text,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+  load();
+}
+// Nach der Krankmeldung: E-Mail an alle (Bcc) und WhatsApp je Schüler
+function sickShare(who, msg, sent) {
+  state.renderOnClose = true;
+  const full = `${msg}\n\n${teacherSignature()}`;
+  const mails = who.map((x) => x.email).filter(Boolean);
+  const mail = mails.length ? el("a", { class: "btn", href: `mailto:?bcc=${encodeURIComponent(mails.join(","))}&subject=${encodeURIComponent("Fahrstunde fällt aus – Fahrlehrer krank")}&body=${encodeURIComponent(full)}` }, `📧 E-Mail an alle (${mails.length})`) : null;
+  const copy = el("button", { class: "btn ghost" }, "📋 Text kopieren");
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(full); toast("Text kopiert – z. B. für eine WhatsApp-Broadcast-Liste."); } catch { toast("Kopieren nicht möglich."); } };
+  const wa = who.map((x) => ({ x, b: waButton(x.phone, `Hallo ${x.first_name || ""},\n${full}`, `💬 ${fullName(x)}`) }));
+  openModal("✓ Krankmeldung gespeichert",
+    el("p", {}, who.length ? `📱 Mitteilung an ${sent} Gerät${sent === 1 ? "" : "e"} geschickt (nur Schüler mit eingeschalteten Mitteilungen).` : "Niemand betroffen – keine Mitteilung nötig."),
+    who.length ? [
+      el("div", { class: "note" }, full),
+      el("div", { class: "actions" }, mail, copy),
+      el("h3", {}, "💬 WhatsApp"),
+      el("p", { class: "muted small" }, "WhatsApp erlaubt kein automatisches Senden an viele – tippe nacheinander auf die Namen, der Text ist schon drin."),
+      el("div", { class: "done-row wa-list" }, wa.filter((w) => w.b).map((w) => w.b)),
+      wa.some((w) => !w.b) ? el("p", { class: "muted small" }, "Ohne Handynummer: " + wa.filter((w) => !w.b).map((w) => fullName(w.x)).join(", ")) : null,
+    ] : null,
+    el("div", { class: "actions" }, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+}
+
 async function loadTimeOff() {
   const { data } = await sb.from("time_off").select("id,from_day,to_day,note").order("from_day");
   state.timeOff = data || [];
@@ -1405,7 +1540,11 @@ async function adminToday() {
       el("button", { class: "quick-btn add", onclick: () => openSlotForm(first) },
         el("span", { class: "qi" }, "➕"), el("span", {}, el("b", {}, "Anlegen"), el("small", {}, "Fahrstunde / Prüfung"))),
       el("button", { class: "quick-btn cal", onclick: () => goTab("calendar") },
-        el("span", { class: "qi" }, "📅"), el("span", {}, el("b", {}, "Kalender"), el("small", {}, "Wochen planen")))),
+        el("span", { class: "qi" }, "📅"), el("span", {}, el("b", {}, "Kalender"), el("small", {}, "Wochen planen"))),
+      el("button", { class: "quick-btn", onclick: () => openBackfill() },
+        el("span", { class: "qi" }, "✍️"), el("span", {}, el("b", {}, "Nachtragen"), el("small", {}, "schon gefahren"))),
+      el("button", { class: "quick-btn sick", onclick: () => openSick() },
+        el("span", { class: "qi" }, "🤒"), el("span", {}, el("b", {}, "Krank"), el("small", {}, "alle benachrichtigen")))),
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
@@ -1455,7 +1594,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", 
 async function adminCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
@@ -1475,7 +1614,7 @@ async function adminCalendar() {
     if (!b && notHeld) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
     if (!b && notHeld && past) tag = "nicht stattgefunden"; // angesetzt, aber abgesagt/krank – Grund steht im Text
-    if (b && b.status === "requested") { cls = "requested"; tag = b.over_limit ? "⚠️ Ausnahme" : "angefragt"; label = fullName(b.profiles) + glasses(b.profiles); }
+    if (b && b.status === "requested") { cls = "requested"; tag = b.over_limit ? "⚠️ Ausnahme" : "angefragt"; label = fullName(b.profiles) + glasses(b.profiles) + (b.wish_start ? ` · ⏰ Wunsch ${fmtTime(b.wish_start)}` : ""); }
     if (b && b.status === "offered") { cls = "offered"; tag = "angeboten"; label = fullName(b.profiles) + " – wartet auf Zusage"; }
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
@@ -1490,11 +1629,109 @@ async function adminCalendar() {
 
   return el("div", {},
     el("div", { class: "actions", style: "margin:0 0 12px" },
-      el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunde / Prüfung anlegen")),
+      el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunde / Prüfung anlegen"),
+      el("button", { class: "btn ghost", onclick: () => openBackfill() }, "✍️ Gefahrenes nachtragen")),
     weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
+      el("button", { class: "btn small ghost", onclick: () => openSick() }, "🤒 Krank melden"),
+      el("button", { class: "btn small ghost", onclick: () => openDeleteFree(slots) }, "🗑 Freie löschen"),
       slots.length && !isPhone() ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
     grid,
   );
+}
+
+// Bereits Gefahrenes nachtragen: Fahrstunde (alle Arten, bei B197 auch Schaltstunde/-test) oder Prüfung mit Ergebnis.
+// Legt einen vergangenen Termin an und hakt ihn sofort ab – ohne Mitteilung an den Schüler.
+async function openBackfill(preStudent) {
+  const { data: students, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status")
+    .eq("role", "student").in("status", ["active", "blocked"]).order("last_name");
+  if (error) return fail(error);
+  if (!students.length) return openModal("Nachtragen", el("p", { class: "muted" }, "Noch keine Schüler vorhanden."));
+  const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
+    students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
+  if (preStudent) who.value = preStudent.id;
+  const now = new Date();
+  const date = el("input", { type: "date", value: dateInput(now), max: dateInput(now) });
+  const time = el("input", { type: "time", value: timeInput(new Date(now.getTime() - (state.settings.default_duration || 90) * 60000 - (now.getMinutes() % 15) * 60000)), step: 300 });
+  const dur = durationControl(state.settings.default_duration || 90);
+  let type = "normal";
+  const typeRow = el("div", { class: "tabs type-tabs" });
+  const result = el("div", { class: "check-row", hidden: true },
+    ...[["", "Ergebnis offen"], ["passed", "🎉 Bestanden"], ["failed", "✗ Nicht bestanden"]].map(([v, t], i) => {
+      const r = el("input", { type: "radio", name: "bf-result", value: v }); if (i === 1) r.checked = true;
+      return el("label", { class: "check" }, r, t);
+    }));
+  const DEF = { schaltpruefung: 15, exam: 55 };
+  const paintTypes = () => {
+    const st = students.find((x) => x.id === who.value);
+    const list = typesFor(st).concat("exam");
+    if (!list.includes(type)) type = "normal";
+    typeRow.replaceChildren(...list.map((t) => el("button", {
+      type: "button", class: "tab" + (t === type ? " active" : ""),
+      onclick: () => { type = t; dur.set(DEF[t] || state.settings.default_duration || 90); result.hidden = t !== "exam"; paintTypes(); },
+    }, t === "exam" ? "🎓 Prüfung" : typeLabel(t))));
+  };
+  who.addEventListener("change", paintTypes);
+  paintTypes();
+  const btn = el("button", { class: "btn ok" }, "✓ Nachtragen");
+  btn.onclick = () => busy(btn, async () => {
+    const st = students.find((x) => x.id === who.value);
+    if (!st) throw new Error("Bitte einen Schüler wählen");
+    const start = fromInputs(date.value, time.value);
+    if (isNaN(start)) throw new Error("Bitte Datum und Uhrzeit angeben");
+    if (start.getTime() > Date.now()) throw new Error("Das liegt in der Zukunft – künftige Termine bitte über „➕ Anlegen“ eintragen.");
+    if (type === "exam") {
+      const res = result.querySelector("input:checked").value || null;
+      const { error } = await sb.from("exams").insert({ student_id: st.id, kind: "praxis", exam_at: start.toISOString(), duration_min: dur.value, result: res });
+      if (error) throw error;
+      toast(`✓ Prüfung von ${fullName(st)} nachgetragen.`);
+    } else {
+      const { data: slot, error } = await sb.from("slots").insert({ starts_at: start.toISOString(), duration_min: dur.value }).select("id").single();
+      if (error) throw error;
+      const { error: e2 } = await sb.from("bookings").insert({ slot_id: slot.id, student_id: st.id, status: "confirmed",
+        actual_minutes: dur.value, lesson_type: type, decided_at: new Date().toISOString() });
+      if (e2) { await sb.from("slots").delete().eq("id", slot.id); throw e2; }
+      toast(`✓ ${fullName(st)}: ${dur.value} Min. ${LESSON_TYPES[type]} nachgetragen.`);
+    }
+    closeModal();
+    render();
+  });
+  openModal("✍️ Gefahrenes nachtragen",
+    el("p", { class: "muted small" }, "Für Fahrten, die schon stattgefunden haben (z. B. vergessen einzutragen). Wird sofort als gefahren abgehakt – der Schüler bekommt keine Mitteilung."),
+    el("label", {}, "Schüler"), who,
+    el("label", {}, "Was?"), typeRow, result,
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
+    el("label", {}, "Dauer (gefahrene Minuten)"), dur.node,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+// Freie (nicht gebuchte) Termine der angezeigten Tage auf einmal löschen
+function openDeleteFree(slots) {
+  const free = (slots || []).filter((x) => !activeBooking(x) && !(x.bookings || []).some((b) => NOT_HELD_ICON[b.status]))
+    .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  if (!free.length) return openModal("🗑 Freie Termine löschen", el("p", { class: "muted" }, "In diesem Zeitraum gibt es keine freien Termine."),
+    el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "OK")));
+  const boxes = free.map((x) => { const c = el("input", { type: "checkbox" }); c.checked = true; c.dataset.id = x.id; return c; });
+  const btn = el("button", { class: "btn danger" });
+  const count = () => boxes.filter((c) => c.checked).length;
+  const label = () => (btn.textContent = `🗑 ${count()} Termin${count() === 1 ? "" : "e"} löschen`);
+  boxes.forEach((c) => c.addEventListener("change", label)); label();
+  const all = (v) => () => { boxes.forEach((c) => (c.checked = v)); label(); };
+  btn.onclick = () => busy(btn, async () => {
+    const ids = boxes.filter((c) => c.checked).map((c) => c.dataset.id);
+    if (!ids.length) throw new Error("Nichts ausgewählt");
+    const { error } = await sb.from("slots").delete().in("id", ids);
+    if (error) throw error;
+    toast(`🗑 ${ids.length} freie Termin${ids.length === 1 ? "" : "e"} gelöscht.`);
+    closeModal();
+    render();
+  });
+  openModal("🗑 Freie Termine löschen",
+    el("p", { class: "muted small" }, "Nur Termine, die noch niemand angefragt oder gebucht hat. Gebuchte Fahrstunden löschst du einzeln (Termin antippen → 🗑)."),
+    el("div", { class: "done-row" }, el("button", { class: "btn small ghost", onclick: all(true) }, "Alle"), el("button", { class: "btn small ghost", onclick: all(false) }, "Keine")),
+    el("div", { class: "pick-list del-list" }, free.map((x, i) => el("label", { class: "check" }, boxes[i],
+      `${fmtDay(x.starts_at)} · ${fmtRange(x.starts_at, x.duration_min)}`))),
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
 const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
@@ -1795,7 +2032,7 @@ async function deleteLessonSlot(slot, b) {
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -1845,6 +2082,16 @@ async function openAdminSlot(slotId) {
       el("p", {}, el("b", {}, fullName(b.profiles)), " ", el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status]), " ", studentTags(b.profiles)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
     );
+    // Wunschzeit: per Tipp in das Uhrzeit-Feld übernehmen (vorbelegt) – „Bestätigen“ speichert dann die neue Zeit
+    if (b.status === "requested" && b.wish_start) {
+      const pick = (iso) => () => { date.value = dateInput(iso); time.value = timeInput(iso); };
+      pick(b.wish_start)();
+      parts.push(wishNote(b.wish_start, slot.starts_at,
+        el("div", { class: "done-row", style: "margin:6px 0 0" },
+          el("button", { class: "btn small", onclick: pick(b.wish_start) }, `Wunschzeit ${fmtTime(b.wish_start)}`),
+          el("button", { class: "btn small ghost", onclick: pick(slot.starts_at) }, `Wie angelegt ${fmtTime(slot.starts_at)}`)),
+        el("div", { class: "small muted" }, "Die Wunschzeit ist unten schon eingetragen. „✓ Bestätigen“ übernimmt die Uhrzeit, die im Feld steht.")));
+    }
     if (b.status === "confirmed") parts.push(el("hr"), doneControls(slot, b, done), el("hr"), el("h3", {}, "Termin & Hinweis"));
     parts.push(
       timeFields,
@@ -1918,6 +2165,13 @@ async function openAdminSlot(slotId) {
   openModal(`${fmtDate(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)}`, ...parts);
 }
 
+// Hinweis: Schüler wünscht eine leicht andere Uhrzeit
+function wishNote(wish, start, ...extra) {
+  const diff = Math.round((new Date(wish) - new Date(start)) / 60000);
+  return el("div", { class: "notice wish", style: "margin:8px 0 0" },
+    el("b", {}, `⏰ Wunschzeit: ${fmtTime(wish)} Uhr`), ` statt ${fmtTime(start)} Uhr (${diff > 0 ? "+" : "−"}${Math.abs(diff)} Min.)`, ...extra);
+}
+
 // Admin trägt einen Schüler direkt (bestätigt) in einen freien Termin ein – z. B. nach telefonischer Absprache
 // Auswahl: dem Schüler anbieten (er muss zusagen) oder direkt fest eintragen
 function assignHow() {
@@ -1973,9 +2227,12 @@ function doneControls(slot, b, after, opts = {}) {
   const mins = durationControl(isDone ? b.actual_minutes : slot.duration_min, { fine: true });
   // Art der Fahrt (Sonderfahrten für den Ausbildungsnachweis)
   let type = b.lesson_type || "normal";
-  const typeBtns = Object.keys(LESSON_TYPES).map((t) => el("button", {
+  const typeBtns = typesFor(b.profiles, type).map((t) => el("button", {
     type: "button", class: "tab" + (t === type ? " active" : ""),
-    onclick: (e) => { type = t; typeBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget)); },
+    onclick: (e) => {
+      type = t; typeBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget));
+      if (t === "schaltpruefung" && !isDone) mins.set(15);
+    },
   }, typeLabel(t)));
   const check = el("button", { class: "btn ok" }, isDone ? "✓ Speichern" : "✓ Gefahren – abhaken");
   check.onclick = () => busy(check, async () => {
@@ -2189,7 +2446,7 @@ async function openTraining(st, lessons) {
 async function adminRequests() {
   const weekAgo = addDays(new Date(), -7).toISOString();
   const [req, open, cancels, offers] = await Promise.all([
-    sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
+    sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,wish_start,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
     sb.from("bookings").select("id,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
@@ -2213,13 +2470,23 @@ async function adminRequests() {
 
   // Anfrage direkt in der Liste bestätigen oder ablehnen (Details/Änderungen weiter über „Öffnen“)
   const decideButtons = (b) => {
-    const ok = el("button", { class: "btn small ok" }, b.over_limit ? "✓ Ausnahme gewähren" : "✓ Bestätigen");
-    ok.onclick = () => busy(ok, async () => {
+    // Mit Wunschzeit: „zur Wunschzeit bestätigen“ verschiebt den Termin, sonst bleibt die angebotene Zeit
+    const confirmAt = (useWish) => async () => {
+      let slot = b.slots;
+      if (useWish && b.wish_start) {
+        const { error } = await sb.from("slots").update({ starts_at: b.wish_start }).eq("id", b.slots.id);
+        if (error) throw error;
+        slot = { ...b.slots, starts_at: b.wish_start };
+      }
       const { error } = await sb.from("bookings").update({ status: "confirmed", decided_at: new Date().toISOString() }).eq("id", b.id);
       if (error) throw error;
       pushNotify("booking", b.id, "confirmed");
-      notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, b.slots, "", meetingOf(b)));
-    });
+      notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, slot, "", meetingOf(b)));
+    };
+    const ok = el("button", { class: "btn small ok" }, b.wish_start ? `✓ Zu ${fmtTime(b.wish_start)} Uhr bestätigen` : b.over_limit ? "✓ Ausnahme gewähren" : "✓ Bestätigen");
+    ok.onclick = () => busy(ok, confirmAt(true));
+    const orig = b.wish_start ? el("button", { class: "btn small ghost" }, `✓ Zu ${fmtTime(b.slots.starts_at)} Uhr (wie angelegt)`) : null;
+    if (orig) orig.onclick = () => busy(orig, confirmAt(false));
     const no = el("button", { class: "btn small danger" }, "✗ Ablehnen");
     no.onclick = () => busy(no, async () => {
       if (!confirm(`Anfrage von ${fullName(b.profiles)} ablehnen? Der Termin wird danach wieder frei.`)) return;
@@ -2228,13 +2495,14 @@ async function adminRequests() {
       pushNotify("booking", b.id, "rejected");
       notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, b.slots, ""));
     });
-    return el("div", { class: "actions", style: "margin-top:8px" }, ok, no);
+    return el("div", { class: "actions", style: "margin-top:8px" }, ok, orig, no);
   };
 
   return el("div", {},
     el("h2", {}, "Offene Anfragen"),
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
       b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
+      b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
       b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
     cancels.data.length ? [
@@ -2440,10 +2708,11 @@ async function openStudent(st) {
   const examBtn = el("button", { class: "btn small exam-btn", onclick: () => document.querySelector("dialog .exam-card")?.scrollIntoView({ behavior: "smooth", block: "start" }) }, "🎓 Prüfung");
 
   openModal(fullName(st),
-    el("div", { class: "done-row" }, studentTags(st), training, examBtn, edit),
+    el("div", { class: "done-row" }, studentTags(st), training, examBtn, edit,
+      el("button", { class: "btn small ghost", onclick: () => openBackfill(st) }, "✍️ Nachtragen")),
     el("p", { class: "muted small" }, [st.email, st.phone].filter(Boolean).join(" · ")),
     el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
-    el("p", { class: "small" }, specialSummary(data)),
+    lessonOverview(st, data),
     await examCard(st, true),
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
@@ -3008,9 +3277,21 @@ function openBooking(s) {
   const note = el("textarea", { maxlength: 300, placeholder: "Optional, z. B. „Kann ich am Bahnhof abgeholt werden?“" });
   const counter = el("div", { class: "muted small", style: "text-align:right" }, "0 / 300");
   note.addEventListener("input", () => (counter.textContent = `${note.value.length} / 300`));
+  // Abweichung vorschlagen: bis zu 1 Stunde früher oder später (der Fahrlehrer entscheidet)
+  const base = new Date(s.starts_at).getTime();
+  s._wish = null;
+  const wishBtns = [-60, -45, -30, -15, 0, 15, 30, 45, 60].filter((m) => m === 0 || base + m * 60000 > Date.now() + 15 * 60000).map((m) => el("button", {
+    type: "button", class: "tab" + (m === 0 ? " active" : ""),
+    onclick: (e) => {
+      s._wish = m ? new Date(base + m * 60000).toISOString() : null;
+      wishBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget));
+      wishHint.hidden = !m;
+    },
+  }, fmtTime(new Date(base + m * 60000)) + (m === 0 ? " ✓" : "")));
+  const wishHint = el("p", { class: "small muted", hidden: true }, "Dein Fahrlehrer sieht deine Wunschzeit und entscheidet, ob es passt.");
   const btn = el("button", { class: "btn" }, "Fahrstunde anfragen");
   btn.onclick = () => busy(btn, async () => {
-    const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value });
+    const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value, p_wish: s._wish });
     // Höchstzahl erreicht → Pop-up mit der Möglichkeit, um eine Ausnahme zu bitten
     const limit = error && /LIMIT:(\d+):(\d+):?([\d:]+-[\d:]+)?\|?([UN])?/.exec(error.message || "");
     if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2], limit[3], limit[4] === "U");
@@ -3023,6 +3304,7 @@ function openBooking(s) {
   openModal("Fahrstunde anfragen",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
     meetingBox(meetingOf(s)),
+    el("label", {}, "Passt dir die Uhrzeit nicht ganz? Wunsch-Beginn (bis zu 1 Std. früher oder später)"), el("div", { class: "tabs wish-tabs" }, wishBtns), wishHint,
     el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note, counter,
     el("div", { class: "notice" },
       el("b", {}, "Wichtig: "), "Nach der Bestätigung durch deinen Fahrlehrer ist die Fahrstunde verbindlich. ",
@@ -3042,7 +3324,7 @@ function openLimitRequest(s, prevNote, open, max, win, used) {
   const btn = el("button", { class: "btn" }, "📨 Trotzdem anfragen (Ausnahme)");
   btn.onclick = () => busy(btn, async () => {
     if (!msg.value.trim()) throw new Error("Bitte schreib kurz, warum du eine weitere Fahrstunde möchtest.");
-    const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: msg.value.trim(), p_exception: true });
+    const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: msg.value.trim(), p_exception: true, p_wish: s._wish || null });
     if (error && /LIMIT:.*\|U/.test(error.message || "")) return openLimitRequest(s, msg.value, open, max, win, true);
     if (error) throw error;
     pushNotify("booking", newId, "exception");
@@ -3441,7 +3723,7 @@ function openStudentCancel(b) {
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -3484,6 +3766,7 @@ async function studentMine() {
           el("b", {}, fmtRange(b.slots.starts_at, b.slots.duration_min) + " Uhr"),
           b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null),
         el("span", { class: "badge " + badge[0] }, badge[1]),
+        b.status === "requested" && b.wish_start ? el("div", { class: "lesson-hint" }, `⏰ Deine Wunschzeit: ${fmtTime(b.wish_start)} Uhr`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
         canCancel ? el("div", { class: "lesson-hint muted" }, isLate(b.slots.starts_at)
@@ -3524,7 +3807,7 @@ async function studentMine() {
     doneCount ? el("details", { class: "fold" },
       el("summary", {}, `✓ Gefahrene Fahrstunden (${doneCount})`),
       doneList(rows, total),
-      el("p", { class: "small" }, specialSummary(rows)),
+      el("p", { class: "small" }, specialSummary(rows, state.profile)),
       exportButtons(state.profile, rows)) : null,
     lateRows.length ? el("details", { class: "fold" },
       el("summary", {}, `⚠️ Fehlstunden (${lateRows.length})`),
