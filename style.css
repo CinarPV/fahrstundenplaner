@@ -715,3 +715,4 @@ html.dark .countdown, html.dark .next-row .countdown, html.dark .next-row.first 
 .notice.wish { background: #e8f4fb; border-color: #a9c9dd; color: var(--brand); }
 .del-list { max-height: 320px; }
 .wa-list .btn { font-size: 13px; padding: 6px 10px; }
+.ask-col { display: grid; gap: 8px; margin-top: 8px; }

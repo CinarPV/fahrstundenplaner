@@ -154,6 +154,29 @@ const B197_MIN_LESSONS = 10;
 const isB197 = (p) => !!p && p.license_class === "B197";
 const typesFor = (p, current) => Object.keys(LESSON_TYPES).filter((t) => !B197_TYPES.includes(t) || isB197(p) || t === current);
 const typeLabel = (t) => `${LESSON_ICON[t || "normal"]} ${LESSON_TYPES[t || "normal"]}`.trim();
+// Beim Abhaken nachfragen, ob es eine Schaltstunde war: bei B197-Schülern oder wenn als Schaltstunde/-test geplant
+const askSchalt = (b) => isB197(b.profiles) || B197_TYPES.includes(b.lesson_type);
+// Auswahl „Was war es?“ (Fahrstunde / Schaltstunde / Schaltkompetenz-Test); onPick(typ) – vorbelegt mit dem geplanten Typ
+function schaltPicker(current, onPick) {
+  const opts = [["normal", "🚗 Normale Fahrstunde"], ["schalt", "⚙️ Schaltstunde"], ["schaltpruefung", "🏁 Schaltkompetenz-Test"]];
+  let type = B197_TYPES.includes(current) ? current : "normal";
+  const btns = opts.map(([t, label]) => el("button", { type: "button", class: "tab" + (t === type ? " active" : ""),
+    onclick: (e) => { type = t; btns.forEach((x) => x.classList.toggle("active", x === e.currentTarget)); onPick && onPick(t); } }, label));
+  return { node: el("div", { class: "tabs type-tabs" }, btns), get value() { return type; } };
+}
+// Kleines Pop-up nach dem Haken: „War das eine Schaltstunde?“ → speichert Minuten + Art
+function openSchaltAsk(b, minutes, save) {
+  const p = b.profiles || {};
+  const pick = (t) => async () => { closeModal(); try { await save(b, { actual_minutes: t === "schaltpruefung" ? Math.min(minutes, 15) : minutes, lesson_type: t }, `✓ ${fullName(p)}: ${LESSON_TYPES[t]} abgehakt`); } catch (e) { fail(e); } };
+  const planned = B197_TYPES.includes(b.lesson_type) ? b.lesson_type : "normal";
+  const btn = (t, label) => el("button", { class: "btn" + (t === planned ? " ok" : " ghost") + " inst-big", onclick: pick(t) }, label);
+  openModal(`✓ ${fullName(p)} – ${minutes} Min.`,
+    el("p", {}, el("b", {}, "War das eine Schaltstunde?")),
+    el("div", { class: "ask-col" },
+      btn("schalt", "⚙️ Ja, Schaltstunde"),
+      btn("schaltpruefung", "🏁 Schaltkompetenz-Test (15 Min.)"),
+      btn("normal", "🚗 Nein, normale Fahrstunde")));
+}
 
 // WhatsApp: Handynummer in internationales Format bringen (0151… → 49151…)
 function waNumber(phone) {
@@ -1458,10 +1481,11 @@ async function adminToday() {
   const openQuick = (s, b, canTick) => {
     const p = b.profiles || {};
     const dur = durationControl(s.duration_min);
+    const kind = askSchalt(b) ? schaltPicker(b.lesson_type, (t) => { if (t === "schaltpruefung") dur.set(15); }) : null;
     const ok = el("button", { class: "btn ok inst-big" }, "✓ Gefahren – abhaken");
     const syncOk = () => (ok.textContent = `✓ Gefahren – ${dur.value} Min. abhaken`);
     dur.input.addEventListener("input", syncOk); syncOk();
-    ok.onclick = () => busy(ok, async () => { closeModal(); await save(b, { actual_minutes: dur.value, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${dur.value} Min. gefahren`); });
+    ok.onclick = () => busy(ok, async () => { closeModal(); await save(b, { actual_minutes: dur.value, lesson_type: kind ? kind.value : b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${dur.value} Min. gefahren`); });
     const keep = el("button", { class: "btn" }, "Dauer speichern");
     keep.onclick = () => busy(keep, async () => {
       const { error } = await sb.from("slots").update({ duration_min: dur.value }).eq("id", s.id);
@@ -1478,6 +1502,7 @@ async function adminToday() {
       } catch (e) { fail(e); }
     } }, t);
     openModal(`${fmtTime(s.starts_at)} Uhr · ${fullName(p)}`,
+      kind && canTick ? [el("label", {}, "War das eine Schaltstunde?"), kind.node] : null,
       el("label", {}, canTick ? "Wie lange gefahren?" : "Geplante Dauer"), dur.node,
       el("div", { class: "actions" }, canTick ? ok : keep),
       canTick ? null : el("p", { class: "muted small", style: "margin:6px 0 0" }, "Abhaken geht ab 45 Minuten vor Beginn."),
@@ -1495,7 +1520,7 @@ async function adminToday() {
     const wa = waNumber(p.phone);
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
-      el("span", { class: "tr-name" }, fullName(p), p.needs_glasses ? " 👓" : ""),
+      el("span", { class: "tr-name" }, B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -1504,6 +1529,7 @@ async function adminToday() {
         href: `https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${p.first_name || ""}, ich bin in ca. 5 Minuten am Treffpunkt.` + (meet ? ` 📍 ${meet}` : ""))}` }, "💬") : null,
       // Schnell abhaken mit der geplanten Dauer
       canTick ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
+        if (askSchalt(b)) return openSchaltAsk(b, s.duration_min, save);
         const btn = ev.currentTarget; btn.disabled = true;
         try { await save(b, { actual_minutes: s.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${s.duration_min} Min. gefahren`); }
         catch (e) { btn.disabled = false; fail(e); }
@@ -1619,7 +1645,7 @@ async function adminCalendar() {
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
       tag = b.actual_minutes !== null ? "gefahren" : "bestätigt";
-      label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : "") + fullName(b.profiles) + glasses(b.profiles);
+      label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : B197_TYPES.includes(b.lesson_type) ? `${LESSON_ICON[b.lesson_type]} ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
     const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && !past;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
@@ -1663,8 +1689,7 @@ async function openBackfill(preStudent) {
     }));
   const DEF = { schaltpruefung: 15, exam: 55 };
   const paintTypes = () => {
-    const st = students.find((x) => x.id === who.value);
-    const list = typesFor(st).concat("exam");
+    const list = Object.keys(LESSON_TYPES).concat("exam");
     if (!list.includes(type)) type = "normal";
     typeRow.replaceChildren(...list.map((t) => el("button", {
       type: "button", class: "tab" + (t === type ? " active" : ""),
@@ -1776,7 +1801,9 @@ function newSlotForm(opts = {}) {
   const studentList = el("div", { class: "pick-list" });
   const how = assignHow();
   how.onChange(() => refresh());
-  const assignExtras = el("div", {}, how.node, el("label", {}, "Hinweis an den Schüler"), reply);
+  // Art: normale Fahrstunde, Schaltstunde oder Schaltkompetenz-Test (15 Min.)
+  const planType = schaltPicker("normal", (t) => { if (t === "schaltpruefung") dur.set(15); });
+  const assignExtras = el("div", {}, el("label", {}, "Art"), planType.node, how.node, el("label", {}, "Hinweis an den Schüler"), reply);
   const assignBox = el("div", { hidden: true },
     el("label", {}, "Welchem Schüler?"), search, studentList, assignExtras);
   // Prüfung zuordnen: Art, Uhrzeit, Dauer (Standard 55 Min.), Ort/Hinweis
@@ -1945,11 +1972,12 @@ function newSlotForm(opts = {}) {
     const note = reply.value.trim() || null;
     const kind = how.offer() ? "offered" : "confirmed";
     const { data: made, error } = await sb.from("bookings").insert(res.rows.map((r) => ({
-      slot_id: r.id, student_id: student.id, status: kind, admin_reply: note, decided_at: new Date().toISOString(),
+      slot_id: r.id, student_id: student.id, status: kind, admin_reply: note, decided_at: new Date().toISOString(), lesson_type: planType.value,
     }))).select("id");
     if (error) throw error;
     pushNotify("booking", (made || []).map((x) => x.id), kind === "offered" ? "offered" : "assigned");
     let lines = res.rows.map((r) => `• ${fmtDay(r.starts_at)} ${fmtRange(r.starts_at, r.duration_min)}`).join("\n");
+    if (planType.value !== "normal") lines += `\n${typeLabel(planType.value)}`;
     const n = res.rows.length, pl = n === 1 ? "" : "n";
     const meet = meetingOf({ meeting_point: meetSlot.value() });
     if (meet) lines += `\n📍 Treffpunkt: ${meet}`;
@@ -2197,6 +2225,7 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
   const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
     students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
   const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den Schüler (optional)" });
+  const planType = schaltPicker("normal");
   const how = assignHow();
   const btn = el("button", { class: "btn ok" }, "Senden");
   const label = () => (btn.textContent = how.offer() ? "📨 Anbieten" : "✓ Fest eintragen");
@@ -2207,7 +2236,7 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
     await saveTime();
     const kind = how.offer() ? "offered" : "confirmed";
     const { data: made, error } = await sb.from("bookings").insert({
-      slot_id: slot.id, student_id: st.id, status: kind,
+      slot_id: slot.id, student_id: st.id, status: kind, lesson_type: planType.value,
       admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString(),
     }).select("id");
     if (error) throw new Error(error.code === "23505" ? "Der Termin wurde gerade schon vergeben." : error.message);
@@ -2218,7 +2247,7 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
   });
   return el("div", {},
     el("h3", {}, "Einem Schüler anbieten oder eintragen"),
-    who, how.node, el("label", {}, "Hinweis"), reply, el("div", { class: "actions" }, btn));
+    who, el("label", {}, "Art"), planType.node, how.node, el("label", {}, "Hinweis"), reply, el("div", { class: "actions" }, btn));
 }
 
 // Ergebnis einer bestätigten Fahrstunde: gefahren (mit Minuten) – oder warum sie nicht zustande kam
@@ -2234,6 +2263,7 @@ function doneControls(slot, b, after, opts = {}) {
       if (t === "schaltpruefung" && !isDone) mins.set(15);
     },
   }, typeLabel(t)));
+  const typeHint = askSchalt(b) ? el("p", { class: "small", style: "margin:8px 0 4px" }, el("b", {}, "War das eine Schaltstunde? "), "Bitte unten die Art antippen.") : null;
   const check = el("button", { class: "btn ok" }, isDone ? "✓ Speichern" : "✓ Gefahren – abhaken");
   check.onclick = () => busy(check, async () => {
     const { error } = await sb.from("bookings").update({ actual_minutes: mins.value, lesson_type: type }).eq("id", b.id);
@@ -2289,7 +2319,7 @@ function doneControls(slot, b, after, opts = {}) {
       ? "Erledigt. Falls nötig, Minuten korrigieren oder den Haken entfernen."
       : "Geplant waren " + slot.duration_min + " Min. Kürzer oder länger gefahren? Minuten anpassen, dann abhaken."),
     mins.node,
-    el("div", { class: "tabs", style: "margin:10px 0 0;flex-wrap:wrap" }, typeBtns),
+    typeHint, el("div", { class: "tabs", style: "margin:10px 0 0;flex-wrap:wrap" }, typeBtns),
     el("div", { class: "actions" }, check, isDone ? undo : null),
     isDone ? null : notHeld);
 }
