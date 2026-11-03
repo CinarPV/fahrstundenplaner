@@ -259,6 +259,18 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
   }[kind];
   return body + (reply ? `\n${reply}` : "") + `\n\n${where}\n\n` + teacherSignature();
 }
+// Nach „nicht gefahren“: Termin ist wieder frei → sofort einen anderen Schüler eintragen (oder fertig)
+function freedStep(slot, msg, wa) {
+  state.renderOnClose = true;
+  const waBtn = wa ? waButton(wa[0], wa[1], "💬 Schüler per WhatsApp informieren") : null;
+  openModal("✓ " + msg,
+    el("p", {}, `Der Termin ${fmtDay(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)} ist jetzt wieder frei.`),
+    el("div", { class: "ask-col" },
+      el("button", { class: "btn ok inst-big", onclick: () => { state.renderOnClose = false; openAdminSlot(slot.id); } }, "👤 Anderen Schüler eintragen"),
+      waBtn,
+      el("button", { class: "btn ghost", onclick: closeModal }, "Fertig – Termin bleibt frei")));
+}
+
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
 function notifyStep(msg, phone, text, who = "den Schüler") {
   state.renderOnClose = true;
@@ -368,6 +380,30 @@ function specialSummary(rows, p) {
   }).join(" · ");
 }
 
+// Steckbrief: alle Stammdaten des Schülers auf einen Blick
+function studentProfileCard(st, rows) {
+  const yes = (v) => (v ? "✓ Ja" : "Nein");
+  const now = Date.now();
+  const lessons = rows.filter((b) => b.slots && b.status === "confirmed");
+  const next = lessons.filter((b) => new Date(b.slots.starts_at).getTime() > now).sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at))[0];
+  const last = lessons.filter((b) => b.actual_minutes !== null).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at))[0];
+  const acc = accessInfo(st.valid_until, true);
+  const item = (k, v) => el("div", { class: "pf-item" }, el("small", {}, k), el("b", {}, v || "–"));
+  return el("div", { class: "pf-card" },
+    el("h3", { class: "sec-title" }, "📋 Steckbrief"),
+    el("div", { class: "pf-grid" },
+      item("Führerscheinklasse", st.license_class ? (st.license_class === "B197" ? "B197 (Automatik + Schalt-Schulung)" : st.license_class) : "–"),
+      item("👓 Brille / Sehhilfe", yes(st.needs_glasses)),
+      item("Umschreiber", yes(st.is_conversion)),
+      item("📞 Telefon", st.phone),
+      item("✉️ E-Mail", st.email),
+      item("Angemeldet seit", st.created_at ? fmtDate(st.created_at) : "–"),
+      item("⏳ Zugang", acc.text),
+      item("Anfragen pro Woche", limitLabel(st.max_open)),
+      item("Nächste Fahrstunde", next ? `${fmtDay(next.slots.starts_at)} ${fmtTime(next.slots.starts_at)} Uhr` : "–"),
+      item("Letzte Fahrstunde", last ? fmtDay(last.slots.starts_at) : "–")));
+}
+
 // Übersicht auf der Schüler-Seite: alles Gefahrene auf einen Blick (Sonderfahrten, bei B197 Schaltstunden + Test)
 function lessonOverview(p, rows) {
   const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null && b.slots);
@@ -418,6 +454,7 @@ function durationControl(initial, opts = {}) {
 }
 
 function openModal(title, ...content) {
+  modal.classList.remove("full-page");
   modalBody.replaceChildren(
     el("div", { class: "modal-head" },
       el("button", { class: "back", "aria-label": "Zurück", onclick: closeModal }, "‹ Zurück"),
@@ -1091,7 +1128,8 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"],["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
+    // Mit „Heute“: Kalender über den Schnellzugriff „📅 Kalender“ in Heute (kein eigener Tab oben)
+    ? (showToday() ? [["today", "☀️ Heute"]] : [["calendar", "Kalender"]]).concat([["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
       .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
     : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
 
@@ -1238,19 +1276,34 @@ const slotHead = (time, tag) => el("div", { class: "slot-head" }, el("b", {}, ti
 /* ---------------- Urlaub / freie Tage ---------------- */
 
 // Gesperrte Zeiträume des (eigenen) Fahrlehrers – werden beim Laden des Kalenders gefüllt
-// Krankmeldung: Fahrstunden im Zeitraum absagen, Tage sperren und alle (oder nur betroffene) Schüler benachrichtigen –
+// Krank oder Urlaub: Fahrstunden im Zeitraum absagen, Tage sperren und alle (oder nur betroffene) Schüler benachrichtigen –
 // per Push-Mitteilung, E-Mail (alle auf einmal, als Bcc) und WhatsApp (Text vorbereitet, je Schüler ein Knopf)
-async function openSick() {
+const AWAY = {
+  krank: { icon: "🤒", label: "Krank", note: "krank", reason: "Fahrlehrer krank", subject: "Fahrstunde fällt aus – Fahrlehrer krank",
+    send: "🤒 Krankmeldung senden", done: "Krankmeldung gespeichert",
+    text: "Ich bin leider krank. Deine Fahrstunde in diesem Zeitraum fällt aus – die Absage ist für dich kostenlos. Such dir in der App gern einen neuen Termin aus. Danke für dein Verständnis!" },
+  urlaub: { icon: "🏖️", label: "Urlaub", note: "Urlaub", reason: "Fahrlehrer im Urlaub", subject: "Urlaub – in dieser Zeit keine Fahrstunden",
+    send: "🏖️ Urlaub eintragen & senden", done: "Urlaub eingetragen",
+    text: "Ich bin in dieser Zeit im Urlaub – es finden keine Fahrstunden statt. Falls du da schon eine Fahrstunde hattest, fällt sie aus (kostenlos für dich). Such dir in der App gern einen Termin davor oder danach aus." },
+};
+async function openSick(kind = "krank") {
   const today = dateInput(new Date());
   const from = el("input", { type: "date", value: today, min: today });
   const to = el("input", { type: "date", value: today, min: today });
-  const name = state.settings.display_name || "";
-  const text = el("textarea", { maxlength: 300 },
-    "Ich bin leider krank. Deine Fahrstunde in diesem Zeitraum fällt aus – die Absage ist für dich kostenlos. Such dir in der App gern einen neuen Termin aus. Danke für dein Verständnis!");
+  const text = el("textarea", { maxlength: 300 }, AWAY[kind].text);
   const cancel = el("input", { type: "checkbox" }); cancel.checked = true;
   const block = el("input", { type: "checkbox" }); block.checked = true;
   const rAll = el("input", { type: "radio", name: "sick-who" }), rHit = el("input", { type: "radio", name: "sick-who" });
   rHit.checked = true;
+  // Umschalten Krank ↔ Urlaub: Text (falls nicht selbst geändert), Knopf und Empfänger anpassen
+  const kindBtns = Object.keys(AWAY).map((k) => el("button", { type: "button", class: "tab", onclick: () => setKind(k) }, `${AWAY[k].icon} ${AWAY[k].label}`));
+  function setKind(k) {
+    if (text.value === AWAY[kind].text) text.value = AWAY[k].text;
+    kind = k;
+    kindBtns.forEach((b, i) => b.classList.toggle("active", Object.keys(AWAY)[i] === k));
+    btn.textContent = AWAY[k].send;
+    (k === "urlaub" ? rAll : rHit).checked = true;  // Urlaub: alle vorher informieren; krank: nur betroffene
+  }
   const info = el("p", { class: "small muted" });
   let students = [], hit = [];
   const range = () => {
@@ -1277,25 +1330,26 @@ async function openSick() {
   };
   from.addEventListener("change", () => { if (to.value < from.value) to.value = from.value; load(); });
   to.addEventListener("change", load);
-  const btn = el("button", { class: "btn danger" }, "🤒 Krankmeldung senden");
+  const btn = el("button", { class: "btn danger" });
   btn.onclick = () => busy(btn, async () => {
+    const K = AWAY[kind];
     const [a, b] = range();
     if (!text.value.trim()) throw new Error("Bitte einen kurzen Text schreiben");
     const hitIds = new Set(hit.map((x) => x.student_id));
     const who = rAll.checked ? students : students.filter((x) => hitIds.has(x.id));
     const span = from.value === to.value ? fmtDayStr(from.value) : `${fmtDayStr(from.value)} – ${fmtDayStr(to.value)}`;
-    if (!confirm(`Krankmeldung für ${span} senden?` + (cancel.checked && hit.length ? `\n\n${hit.length} Fahrstunde(n)/Anfrage(n) werden abgesagt.` : ""))) return;
+    if (!confirm(`${K.label} für ${span} eintragen und senden?` + (cancel.checked && hit.length ? `\n\n${hit.length} Fahrstunde(n)/Anfrage(n) werden abgesagt.` : ""))) return;
     if (cancel.checked && hit.length) {
-      const now = new Date().toISOString(), reason = "Fahrlehrer krank";
+      const now = new Date().toISOString(), reason = K.reason;
       const conf = hit.filter((x) => x.status !== "requested").map((x) => x.id), req = hit.filter((x) => x.status === "requested").map((x) => x.id);
       if (conf.length) { const { error } = await sb.from("bookings").update({ status: "cancelled_teacher", cancel_reason: reason, decided_at: now }).in("id", conf); if (error) throw error; }
       if (req.length) { const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reason, decided_at: now }).in("id", req); if (error) throw error; }
     }
     if (block.checked) {
-      const { error } = await sb.from("time_off").insert({ from_day: from.value, to_day: to.value || from.value, note: "krank" });
+      const { error } = await sb.from("time_off").insert({ from_day: from.value, to_day: to.value || from.value, note: K.note });
       if (error) throw error;
     }
-    const msg = `🤒 ${span}: ${text.value.trim()}`;
+    const msg = `${K.icon} ${span}: ${text.value.trim()}`;
     let sent = 0;
     if (who.length) {
       try {
@@ -1303,10 +1357,12 @@ async function openSick() {
         sent = (data && data.sent) || 0;
       } catch { /* Mitteilung ist kein Muss */ }
     }
-    sickShare(who, msg, sent, b > a);
+    sickShare(who, msg, sent, K);
   });
-  openModal("🤒 Krank melden",
-    el("p", { class: "muted small" }, "Sagt deine Fahrstunden im Zeitraum ab und benachrichtigt deine Schüler – per Mitteilung aufs Handy, E-Mail und WhatsApp."),
+  setKind(kind);
+  openModal("🤒 Krank / 🏖️ Urlaub",
+    el("div", { class: "tabs kind-tabs" }, kindBtns),
+    el("p", { class: "muted small" }, "Sagt deine Fahrstunden im Zeitraum ab, sperrt die Tage und benachrichtigt deine Schüler – per Mitteilung aufs Handy, E-Mail und WhatsApp. Urlaub kannst du schon lange im Voraus eintragen."),
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis"), to)),
     info,
     el("label", { class: "check" }, cancel, "Fahrstunden und Anfragen in diesem Zeitraum absagen (kostenlos für die Schüler)"),
@@ -1319,15 +1375,15 @@ async function openSick() {
   load();
 }
 // Nach der Krankmeldung: E-Mail an alle (Bcc) und WhatsApp je Schüler
-function sickShare(who, msg, sent) {
+function sickShare(who, msg, sent, K = AWAY.krank) {
   state.renderOnClose = true;
   const full = `${msg}\n\n${teacherSignature()}`;
   const mails = who.map((x) => x.email).filter(Boolean);
-  const mail = mails.length ? el("a", { class: "btn", href: `mailto:?bcc=${encodeURIComponent(mails.join(","))}&subject=${encodeURIComponent("Fahrstunde fällt aus – Fahrlehrer krank")}&body=${encodeURIComponent(full)}` }, `📧 E-Mail an alle (${mails.length})`) : null;
+  const mail = mails.length ? el("a", { class: "btn", href: `mailto:?bcc=${encodeURIComponent(mails.join(","))}&subject=${encodeURIComponent(K.subject)}&body=${encodeURIComponent(full)}` }, `📧 E-Mail an alle (${mails.length})`) : null;
   const copy = el("button", { class: "btn ghost" }, "📋 Text kopieren");
   copy.onclick = async () => { try { await navigator.clipboard.writeText(full); toast("Text kopiert – z. B. für eine WhatsApp-Broadcast-Liste."); } catch { toast("Kopieren nicht möglich."); } };
   const wa = who.map((x) => ({ x, b: waButton(x.phone, `Hallo ${x.first_name || ""},\n${full}`, `💬 ${fullName(x)}`) }));
-  openModal("✓ Krankmeldung gespeichert",
+  openModal("✓ " + K.done,
     el("p", {}, who.length ? `📱 Mitteilung an ${sent} Gerät${sent === 1 ? "" : "e"} geschickt (nur Schüler mit eingeschalteten Mitteilungen).` : "Niemand betroffen – keine Mitteilung nötig."),
     who.length ? [
       el("div", { class: "note" }, full),
@@ -1502,6 +1558,9 @@ async function adminToday() {
       try {
         await save(b, { status: v, late_cancel: late, actual_minutes: null, decided_at: new Date().toISOString() }, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " – Fehlstunde" : ""}`);
         if (v === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
+        // kurz warten, bis das vorige Fenster ganz zu ist (Zurück-Verlauf), dann „anderen Schüler eintragen?“
+        setTimeout(() => freedStep(s, `${fullName(p)}: ${STATUS_TEXT[v]}${late ? " (Fehlstunde)" : ""}`,
+          v === "cancelled_teacher" ? [p.phone, waTextForStudent("cancelled_teacher", p, s, "")] : null), 300);
       } catch (e) { fail(e); }
     } }, t);
     openModal(`${fmtTime(s.starts_at)} Uhr · ${fullName(p)}`,
@@ -1574,7 +1633,7 @@ async function adminToday() {
       el("button", { class: "quick-btn", onclick: () => openBackfill() },
         el("span", { class: "qi" }, "✍️"), el("span", {}, el("b", {}, "Nachtragen"), el("small", {}, "schon gefahren"))),
       el("button", { class: "quick-btn sick", onclick: () => openSick() },
-        el("span", { class: "qi" }, "🤒"), el("span", {}, el("b", {}, "Krank"), el("small", {}, "alle benachrichtigen")))),
+        el("span", { class: "qi" }, "🤒"), el("span", {}, el("b", {}, "Krank / Urlaub"), el("small", {}, "Schüler benachrichtigen")))),
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
@@ -1651,13 +1710,12 @@ async function adminCalendar() {
       tag = b.actual_minutes !== null ? "gefahren" : "bestätigt";
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : B197_TYPES.includes(b.lesson_type) ? `${LESSON_ICON[b.lesson_type]} ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
-    const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && !past;
     // Bestätigte/gefahrene Fahrstunde: Name antippen → Schüler-Infos; Rest des Termins → Termin-Details
     const nameTap = b && b.status === "confirmed" && label
       ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
-      upcoming ? el("div", {}, countdownEl(s.starts_at, s.duration_min, "small")) : null);
+      null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras));
 
   return el("div", {},
@@ -1665,8 +1723,8 @@ async function adminCalendar() {
       el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunde / Prüfung anlegen"),
       el("button", { class: "btn ghost", onclick: () => openBackfill() }, "✍️ Gefahrenes nachtragen")),
     weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
-      el("button", { class: "btn small ghost", onclick: () => openSick() }, "🤒 Krank melden"),
-      el("button", { class: "btn small ghost", onclick: () => openDeleteFree(slots) }, "🗑 Freie löschen"),
+      el("button", { class: "btn small ghost", onclick: () => openSick() }, "🤒 Krank / 🏖️ Urlaub"),
+      el("button", { class: "btn small ghost", onclick: () => openDeleteMany(slots) }, "🗑 Mehrere löschen"),
       slots.length && !isPhone() ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
     grid,
   );
@@ -1737,32 +1795,52 @@ async function openBackfill(preStudent) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
-// Freie (nicht gebuchte) Termine der angezeigten Tage auf einmal löschen
-function openDeleteFree(slots) {
-  const free = (slots || []).filter((x) => !activeBooking(x) && !(x.bookings || []).some((b) => NOT_HELD_ICON[b.status]))
-    .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
-  if (!free.length) return openModal("🗑 Freie Termine löschen", el("p", { class: "muted" }, "In diesem Zeitraum gibt es keine freien Termine."),
+// Mehrere Termine der angezeigten Tage auf einmal löschen: freie, gebuchte und schon gefahrene
+function openDeleteMany(slots) {
+  const now = Date.now();
+  const info = (x) => {
+    const b = activeBooking(x), past = new Date(x.starts_at).getTime() < now;
+    const gone = (x.bookings || []).filter((y) => NOT_HELD_ICON[y.status]).pop();
+    if (!b) return { group: past ? "past" : "free", text: gone ? `${NOT_HELD_ICON[gone.status]} ${fullName(gone.profiles)} – ${STATUS_TEXT[gone.status]}` : past ? "nicht gebucht" : "frei", b: null };
+    if (b.status === "confirmed" && b.actual_minutes !== null) return { group: "past", text: `✓ ${fullName(b.profiles)} – gefahren (${b.actual_minutes} Min.)`, b };
+    return { group: past ? "past" : "booked", text: `${fullName(b.profiles)} – ${STATUS_TEXT[b.status]}`, b };
+  };
+  const list = (slots || []).slice().sort((a, b) => a.starts_at.localeCompare(b.starts_at)).map((x) => ({ x, ...info(x) }));
+  if (!list.length) return openModal("🗑 Mehrere löschen", el("p", { class: "muted" }, "In diesem Zeitraum gibt es keine Termine."),
     el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "OK")));
-  const boxes = free.map((x) => { const c = el("input", { type: "checkbox" }); c.checked = true; c.dataset.id = x.id; return c; });
+  list.forEach((it) => { it.box = el("input", { type: "checkbox" }); it.box.checked = it.group === "free"; });
   const btn = el("button", { class: "btn danger" });
-  const count = () => boxes.filter((c) => c.checked).length;
-  const label = () => (btn.textContent = `🗑 ${count()} Termin${count() === 1 ? "" : "e"} löschen`);
-  boxes.forEach((c) => c.addEventListener("change", label)); label();
-  const all = (v) => () => { boxes.forEach((c) => (c.checked = v)); label(); };
+  const picked = () => list.filter((it) => it.box.checked);
+  const label = () => { const n = picked().length; btn.textContent = `🗑 ${n} Termin${n === 1 ? "" : "e"} löschen`; };
+  list.forEach((it) => it.box.addEventListener("change", label)); label();
+  const sel = (fn) => () => { list.forEach((it) => (it.box.checked = fn(it))); label(); };
+  const GROUPS = [["free", "Frei (noch nicht gebucht)"], ["booked", "⚠️ Gebucht / angefragt – Schüler bekommt eine Absage"], ["past", "Vergangen / gefahren – verschwindet auch aus Kontrolle und Statistik"]];
   btn.onclick = () => busy(btn, async () => {
-    const ids = boxes.filter((c) => c.checked).map((c) => c.dataset.id);
-    if (!ids.length) throw new Error("Nichts ausgewählt");
-    const { error } = await sb.from("slots").delete().in("id", ids);
+    const chosen = picked();
+    if (!chosen.length) throw new Error("Nichts ausgewählt");
+    const booked = chosen.filter((it) => it.group === "booked"), past = chosen.filter((it) => it.group === "past" && it.b);
+    if (!confirm(`${chosen.length} Termin${chosen.length === 1 ? "" : "e"} endgültig löschen?`
+      + (booked.length ? `\n\n⚠️ ${booked.length} davon sind gebucht/angefragt – die Schüler bekommen eine Absage.` : "")
+      + (past.length ? `\n\n${past.length} davon sind schon gefahren/vergangen – sie verschwinden aus Kontrolle und Statistik.` : ""))) return;
+    const notify = booked.filter((it) => ["confirmed", "offered"].includes(it.b.status)).map((it) => it.b.id);
+    if (notify.length) { try { await sb.functions.invoke("notify", { body: { kind: "booking", ids: notify, event: "cancelled_teacher" } }); } catch { /* kein Muss */ } }
+    const { error } = await sb.from("slots").delete().in("id", chosen.map((it) => it.x.id));
     if (error) throw error;
-    toast(`🗑 ${ids.length} freie Termin${ids.length === 1 ? "" : "e"} gelöscht.`);
+    toast(`🗑 ${chosen.length} Termin${chosen.length === 1 ? "" : "e"} gelöscht.`);
     closeModal();
     render();
   });
-  openModal("🗑 Freie Termine löschen",
-    el("p", { class: "muted small" }, "Nur Termine, die noch niemand angefragt oder gebucht hat. Gebuchte Fahrstunden löschst du einzeln (Termin antippen → 🗑)."),
-    el("div", { class: "done-row" }, el("button", { class: "btn small ghost", onclick: all(true) }, "Alle"), el("button", { class: "btn small ghost", onclick: all(false) }, "Keine")),
-    el("div", { class: "pick-list del-list" }, free.map((x, i) => el("label", { class: "check" }, boxes[i],
-      `${fmtDay(x.starts_at)} · ${fmtRange(x.starts_at, x.duration_min)}`))),
+  openModal("🗑 Mehrere Termine löschen",
+    el("p", { class: "muted small" }, "Termine der angezeigten Tage ankreuzen und auf einmal löschen."),
+    el("div", { class: "done-row" },
+      el("button", { class: "btn small ghost", onclick: sel((it) => it.group === "free") }, "Alle freien"),
+      el("button", { class: "btn small ghost", onclick: sel(() => true) }, "Alle"),
+      el("button", { class: "btn small ghost", onclick: sel(() => false) }, "Keine")),
+    el("div", { class: "pick-list del-list" }, GROUPS.map(([g, title]) => {
+      const items = list.filter((it) => it.group === g);
+      return items.length ? [el("div", { class: "del-group" }, title),
+        items.map((it) => el("label", { class: "check" }, it.box, el("span", {}, el("b", {}, `${fmtDay(it.x.starts_at)} · ${fmtRange(it.x.starts_at, it.x.duration_min)}`), el("br"), el("small", { class: "muted" }, it.text))))] : null;
+    })),
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
@@ -2312,10 +2390,9 @@ function doneControls(slot, b, after, opts = {}) {
       actual_minutes: null, decided_at: new Date().toISOString(),
     }).eq("id", b.id);
     if (error) throw error;
-    if (r.value === "cancelled_teacher") {
-      pushNotify("booking", b.id, "cancelled_teacher");
-      notifyStep("Fahrstunde abgesagt", b.profiles && b.profiles.phone, waTextForStudent("cancelled_teacher", b.profiles, slot, reason.value.trim()));
-    } else after(`Gespeichert: ${STATUS_TEXT[r.value]}${isLateCancel ? " (Fehlstunde)" : ""}.`);
+    if (r.value === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
+    freedStep(slot, `${fullName(b.profiles)}: ${STATUS_TEXT[r.value]}${isLateCancel ? " (Fehlstunde)" : ""}`,
+      r.value === "cancelled_teacher" ? [b.profiles && b.profiles.phone, waTextForStudent("cancelled_teacher", b.profiles, slot, reason.value.trim())] : null);
   });
   const notHeld = el("details", { class: "nothere" },
     el("summary", {}, "✗ Nicht gefahren …"),
@@ -2758,8 +2835,9 @@ async function openStudent(st) {
   openModal(fullName(st),
     el("div", { class: "done-row" }, studentTags(st), training, examBtn, edit,
       el("button", { class: "btn small ghost", onclick: () => openBackfill(st) }, "✍️ Nachtragen")),
-    el("p", { class: "muted small" }, [st.email, st.phone].filter(Boolean).join(" · ")),
+    studentProfileCard(st, rows),
     el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
+    el("h3", { class: "sec-title" }, "🚗 Fahrstunden-Übersicht"),
     lessonOverview(st, data),
     await examCard(st, true),
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
@@ -2782,6 +2860,8 @@ async function openStudent(st) {
       ? "Fertig: kann keine Fahrstunden mehr buchen. Die Daten bleiben bei dir, bis du den Schüler löschst."
       : "Nach der Prüfung als fertig markieren – oder den Schüler mit allen Daten löschen."),
     el("div", { class: "actions" }, st.status === "blocked" ? unblock : block, del));
+  modal.classList.add("full-page");  // Schüler-Seite: ganze Seite statt kleines Fenster
+  modal.scrollTop = 0;
 }
 
 /* ---------------- Haupt-Admin: Fahrlehrer verwalten ---------------- */
@@ -3284,7 +3364,6 @@ async function studentCalendar() {
     nextExam ? examBanner(nextExam) : null,
     nextOwn ? el("div", { class: "card next-card" },
       el("div", { class: "next-row first", style: "cursor:default" },
-        countdownEl(nextOwn.slots.starts_at, nextOwn.slots.duration_min),
         el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`)),
       meetingBox(meetingOf(nextOwn))) : null,
     weekBar(),
