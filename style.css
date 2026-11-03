@@ -735,3 +735,15 @@ dialog.full-page { width: min(860px, calc(100vw - 24px)); max-height: calc(100dv
 .del-list { max-height: 50vh; }
 .replace-box { margin: 10px 0 4px; padding: 10px; border: 1px dashed var(--border); border-radius: 12px; background: var(--bg); }
 .replace-box label:first-child { margin-top: 0; }
+/* Schüler-Seite: große Knöpfe + Klasse ändern */
+.quick-btn.exam { background: linear-gradient(135deg, #f0b53c 0%, #d48a12 100%); }
+.quick-btn.wa { background: linear-gradient(135deg, #2fb36d 0%, #1e8a4c 100%); }
+.pf-wide { grid-column: 1 / -1; }
+.class-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.class-chips .tab { padding: 6px 12px; font-size: 13px; }
+/* Steckbrief: antippbare Kacheln */
+.pf-tap { text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.pf-tap:active { transform: scale(.98); }
+.pf-pen { color: var(--teal-text); font-weight: 700; }
+.pf-edit { background: var(--card); border-color: var(--teal); }
+.pf-edit input { margin-top: 6px; }

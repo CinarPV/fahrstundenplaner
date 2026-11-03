@@ -406,6 +406,25 @@ function specialSummary(rows, p) {
   }).join(" · ");
 }
 
+// Großer farbiger Knopf (wie in „Heute“): Symbol, Titel, Unterzeile
+const quickBtn = (cls, icon, title, sub, onclick) => el("button", { class: "quick-btn " + cls, onclick },
+  el("span", { class: "qi" }, icon), el("span", {}, el("b", {}, title), el("small", {}, sub)));
+
+// Führerscheinklasse direkt im Steckbrief ändern (Schüler tragen sie oft falsch ein) – ein Tipp, sofort gespeichert
+function classPicker(st) {
+  const pick = (c) => async () => {
+    if (st.license_class === c) return;
+    const { error } = await sb.from("profiles").update({ license_class: c }).eq("id", st.id);
+    if (error) return fail(error);
+    toast(`Klasse geändert: ${c}`);
+    state.renderOnClose = true;
+    openStudent({ ...st, license_class: c });   // Seite neu aufbauen (z. B. Schaltstunden bei B197)
+  };
+  return el("div", { class: "pf-item pf-wide" }, el("small", {}, "Führerscheinklasse – zum Ändern antippen"),
+    el("div", { class: "class-chips" }, LICENSE_CLASSES.map((c) => el("button", { type: "button", class: "tab" + (st.license_class === c ? " active" : ""), onclick: pick(c) },
+      c === "B" ? "B (Schaltwagen)" : c === "B197" ? "B197 (Automatik + Schalt)" : c))));
+}
+
 // Steckbrief: alle Stammdaten des Schülers auf einen Blick
 function studentProfileCard(st, rows) {
   const yes = (v) => (v ? "✓ Ja" : "Nein");
@@ -414,20 +433,50 @@ function studentProfileCard(st, rows) {
   const next = lessons.filter((b) => new Date(b.slots.starts_at).getTime() > now).sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at))[0];
   const last = lessons.filter((b) => b.actual_minutes !== null).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at))[0];
   const acc = accessInfo(st.valid_until, true);
-  const item = (k, v) => el("div", { class: "pf-item" }, el("small", {}, k), el("b", {}, v || "–"));
+  // Speichern und Seite neu aufbauen
+  const saveField = async (patch, msg) => {
+    const { error } = await sb.from("profiles").update(patch).eq("id", st.id);
+    if (error) return fail(error);
+    toast(msg || "Gespeichert.");
+    state.renderOnClose = true;
+    openStudent({ ...st, ...patch });
+  };
+  const jump = (sel) => () => document.querySelector("dialog " + sel)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  // Kachel: antippen → Aktion (ändern, umschalten, springen); ✎ zeigt, dass sie änderbar ist
+  const item = (k, v, onclick, editable) => el(onclick ? "button" : "div", { type: onclick ? "button" : undefined, class: "pf-item" + (onclick ? " pf-tap" : ""), onclick },
+    el("small", {}, k, editable ? el("span", { class: "pf-pen" }, " ✎") : null), el("b", {}, v || "–"));
+  // Text-Kachel: antippen → Eingabefeld mit ✓ direkt in der Kachel
+  const textItem = (k, v, type, fields) => {
+    const box = item(k, v, () => {
+      const inputs = fields.map(([key, ph]) => el("input", { type, value: st[key] || "", placeholder: ph }));
+      const ok = el("button", { type: "button", class: "btn small ok" }, "✓ Speichern");
+      ok.onclick = () => busy(ok, () => {
+        const patch = Object.fromEntries(fields.map(([key], i) => [key, inputs[i].value.trim() || null]));
+        if ("first_name" in patch && (!patch.first_name || !patch.last_name)) throw new Error("Bitte Vor- und Nachnamen angeben");
+        return saveField(patch);
+      });
+      const form = el("div", { class: "pf-item pf-wide pf-edit" }, el("small", {}, k), ...inputs,
+        el("div", { class: "done-row", style: "margin:6px 0 0" }, ok, el("button", { type: "button", class: "btn small ghost", onclick: () => form.replaceWith(box) }, "Abbrechen")));
+      box.replaceWith(form);
+      inputs[0].focus();
+    }, true);
+    return box;
+  };
   return el("div", { class: "pf-card" },
     el("h3", { class: "sec-title" }, "📋 Steckbrief"),
+    el("p", { class: "muted small", style: "margin:0 0 8px" }, "Antippen zum Ändern (✎)."),
     el("div", { class: "pf-grid" },
-      item("Führerscheinklasse", st.license_class ? (st.license_class === "B197" ? "B197 (Automatik + Schalt-Schulung)" : st.license_class) : "–"),
-      item("👓 Brille / Sehhilfe", yes(st.needs_glasses)),
-      item("Umschreiber", yes(st.is_conversion)),
-      item("📞 Telefon", st.phone),
-      item("✉️ E-Mail", st.email),
-      item("Angemeldet seit", st.created_at ? fmtDate(st.created_at) : "–"),
-      item("⏳ Zugang", acc.text),
-      item("Anfragen pro Woche", limitLabel(st.max_open)),
-      item("Nächste Fahrstunde", next ? `${fmtDay(next.slots.starts_at)} ${fmtTime(next.slots.starts_at)} Uhr` : "–"),
-      item("Letzte Fahrstunde", last ? fmtDay(last.slots.starts_at) : "–")));
+      classPicker(st),
+      textItem("👤 Name", fullName(st), "text", [["first_name", "Vorname"], ["last_name", "Nachname"]]),
+      textItem("📞 Telefon / WhatsApp", st.phone, "tel", [["phone", "z. B. 0151 23456789"]]),
+      item("👓 Brille / Sehhilfe", yes(st.needs_glasses), () => saveField({ needs_glasses: !st.needs_glasses }, `Brille: ${st.needs_glasses ? "Nein" : "Ja"}`), true),
+      item("Umschreiber", yes(st.is_conversion), () => saveField({ is_conversion: !st.is_conversion }, `Umschreiber: ${st.is_conversion ? "Nein" : "Ja"}`), true),
+      item("⏳ Zugang", acc.text, jump(".access-sec"), true),
+      item("Anfragen pro Woche", limitLabel(st.max_open), jump(".limit-sec"), true),
+      item("Nächste Fahrstunde", next ? `${fmtDay(next.slots.starts_at)} ${fmtTime(next.slots.starts_at)} Uhr` : "–", next ? () => openAdminSlot(next.slots.id) : null),
+      item("Letzte Fahrstunde", last ? fmtDay(last.slots.starts_at) : "–", last ? () => openAdminSlot(last.slots.id) : null),
+      item("✉️ E-Mail (Anmeldung)", st.email),
+      item("Angemeldet seit", st.created_at ? fmtDate(st.created_at) : "–")));
 }
 
 // Übersicht auf der Schüler-Seite: alles Gefahrene auf einen Blick (Sonderfahrten, bei B197 Schaltstunden + Test)
@@ -2902,16 +2951,22 @@ async function openStudent(st) {
   const del = el("button", { class: "btn danger" }, "Endgültig löschen");
   del.onclick = () => busy(del, () => deleteStudent(st));
   const edit = el("button", { class: "btn small ghost", onclick: () => openEditStudent(st) }, "✏️ Daten bearbeiten");
-  const training = el("button", { class: "btn small", onclick: () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); } }, "📈 Ausbildungsstand");
-  const examBtn = el("button", { class: "btn small exam-btn", onclick: () => document.querySelector("dialog .exam-card")?.scrollIntoView({ behavior: "smooth", block: "start" }) }, "🎓 Prüfung");
 
+  // Große Knöpfe wie in „Heute“
+  const qb = quickBtn;
+  const wa = waNumber(st.phone);
   openModal(fullName(st),
-    el("div", { class: "done-row" }, studentTags(st), training, examBtn, edit,
-      el("button", { class: "btn small ghost", onclick: () => openBackfill(st) }, "✍️ Nachtragen")),
+    el("div", { class: "done-row" }, studentTags(st)),
+    el("div", { class: "quick-row" },
+      qb("add", "✍️", "Nachtragen", "schon gefahren", () => openBackfill(st)),
+      qb("exam", "🎓", "Prüfung", "Termin & Ergebnis", () => document.querySelector("dialog .exam-card")?.scrollIntoView({ behavior: "smooth", block: "start" })),
+      qb("cal", "📈", "Ausbildung", "Ausbildungsstand", () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); }),
+      wa ? qb("wa", "💬", "WhatsApp", "Nachricht schreiben", () => window.open(`https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${st.first_name || ""},\n`)}`, "_blank", "noopener"))
+         : qb("", "✏️", "Daten", "bearbeiten", () => openEditStudent(st))),
     el("h3", { class: "sec-title" }, "🚗 Fahrstunden-Übersicht"),
     lessonOverview(st, data, stExams || []),
     studentProfileCard(st, rows),
-    el("div", { class: "done-row" }, waButton(st.phone, `Hallo ${st.first_name || ""},\n`, "💬 WhatsApp"), exportButtons(st, data)),
+    el("div", { class: "done-row" }, exportButtons(st, data)),
     await examCard(st, true),
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
@@ -2922,11 +2977,11 @@ async function openStudent(st) {
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null))
       : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
     el("hr"),
-    el("h3", {}, "⏳ Zugang"),
+    el("h3", { class: "access-sec" }, "⏳ Zugang"),
     el("p", { class: "muted small" }, "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
     accessCell(st),
     el("hr"),
-    limitControl(st),
+    el("div", { class: "limit-sec" }, limitControl(st)),
     el("hr"),
     el("h3", {}, "Ausbildung"),
     el("p", { class: "muted small" }, st.status === "blocked"
@@ -3429,7 +3484,16 @@ async function studentCalendar() {
   const expiryNote = left !== null && left <= 30 ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "),
     left >= 0 ? `Dein Zugang läuft am ${fmtUntil(state.profile.valid_until)} ab.` : `Dein Zugang ist abgelaufen – in ${GRACE_DAYS + left} Tag${GRACE_DAYS + left === 1 ? "" : "en"} wird er gesperrt.`,
     " Sprich deinen Fahrlehrer an, wenn du weiter fahren möchtest – er kann ihn verlängern.") : null;
+  // Große Knöpfe wie beim Fahrlehrer: schnell zu den wichtigsten Bereichen
+  const waT = waNumber(state.settings.admin_phone);
+  const quick = el("div", { class: "quick-row" },
+    quickBtn("add", "🚗", "Meine Fahrstunden", "Termine & Zusagen", () => goTab("mine")),
+    quickBtn("cal", "📈", "Mein Stand", "Ausbildung & Prüfung", () => goTab("training")),
+    waT ? quickBtn("wa", "💬", "Fahrlehrer", "per WhatsApp schreiben",
+      () => window.open(`https://wa.me/${waT}?text=${encodeURIComponent(`Hallo, hier ist ${fullName(state.profile)}.\n`)}`, "_blank", "noopener")) : null,
+    quickBtn("", "👤", "Profil", "Daten & Mitteilungen", () => goTab("profile")));
   return el("div", {},
+    quick,
     expiryNote,
     nextOff ? el("div", { class: "notice off-banner", style: "margin-bottom:12px" },
       el("b", {}, `🏖️ Dein Fahrlehrer ist nicht verfügbar (${nextOff.note || "frei"}): `), offRange(nextOff),
@@ -3819,11 +3883,16 @@ async function adminTraining() {
 /* ---------------- Schüler: Ausbildungsstand (nur ansehen) ---------------- */
 
 async function studentTraining() {
-  const { data, error } = await sb.from("bookings").select("status,actual_minutes,lesson_type").eq("student_id", state.profile.id);
+  const [{ data, error }, { data: myExams }] = await Promise.all([
+    sb.from("bookings").select("status,actual_minutes,lesson_type,late_cancel,slots(starts_at)").eq("student_id", state.profile.id),
+    sb.from("exams").select("id,kind,exam_at,result").eq("student_id", state.profile.id).order("exam_at"),
+  ]);
   if (error) throw error;
   return el("div", { class: "card" },
     el("h2", {}, "📈 Mein Ausbildungsstand"),
-    el("p", { class: "muted small" }, "Dein Fahrlehrer trägt hier nach den Fahrstunden ein, was du schon kannst."),
+    el("h3", { class: "sec-title" }, "🚗 Mein Stand"),
+    lessonOverview(state.profile, data, myExams || []),
+    el("p", { class: "muted small" }, "1 FS = 1 Fahrstunde à 45 Minuten. Dein Fahrlehrer trägt nach jeder Fahrt ein, was du schon kannst."),
     await examCard(state.profile, false),
     await trainingView(state.profile, false, data));
 }
