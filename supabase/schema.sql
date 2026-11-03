@@ -262,14 +262,23 @@ returns uuid language sql stable security definer set search_path = public as $$
 $$;
 
 -- Freigeschaltet = aktiver Fahrlehrer oder aktiver Schüler eines aktiven Fahrlehrers
+-- Praktische Prüfung bestanden? Dann gilt der Zugang nur noch 6 Wochen – ohne Schonfrist, Verlängern nur um 4 Wochen
+create or replace function public.student_passed(p_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from exams e where e.student_id = p_id and e.kind = 'praxis' and e.result = 'passed');
+$$;
+
 create or replace function public.is_active()
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from profiles p
     where p.id = auth.uid() and p.status = 'active'
       and (case when p.role = 'teacher' then public.teacher_valid(p.id)
-                -- Schüler: gültig bis Ablaufdatum + 4 Wochen Schonfrist, und sein Fahrlehrer muss gültig sein
-                else (p.valid_until is null or p.valid_until + 28 >= current_date) and public.teacher_valid(p.teacher_id) end));
+                -- Schüler: gültig bis Ablaufdatum + 4 Wochen Schonfrist (nach bestandener Prüfung ohne Schonfrist),
+                -- und sein Fahrlehrer muss gültig sein
+                else (p.valid_until is null
+                      or p.valid_until + (case when public.student_passed(p.id) then 0 else 28 end) >= current_date)
+                     and public.teacher_valid(p.teacher_id) end));
 $$;
 
 -- Hilfen für die Zugriffsregeln (ohne sich gegenseitig auszulösen)
@@ -458,12 +467,35 @@ begin
                 or (public.is_school_admin() and new.school_id = auth.uid() and not new.is_school_admin)))) then
       raise exception 'Die Gültigkeit darf hier nicht geändert werden';
     end if;
+    -- Nach bestandener Prüfung: höchstens 4 Wochen ab dem bisherigen Ablauf (bzw. ab heute) verlängern.
+    -- Ausnahme: das automatische Setzen auf 6 Wochen beim Eintragen von „bestanden“.
+    if new.role = 'student' and public.student_passed(new.id) and coalesce(current_setting('fsp.exam_passed', true), '') <> '1'
+       and new.valid_until is not null
+       and new.valid_until > greatest(coalesce(old.valid_until, current_date), current_date) + 28 then
+      raise exception 'Nach bestandener Prüfung kann der Zugang nur um 4 Wochen verlängert werden';
+    end if;
   end if;
   return new;
 end $$;
 drop trigger if exists profiles_valid_guard on public.profiles;
 create trigger profiles_valid_guard before update on public.profiles
   for each row execute function public.profiles_valid_guard();
+
+-- Prüfung bestanden eingetragen → Zugang läuft noch 6 Wochen (ab Prüfungstag bzw. ab heute), danach gesperrt
+create or replace function public.exam_passed_access()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.kind = 'praxis' and new.result = 'passed' and (tg_op = 'INSERT' or old.result is distinct from 'passed') then
+    perform set_config('fsp.exam_passed', '1', true);
+    update profiles set valid_until = greatest((new.exam_at at time zone 'Europe/Berlin')::date, current_date) + 42
+      where id = new.student_id and role = 'student';
+    perform set_config('fsp.exam_passed', '', true);
+  end if;
+  return new;
+end $$;
+drop trigger if exists exam_passed_access on public.exams;
+create trigger exam_passed_access after insert or update of result on public.exams
+  for each row execute function public.exam_passed_access();
 
 -- Bestehende freigeschaltete Schüler ohne Datum: ab heute 1 Jahr (einmalig, betrifft nur leere Felder)
 update public.profiles set valid_until = (current_date + interval '1 year')::date
@@ -912,6 +944,7 @@ grant execute on function public.cancel_deadline(timestamptz) to authenticated;
 grant execute on function public.is_teacher() to authenticated;
 grant execute on function public.is_owner() to authenticated;
 grant execute on function public.is_active() to authenticated;
+grant execute on function public.student_passed(uuid) to authenticated;
 grant execute on function public.my_teacher_id() to authenticated;
 grant execute on function public.slot_teacher(uuid) to authenticated;
 grant execute on function public.student_teacher(uuid) to authenticated;

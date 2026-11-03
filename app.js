@@ -122,13 +122,20 @@ const GRACE_DAYS = 28;
 const daysLeft = (until) => (until ? Math.round((new Date(until + "T12:00:00") - dayStart(new Date()).getTime() - 12 * 3600000) / 86400000) : null);
 const fmtUntil = (until) => new Date(until + "T12:00:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 // Status-Text + Art für Schüler (student=true) oder Fahrlehrer
-function accessInfo(until, student) {
+// passed = praktische Prüfung bestanden: keine Schonfrist, Zugang endet am Ablaufdatum
+const PASSED_DAYS = 42, PASSED_EXTEND = 28;
+function accessInfo(until, student, passed) {
   if (!until) return { text: "unbegrenzt", cls: "ok" };
   const d = daysLeft(until);
-  if (d >= 0) return { text: d <= 30 ? `läuft in ${d} Tag${d === 1 ? "" : "en"} ab (${fmtUntil(until)})` : `gültig bis ${fmtUntil(until)}`, cls: d <= 30 ? "warn" : "ok" };
+  if (d >= 0) return { text: (passed ? "🎉 bestanden – " : "") + (d <= 30 ? `läuft in ${d} Tag${d === 1 ? "" : "en"} ab (${fmtUntil(until)})` : `gültig bis ${fmtUntil(until)}`), cls: d <= 30 ? "warn" : "ok" };
+  if (passed) return { text: `🎉 bestanden – abgelaufen am ${fmtUntil(until)}, gesperrt`, cls: "bad" };
   if (student && d >= -GRACE_DAYS) return { text: `abgelaufen – Sperre in ${GRACE_DAYS + d} Tag${GRACE_DAYS + d === 1 ? "" : "en"}`, cls: "warn" };
   return { text: `abgelaufen am ${fmtUntil(until)}${student ? " – archiviert" : " – gesperrt"}`, cls: "bad" };
 }
+const addDaysFrom = (until, n) => {
+  const base = until && daysLeft(until) >= 0 ? new Date(until + "T12:00:00") : new Date();
+  return dateInput(addDays(base, n));
+};
 const addMonths = (until, n) => {
   const base = until && daysLeft(until) >= 0 ? new Date(until + "T12:00:00") : new Date();
   base.setMonth(base.getMonth() + n);
@@ -432,7 +439,7 @@ function studentProfileCard(st, rows) {
   const lessons = rows.filter((b) => b.slots && b.status === "confirmed");
   const next = lessons.filter((b) => new Date(b.slots.starts_at).getTime() > now).sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at))[0];
   const last = lessons.filter((b) => b.actual_minutes !== null).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at))[0];
-  const acc = accessInfo(st.valid_until, true);
+  const acc = accessInfo(st.valid_until, true, st.passed);
   // Speichern und Seite neu aufbauen
   const saveField = async (patch, msg) => {
     const { error } = await sb.from("profiles").update(patch).eq("id", st.id);
@@ -661,6 +668,7 @@ async function loadUserAndRender() {
     }
     // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
     state.active = !!(await sb.rpc(profile.role === "teacher" ? "is_teacher" : "is_active")).data;
+    state.passed = profile.role === "student" && !!(await sb.rpc("student_passed", { p_id: profile.id })).data;
   } catch (e) { fail(e); }
   state.tab = homeTab();
   renderUserbox();
@@ -715,7 +723,9 @@ function renderWaiting() {
         ? (p.school_id
           ? "Die Laufzeit deines Zugangs ist abgelaufen. Bitte wende dich an deine Fahrschule, um sie zu verlängern. Deine Daten und Schüler bleiben gespeichert."
           : "Die Laufzeit deines Zugangs ist abgelaufen. Bitte wende dich an den Betreiber der App, um sie zu verlängern. Deine Daten und Schüler bleiben gespeichert.")
-        : "Dein Zugang ist abgelaufen. Bitte wende dich an deinen Fahrlehrer – er kann ihn mit einem Tipp verlängern. Deine Fahrstunden bleiben gespeichert."),
+        : state.passed
+          ? "🎉 Herzlichen Glückwunsch zur bestandenen Prüfung! Dein Zugang ist jetzt beendet. Falls du noch etwas brauchst, melde dich bei deinem Fahrlehrer."
+          : "Dein Zugang ist abgelaufen. Bitte wende dich an deinen Fahrlehrer – er kann ihn mit einem Tipp verlängern. Deine Fahrstunden bleiben gespeichert."),
       el("div", { class: "actions" },
         el("button", { class: "btn", onclick: () => loadUserAndRender() }, "↻ Erneut prüfen"),
         el("button", { class: "btn ghost", onclick: (e) => logout(e.currentTarget) }, "‹ Zur Anmeldung / anderes Konto"))));
@@ -2764,11 +2774,14 @@ async function adminRequests() {
 /* ---------------- Admin: Schüler ---------------- */
 
 async function adminStudents() {
-  const [p, b] = await Promise.all([
+  const [p, b, ex] = await Promise.all([
     sb.from("profiles").select(STUDENT_FIELDS).order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
+    sb.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed"),
   ]);
   if (p.error) throw p.error;
+  const passedIds = new Set((ex.data || []).map((x) => x.student_id));
+  p.data.forEach((x) => (x.passed = passedIds.has(x.id)));
   if (b.error) throw b.error;
 
   const stats = {};
@@ -2785,7 +2798,7 @@ async function adminStudents() {
   const students = p.data.filter((x) => x.role === "student");
   const pending = students.filter((x) => x.status === "pending");
   // Abgelaufen + Schonfrist vorbei = archiviert (gesperrt, Daten bleiben)
-  const archived = (x) => x.valid_until && daysLeft(x.valid_until) < -GRACE_DAYS;
+  const archived = (x) => x.valid_until && daysLeft(x.valid_until) < (x.passed ? 0 : -GRACE_DAYS);
   const active = students.filter((x) => x.status === "active" && !archived(x));
   const expired = students.filter((x) => x.status === "active" && archived(x));
   const blocked = students.filter((x) => x.status === "blocked");
@@ -2833,10 +2846,12 @@ async function adminStudents() {
 
 // Zugang eines Schülers: Status + „+6 Monate“ verlängern (vom aktuellen Ablaufdatum bzw. ab heute)
 function accessCell(st) {
-  const info = accessInfo(st.valid_until, true);
-  const btn = el("button", { class: "btn small ghost", title: "Zugang um 6 Monate verlängern" }, "+6 Mon.");
+  const info = accessInfo(st.valid_until, true, st.passed);
+  // Nach bestandener Prüfung nur um 4 Wochen verlängerbar, sonst um 6 Monate
+  const btn = el("button", { class: "btn small ghost", title: st.passed ? "Zugang um 4 Wochen verlängern (Prüfung bestanden)" : "Zugang um 6 Monate verlängern" },
+    st.passed ? "+4 Wo." : "+6 Mon.");
   btn.onclick = () => busy(btn, async () => {
-    const until = addMonths(st.valid_until, 6);
+    const until = st.passed ? addDaysFrom(st.valid_until, PASSED_EXTEND) : addMonths(st.valid_until, 6);
     const { error } = await sb.from("profiles").update({ valid_until: until }).eq("id", st.id);
     if (error) throw error;
     st.valid_until = until;
@@ -2939,6 +2954,7 @@ async function openStudent(st) {
     sb.from("exams").select("id,kind,exam_at,result").eq("student_id", st.id).order("exam_at"),
   ]);
   if (error) return fail(error);
+  st.passed = (stExams || []).some((e) => e.kind === "praxis" && e.result === "passed");
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
 
   const block = el("button", { class: "btn ok" }, "🎓 Ausbildung abgeschlossen");
@@ -2978,7 +2994,9 @@ async function openStudent(st) {
       : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
     el("hr"),
     el("h3", { class: "access-sec" }, "⏳ Zugang"),
-    el("p", { class: "muted small" }, "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
+    el("p", { class: "muted small" }, st.passed
+      ? "🎉 Prüfung bestanden: Der Zugang läuft noch 6 Wochen ab der Prüfung und wird dann gesperrt (ohne Schonfrist). Verlängern geht nur um 4 Wochen."
+      : "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
     accessCell(st),
     el("hr"),
     el("div", { class: "limit-sec" }, limitControl(st)),
@@ -3481,9 +3499,10 @@ async function studentCalendar() {
 
   // Zugang läuft bald ab bzw. ist abgelaufen (Schonfrist) → Hinweis an den Schüler
   const left = daysLeft(state.profile.valid_until);
-  const expiryNote = left !== null && left <= 30 ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "),
-    left >= 0 ? `Dein Zugang läuft am ${fmtUntil(state.profile.valid_until)} ab.` : `Dein Zugang ist abgelaufen – in ${GRACE_DAYS + left} Tag${GRACE_DAYS + left === 1 ? "" : "en"} wird er gesperrt.`,
-    " Sprich deinen Fahrlehrer an, wenn du weiter fahren möchtest – er kann ihn verlängern.") : null;
+  const expiryNote = left !== null && (left <= 30 || state.passed) ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "),
+    state.passed ? `🎉 Glückwunsch zur bestandenen Prüfung! Dein Zugang zur App läuft noch bis ${fmtUntil(state.profile.valid_until)}.`
+      : left >= 0 ? `Dein Zugang läuft am ${fmtUntil(state.profile.valid_until)} ab.` : `Dein Zugang ist abgelaufen – in ${GRACE_DAYS + left} Tag${GRACE_DAYS + left === 1 ? "" : "en"} wird er gesperrt.`,
+    state.passed ? "" : " Sprich deinen Fahrlehrer an, wenn du weiter fahren möchtest – er kann ihn verlängern.") : null;
   // Große Knöpfe wie beim Fahrlehrer: schnell zu den wichtigsten Bereichen
   const waT = waNumber(state.settings.admin_phone);
   const quick = el("div", { class: "quick-row" },
@@ -3778,7 +3797,8 @@ async function examCard(student, editable) {
     const setResult = (e, result) => async () => {
       const { error } = await sb.from("exams").update({ result }).eq("id", e.id);
       if (error) return fail(error);
-      toast(result === "passed" ? "🎉 Bestanden eingetragen!" : result === "failed" ? "Nicht bestanden – trag gleich den nächsten Termin ein." : "Ergebnis zurückgesetzt.");
+      if (result === "passed" && e.kind === "praxis") state.renderOnClose = true;
+      toast(result === "passed" ? (e.kind === "praxis" ? "🎉 Bestanden! Der Zugang läuft jetzt noch 6 Wochen, danach wird er gesperrt." : "🎉 Bestanden eingetragen!") : result === "failed" ? "Nicht bestanden – trag gleich den nächsten Termin ein." : "Ergebnis zurückgesetzt.");
       draw();
     };
     const row = (e, i) => {
