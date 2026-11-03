@@ -94,10 +94,12 @@ Deno.serve(async (req) => {
         for (const s of own ?? []) messages.push({ to: s.id, title: "📢 Nachricht von deinem Fahrlehrer", body: msg });
       }
     } else if (kind === "exam" && Array.isArray(ids) && ids.length === 1) {
-      const { data: e } = await admin.from("exams").select("id,exam_at,meeting_point,student_id,profiles(teacher_id)").eq("id", ids[0]).maybeSingle();
+      const { data: e } = await admin.from("exams").select("id,kind,exam_at,meeting_point,student_id,profiles(teacher_id)").eq("id", ids[0]).maybeSingle();
       // deno-lint-ignore no-explicit-any
       if (e && (e.profiles as any)?.teacher_id === user.id) {
-        messages.push({ to: e.student_id, title: "🎓 Prüfungstermin", body: `Praktische Prüfung: ${fmtWhen(e.exam_at)}${e.meeting_point ? ` · 📍 ${e.meeting_point}` : ""}` });
+        const schalt = e.kind === "schalt";
+        messages.push({ to: e.student_id, title: schalt ? "🏁 Schaltkompetenz-Test" : "🎓 Prüfungstermin",
+          body: `${schalt ? "Schaltkompetenz-Test" : "Praktische Prüfung"}: ${fmtWhen(e.exam_at)}${e.meeting_point ? ` · 📍 ${e.meeting_point}` : ""}` });
       }
     }
 

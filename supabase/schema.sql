@@ -139,13 +139,16 @@ create index if not exists time_off_teacher_idx on public.time_off (teacher_id, 
 create table if not exists public.exams (
   id          uuid primary key default gen_random_uuid(),
   student_id  uuid not null references public.profiles(id) on delete cascade,
-  kind        text not null default 'praxis' check (kind in ('theorie','praxis')),
+  kind        text not null default 'praxis' check (kind in ('theorie','praxis','schalt')),
   exam_at     timestamptz not null,
   result      text check (result in ('passed','failed')),   -- NULL = noch offen
   note        text check (char_length(note) <= 300),
   created_at  timestamptz not null default now()
 );
 create index if not exists exams_student_idx on public.exams (student_id, exam_at);
+-- Prüfungsarten: praktische Prüfung, Schaltkompetenz-Test (B197, 15 Min.); „theorie“ nur für alte Einträge
+alter table public.exams drop constraint if exists exams_kind_check;
+alter table public.exams add constraint exams_kind_check check (kind in ('theorie','praxis','schalt'));
 alter table public.exams add column if not exists duration_min int not null default 55 check (duration_min between 5 and 600);
 -- Treffpunkt der Prüfung (z. B. TÜV-Station), getrennt vom Hinweis
 alter table public.exams add column if not exists meeting_point text check (char_length(meeting_point) <= 300);

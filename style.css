@@ -733,3 +733,5 @@ dialog.full-page { width: min(860px, calc(100vw - 24px)); max-height: calc(100dv
 .pf-item b { display: block; font-size: 14px; overflow-wrap: anywhere; }
 .del-group { font-size: 12px; font-weight: 700; color: var(--muted); margin: 8px 0 2px; }
 .del-list { max-height: 50vh; }
+.replace-box { margin: 10px 0 4px; padding: 10px; border: 1px dashed var(--border); border-radius: 12px; background: var(--bg); }
+.replace-box label:first-child { margin-top: 0; }
