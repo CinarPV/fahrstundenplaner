@@ -1011,21 +1011,24 @@ async function maybeAskPush() {
   const examples = isAdmin()
     ? ["📥 Ein Schüler fragt eine Fahrstunde an", "⚠️ Ein Schüler bittet um eine Ausnahme", "❌ Ein Schüler sagt eine Fahrstunde ab", "✅ Ein Schüler nimmt dein Angebot an"]
     : ["✅ Deine Fahrstunde wurde bestätigt", "📨 Dein Fahrlehrer bietet dir eine Fahrstunde an", "❌ Eine Fahrstunde wurde abgesagt oder abgelehnt", "🎓 Dein Prüfungstermin wurde eingetragen"];
-  const yes = el("button", { class: "btn ok" }, "🔔 Ja, Mitteilungen erlauben");
+  const where = isAdmin() ? "„Einstellungen“" : "„Profil“";
+  const yes = el("button", { class: "btn ok inst-big" }, "🔔 Mitteilungen einschalten");
   yes.onclick = () => busy(yes, async () => {
     remember();
     await enablePush();
     closeModal();
     toast("🔔 Mitteilungen sind an – du bekommst ab jetzt Bescheid.");
   });
-  openModal("🔔 Mitteilungen erlauben?",
-    el("p", {}, "Damit du nichts verpasst, kann dir der Easy Fahrstundenplaner eine ", el("b", {}, "Mitteilung aufs Handy"), " schicken – auch wenn die App geschlossen ist. Zum Beispiel:"),
+  const later = el("button", { type: "button", class: "link-btn", onclick: () => {
+    remember(); closeModal();
+    toast(`Du kannst Mitteilungen jederzeit unter ${where} einschalten.`);
+  } }, "Jetzt nicht");
+  openModal("🔔 Mitteilungen einschalten",
+    el("p", {}, "Der Easy Fahrstundenplaner schickt dir eine ", el("b", {}, "Mitteilung aufs Handy"), " – auch wenn die App geschlossen ist. Zum Beispiel:"),
     el("ul", { class: "push-ask" }, examples.map((t) => el("li", {}, t))),
-    el("p", { class: "muted small" }, "Gleich fragt dein Handy noch einmal nach – bitte dort auf „Erlauben“ tippen. Ausschalten kannst du die Mitteilungen jederzeit unter " + (isAdmin() ? "„Einstellungen“." : "„Profil“.")),
-    el("div", { class: "actions" }, yes, el("button", { class: "btn ghost", onclick: () => {
-      remember(); closeModal();
-      toast(`Kein Problem – du kannst Mitteilungen jederzeit unter ${isAdmin() ? "„Einstellungen“" : "„Profil“"} einschalten.`);
-    } }, "Nein, danke")));
+    el("div", { class: "notice", style: "margin:4px 0 12px" }, "Gleich fragt dein Handy nach – bitte dort auf ", el("b", {}, "„Erlauben“"), " tippen."),
+    yes,
+    el("p", { class: "muted small", style: "text-align:center;margin:10px 0 0" }, `Ausschalten geht jederzeit unter ${where}. `, later));
 }
 
 // Tab „☀️ Heute“ ein-/ausschalten (pro Fahrlehrer gespeichert)
@@ -1520,7 +1523,8 @@ async function adminToday() {
     const wa = waNumber(p.phone);
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
-      el("span", { class: "tr-name" }, B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
+      el("button", { type: "button", class: "tr-name name-link", title: "Infos zum Schüler", onclick: () => openStudentById(b.student_id) },
+        B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -1648,8 +1652,11 @@ async function adminCalendar() {
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : B197_TYPES.includes(b.lesson_type) ? `${LESSON_ICON[b.lesson_type]} ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
     const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && !past;
+    // Bestätigte/gefahrene Fahrstunde: Name antippen → Schüler-Infos; Rest des Termins → Termin-Details
+    const nameTap = b && b.status === "confirmed" && label
+      ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
-      slotHead(fmtRange(s.starts_at, s.duration_min), tag), label || null,
+      slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
       upcoming ? el("div", {}, countdownEl(s.starts_at, s.duration_min, "small")) : null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras));
 
@@ -2060,7 +2067,7 @@ async function deleteLessonSlot(slot, b) {
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -2107,7 +2114,9 @@ async function openAdminSlot(slotId) {
   } else {
     const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen." }, b.admin_reply || "");
     parts.push(
-      el("p", {}, el("b", {}, fullName(b.profiles)), " ", el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status]), " ", studentTags(b.profiles)),
+      el("p", {}, el("button", { type: "button", class: "name-link", onclick: () => openStudentById(b.student_id) }, el("b", {}, fullName(b.profiles))), " ",
+        el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status]), " ", studentTags(b.profiles), " ",
+        el("button", { class: "btn small ghost", onclick: () => openStudentById(b.student_id) }, "👤 Schüler-Infos")),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
     );
     // Wunschzeit: per Tipp in das Uhrzeit-Feld übernehmen (vorbelegt) – „Bestätigen“ speichert dann die neue Zeit
@@ -2559,7 +2568,7 @@ async function adminRequests() {
 
 async function adminStudents() {
   const [p, b] = await Promise.all([
-    sb.from("profiles").select("id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,valid_until,created_at").order("last_name"),
+    sb.from("profiles").select(STUDENT_FIELDS).order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
   ]);
   if (p.error) throw p.error;
@@ -2716,6 +2725,15 @@ function openEditStudent(st) {
   });
   openModal("Daten bearbeiten – " + fullName(st), f.node,
     el("div", { class: "actions" }, save, el("button", { class: "btn ghost", onclick: () => openStudent(st) }, "Zurück")));
+}
+
+// Schüler-Infos per ID öffnen (aus Heute, Kalender, Termin-Details)
+const STUDENT_FIELDS = "id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,valid_until,created_at";
+async function openStudentById(id) {
+  if (!id) return;
+  const { data, error } = await sb.from("profiles").select(STUDENT_FIELDS).eq("id", id).single();
+  if (error) return fail(error);
+  openStudent(data);
 }
 
 async function openStudent(st) {
