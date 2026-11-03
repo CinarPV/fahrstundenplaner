@@ -3571,7 +3571,8 @@ function openBooking(s) {
       wishHint.hidden = !m;
     },
   }, fmtTime(new Date(base + m * 60000)) + (m === 0 ? " ✓" : "")));
-  const wishHint = el("p", { class: "small muted", hidden: true }, "Dein Fahrlehrer sieht deine Wunschzeit und entscheidet, ob es passt.");
+  const wishHint = el("div", { class: "notice", hidden: true, style: "margin-top:8px" }, el("b", {}, "⚠️ Keine Garantie: "),
+    "Dein Fahrlehrer sieht deine Wunschzeit und entscheidet, ob es passt. Klappt es nicht, bestätigt er die angegebene Uhrzeit oder lehnt ab.");
   const btn = el("button", { class: "btn" }, "Fahrstunde anfragen");
   btn.onclick = () => busy(btn, async () => {
     const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value, p_wish: s._wish });
@@ -3587,7 +3588,8 @@ function openBooking(s) {
   openModal("Fahrstunde anfragen",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
     meetingBox(meetingOf(s)),
-    el("label", {}, "Passt dir die Uhrzeit nicht ganz? Wunsch-Beginn (bis zu 1 Std. früher oder später)"), el("div", { class: "tabs wish-tabs" }, wishBtns), wishHint,
+    el("label", {}, "Passt dir die Uhrzeit nicht ganz? Wunsch-Beginn (bis zu 1 Std. früher oder später)"), el("div", { class: "tabs wish-tabs" }, wishBtns),
+    el("p", { class: "small muted", style: "margin:4px 0 0" }, "✓ = angegebene Uhrzeit – am sichersten. Eine andere Uhrzeit ist nur ein Wunsch, ohne Garantie."), wishHint,
     el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note, counter,
     el("div", { class: "notice" },
       el("b", {}, "Wichtig: "), "Nach der Bestätigung durch deinen Fahrlehrer ist die Fahrstunde verbindlich. ",
@@ -4061,7 +4063,7 @@ async function studentMine() {
           el("b", {}, fmtRange(b.slots.starts_at, b.slots.duration_min) + " Uhr"),
           b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null),
         el("span", { class: "badge " + badge[0] }, badge[1]),
-        b.status === "requested" && b.wish_start ? el("div", { class: "lesson-hint" }, `⏰ Deine Wunschzeit: ${fmtTime(b.wish_start)} Uhr`) : null,
+        b.status === "requested" && b.wish_start ? el("div", { class: "lesson-hint" }, `⏰ Deine Wunschzeit: ${fmtTime(b.wish_start)} Uhr (ohne Garantie)`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
         canCancel ? el("div", { class: "lesson-hint muted" }, isLate(b.slots.starts_at)
