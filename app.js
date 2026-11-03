@@ -1227,13 +1227,13 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!state.active) return renderWaiting();
   const tabs = isAdmin()
-    // Mit „Heute“: Kalender über den Schnellzugriff „📅 Kalender“ in Heute (kein eigener Tab oben)
-    ? (showToday() ? [["today", "☀️ Heute"]] : [["calendar", "Kalender"]]).concat([["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
-      .concat(isOwner() || isSchoolAdmin() ? [["teachers", "Fahrlehrer"]] : [])
-    : [["calendar", "Kalender"], ["mine", "Meine Fahrstunden"], ["training", "Ausbildung"], ["profile", "Profil"]];
+    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
+      .concat(isOwner() || isSchoolAdmin() ? [["teachers", "👥", "Fahrlehrer"]] : [])
+    : [["calendar", "Kalender"], ["mine", "Fahrstunden"], ["training", "Ausbildung"], ["profile", "👤", "Profil"]];
 
-  const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label]) =>
-    el("button", { class: "tab" + (state.tab === id ? " active" : ""), "data-tab": id, onclick: () => goTab(id) }, label)));
+  // Kleine Symbol-Tabs (👥 Fahrlehrer, 👤 Profil) sparen eine Zeile; der Name steht als Hinweis dran
+  const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label, title]) =>
+    el("button", { class: "tab" + (title ? " tab-icon" : "") + (state.tab === id ? " active" : ""), "data-tab": id, title, "aria-label": title, onclick: () => goTab(id) }, label)));
   const content = el("div", {}, el("p", { class: "muted" }, "Lädt …"));
   const back = state.tab !== homeTab()
     ? el("button", { class: "btn small ghost backbtn", onclick: goBack }, "‹ Zurück") : null;

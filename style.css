@@ -747,3 +747,9 @@ dialog.full-page { width: min(860px, calc(100vw - 24px)); max-height: calc(100dv
 .pf-pen { color: var(--teal-text); font-weight: 700; }
 .pf-edit { background: var(--card); border-color: var(--teal); }
 .pf-edit input { margin-top: 6px; }
+/* Tabs oben: Symbol-Tabs klein, alles etwas kompakter, damit weniger Zeilen nötig sind */
+.tab.tab-icon { flex: 0 0 auto !important; padding-left: 12px !important; padding-right: 12px !important; }
+@media (max-width: 600px) {
+  .container > .tabs:first-child { gap: 5px; }
+  .container > .tabs:first-child .tab { padding: 8px 8px; font-size: 13.5px; }
+}
