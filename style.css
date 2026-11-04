@@ -753,3 +753,16 @@ dialog.full-page { width: min(860px, calc(100vw - 24px)); max-height: calc(100dv
   .container > .tabs:first-child { gap: 5px; }
   .container > .tabs:first-child .tab { padding: 8px 8px; font-size: 13.5px; }
 }
+
+/* Fahrlehrer: Tagesübersicht (freigegeben, frei, angefragt, bestätigt, voll, gesperrt) */
+.day-ov { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; padding: 0; width: 100%; background: none; border: none; text-align: left; font: inherit; }
+.day-ov.tap { cursor: pointer; }
+.ov-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+.ov-chip.all { background: var(--card); color: var(--text); }
+.ov-chip.free { background: var(--free-bg); color: var(--free-fg); border-color: var(--free-bd); }
+.ov-chip.req { background: var(--req-bg); color: var(--req-fg); border-color: var(--req-bd); }
+.ov-chip.offer { background: var(--off-bg); color: var(--off-fg); border-color: var(--off-bd); }
+.ov-chip.conf, .ov-chip.full { background: var(--conf-bg); color: var(--conf-fg); border-color: var(--conf-bd); }
+.ov-chip.done { background: var(--done-bg); color: var(--done-fg); border-color: var(--done-bd); }
+.ov-chip.off { background: #fdecea; color: #a12622; border-color: #f2b8b5; }
+html.dark .ov-chip.off { background: #3a1d1b; color: #ffb4ab; border-color: #7a3531; }

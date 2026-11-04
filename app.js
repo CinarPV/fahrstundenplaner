@@ -1569,8 +1569,50 @@ async function openTimeOff() {
     past.length ? el("details", { class: "fold" }, el("summary", {}, `Vergangene (${past.length})`), past.map(row)) : null);
 }
 
+// Sperre eines Tages als kurzer Text: krank, Urlaub oder eigener Grund
+function offLabel(t) {
+  const note = (t.note || "").trim();
+  if (/krank/i.test(note)) return "🤒 Krank – gesperrt";
+  if (!note || /urlaub/i.test(note)) return "🏖️ Urlaub – gesperrt";
+  return `🚫 ${note} – gesperrt`;
+}
+// Fahrlehrer: Tagesübersicht – wie viele Termine freigegeben, frei, angefragt, bestätigt, voll belegt oder gesperrt.
+// Gibt null zurück, wenn es an dem Tag nichts anzuzeigen gibt.
+function dayOverview(daySlots, day, { withOff = true, onClick = null } = {}) {
+  const off = withOff ? offOn(day) : null;
+  const n = { confirmed: 0, done: 0, requested: 0, offered: 0, free: 0, missed: 0, failed: 0 };
+  const now = Date.now();
+  for (const s of daySlots) {
+    const b = activeBooking(s);
+    if (b) n[b.status === "confirmed" && b.actual_minutes !== null && b.actual_minutes !== undefined ? "done" : b.status]++;
+    else if (new Date(s.starts_at).getTime() >= now) n.free++;
+    else if ((s.bookings || []).some((x) => NOT_HELD_ICON[x.status])) n.failed++;
+    else n.missed++;
+  }
+  const total = daySlots.length, taken = n.confirmed + n.done;
+  const chip = (cls, text) => el("span", { class: "ov-chip " + cls }, text);
+  const chips = [off ? chip("off", offLabel(off)) : null];
+  if (total && taken === total) chips.push(chip("full", `✅ Voll belegt · ${taken} von ${total} ${n.done === total ? "gefahren" : "bestätigt"}`));
+  else if (total) chips.push(
+    chip("all", `${total} freigegeben`),
+    n.free ? chip("free", `${n.free} frei`) : null,
+    n.requested ? chip("req", `${n.requested} angefragt`) : null,
+    n.offered ? chip("offer", `${n.offered} angeboten`) : null,
+    n.confirmed ? chip("conf", `${n.confirmed} bestätigt`) : null,
+    n.done ? chip("done", `${n.done} gefahren`) : null,
+    n.failed ? chip("done", `${n.failed} ausgefallen`) : null,
+    n.missed ? chip("done", `${n.missed} nicht gebucht`) : null);
+  if (!chips.some(Boolean)) return null;
+  return onClick
+    ? el("button", { type: "button", class: "day-ov tap", title: "Im Kalender ansehen", onclick: (e) => { e.stopPropagation(); onClick(day); } }, chips)
+    : el("div", { class: "day-ov" }, chips);
+}
+// Text für Tage ohne Termine (Fahrlehrer): nur für heute und später interessant
+const noSlotsText = (day) => (dayStart(day) >= dayStart(new Date()) ? "Keine Termine freigegeben" : "—");
+
 // extras: weitere Einträge im Kalender, z. B. Prüfungen – [{ at, node }]
-function weekGrid(slots, renderSlot, onAddDay, extras = []) {
+// overview: nur Fahrlehrer – zeigt je Tag die Zusammenfassung über den Terminen
+function weekGrid(slots, renderSlot, onAddDay, extras = [], overview = false) {
   const today = new Date();
   const days = [];
   const r = viewRange();
@@ -1584,8 +1626,9 @@ function weekGrid(slots, renderSlot, onAddDay, extras = []) {
     },
       el("div", { class: "day-head" }, el("span", {}, fmtDay(day)),
         onAddDay ? el("button", { class: "plus", title: "Termin an diesem Tag anlegen", onclick: (e) => { e.stopPropagation(); onAddDay(day); } }, "+") : null),
+      overview ? dayOverview(daySlots, day, { withOff: false }) : null,
       dayExtras,
-      daySlots.length ? daySlots.map(renderSlot) : dayExtras.length ? null : el("div", { class: "empty" }, "—"),
+      daySlots.length ? daySlots.map(renderSlot) : dayExtras.length ? null : el("div", { class: "empty" }, overview ? noSlotsText(day) : "—"),
     ));
   }
   if (!isPhone()) return el("div", { class: "week" }, days);
@@ -1620,6 +1663,7 @@ async function adminToday() {
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
   ]);
   if (error) throw error;
+  await loadTimeOff();
   // je Termin: bestätigte Fahrstunde oder (falls ausgefallen) der zuletzt eingetragene Ausfall
   const lessons = (slots || []).map((s) => {
     const list = s.bookings || [];
@@ -1729,10 +1773,13 @@ async function adminToday() {
       .reduce((n, x) => n + (x.b.actual_minutes !== null ? x.b.actual_minutes : x.s.duration_min), 0);
     const fs = Math.round((minutes / LESSON_MIN) * 10) / 10;
     const todo = dayLessons.filter((x) => x.b.status === "confirmed" && x.b.actual_minutes === null && new Date(x.s.starts_at).getTime() <= now).length;
+    const overview = dayOverview((slots || []).filter((s) => sameDay(new Date(s.starts_at), day)), day,
+      { onClick: (d) => { showDate(d); goTab("calendar"); } });
     days.push(el("div", { class: "day" + (sameDay(day, new Date()) ? " today" : "") },
       el("div", { class: "day-head" }, el("span", {}, (sameDay(day, new Date()) ? "Heute · " : "") + fmtDay(day)),
         el("span", { class: "ctl-sum" }, [minutes ? `${fs.toLocaleString("de-DE")} FS · ${minutes} Min.` : "", todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
-      items.length ? items.map((x) => x.node) : el("div", { class: "empty" }, "—")));
+      overview,
+      items.length ? items.map((x) => x.node) : overview ? null : el("div", { class: "empty" }, noSlotsText(day))));
   }
   const view = el("div", { class: "today-view" },
     // Schnellzugriff: neue Fahrstunden/Prüfung anlegen oder zum Kalender (Wochen planen)
@@ -1827,7 +1874,7 @@ async function adminCalendar() {
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
       null);
-  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras));
+  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras), true);
 
   return el("div", {},
     el("div", { class: "actions", style: "margin:0 0 12px" },
