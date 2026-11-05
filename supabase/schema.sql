@@ -137,6 +137,30 @@ create table if not exists public.time_off (
 );
 create index if not exists time_off_teacher_idx on public.time_off (teacher_id, from_day);
 
+-- Gegenangebot: ursprüngliche Zeit des Termins, falls der Schüler ablehnt
+alter table public.bookings add column if not exists counter_from timestamptz;
+
+-- Vom Fahrlehrer gehaltene Theoriestunden (nur für seine Monatsübersicht)
+create table if not exists public.theory_lessons (
+  id            uuid primary key default gen_random_uuid(),
+  teacher_id    uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  held_at       timestamptz not null,
+  duration_min  int not null check (duration_min between 5 and 600),
+  note          text check (char_length(note) <= 200),
+  created_at    timestamptz not null default now()
+);
+create index if not exists theory_teacher_idx on public.theory_lessons (teacher_id, held_at);
+
+-- Lohnangaben – bewusst NICHT in settings, die auch Schüler lesen dürfen
+create table if not exists public.teacher_pay (
+  teacher_id    uuid primary key references public.profiles(id) on delete cascade,
+  lesson_rate   numeric(10,2) check (lesson_rate >= 0),
+  theory_bonus  numeric(10,2) check (theory_bonus >= 0),
+  exam_bonus    numeric(10,2) check (exam_bonus >= 0),
+  night_bonus   numeric(10,2) check (night_bonus >= 0),
+  updated_at    timestamptz not null default now()
+);
+
 -- Prüfungen (Theorie/Praxis): Termin + Ergebnis; bei „nicht bestanden“ folgt ein neuer Termin
 create table if not exists public.exams (
   id          uuid primary key default gen_random_uuid(),
@@ -524,6 +548,7 @@ declare
   n_slots int; n_exams int; n_off int; n_students int;
 begin
   if not is_teacher() then raise exception 'Nur Fahrlehrer können alte Daten löschen'; end if;
+  delete from theory_lessons where teacher_id = me and held_at < v_cut;
   delete from slots where teacher_id = me and starts_at < v_cut;           -- Buchungen werden mitgelöscht
   get diagnostics n_slots = row_count;
   delete from exams where student_teacher(student_id) = me and exam_at < v_cut;
@@ -798,16 +823,23 @@ end $$;
 -- Angebot des Fahrlehrers zusagen (→ bestätigt) oder absagen (→ Termin wieder frei)
 create or replace function public.respond_offer(p_booking uuid, p_accept boolean, p_note text)
 returns void language plpgsql security definer set search_path = public as $$
+declare v_slot uuid; v_from timestamptz;
 begin
   if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  select b.slot_id, b.counter_from into v_slot, v_from
+  from bookings b join slots s on s.id = b.slot_id
+  where b.id = p_booking and b.student_id = auth.uid() and b.status = 'offered' and s.starts_at > now();
+  if v_slot is null then raise exception 'Dieses Angebot ist nicht mehr offen'; end if;
   update bookings b set
     status = case when p_accept then 'confirmed' else 'declined' end,
     student_note = coalesce(nullif(left(trim(coalesce(p_note, '')), 300), ''), b.student_note),
+    counter_from = null,
     decided_at = now()
-  from slots s
-  where b.id = p_booking and s.id = b.slot_id and b.student_id = auth.uid()
-    and b.status = 'offered' and s.starts_at > now();
-  if not found then raise exception 'Dieses Angebot ist nicht mehr offen'; end if;
+  where b.id = p_booking;
+  -- Gegenangebot abgelehnt: Termin wieder zur angelegten Zeit
+  if not p_accept and v_from is not null then
+    update slots set starts_at = v_from where id = v_slot;
+  end if;
 end $$;
 
 -- Eigene, noch nicht bestätigte Anfrage zurückziehen
@@ -970,3 +1002,17 @@ grant execute on function public.set_teacher_valid(uuid, date) to authenticated;
 grant execute on function public.teacher_valid(uuid) to authenticated;
 grant execute on function public.password_changed() to authenticated;
 grant execute on function public.public_teachers() to anon, authenticated;
+
+-- Theorie und Lohn: nur der Fahrlehrer selbst (auch nicht Betreiber oder andere Fahrlehrer)
+alter table public.theory_lessons enable row level security;
+alter table public.teacher_pay    enable row level security;
+drop policy if exists theory_own on public.theory_lessons;
+create policy theory_own on public.theory_lessons for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+drop policy if exists pay_own on public.teacher_pay;
+create policy pay_own on public.teacher_pay for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+grant select, insert, update, delete on public.theory_lessons to authenticated;
+grant select, insert, update, delete on public.teacher_pay to authenticated;

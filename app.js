@@ -2442,7 +2442,7 @@ function earlierTarget(lesson, others) {
 
 // Vor dem Bestätigen fragen, ob überschneidende freie Termine verschoben werden sollen.
 // Ergebnis: false = abgebrochen, sonst Anzahl der verschobenen Termine.
-async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur }) {
+async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur, verb = "bestätigen" }) {
   const oldMs = new Date(oldStart).getTime(), newMs = new Date(newStart).getTime();
   if (oldMs === newMs && oldDur === newDur) return 0;
   const from = new Date(newMs); from.setHours(0, 0, 0, 0);
@@ -2472,7 +2472,7 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur 
       resolve(n);
     };
     modal.addEventListener("close", onClose, { once: true });
-    const yes = el("button", { class: "btn ok" }, moves.length ? "✓ Ja, verschieben & bestätigen" : "Trotzdem bestätigen");
+    const yes = el("button", { class: "btn ok" }, moves.length ? `✓ Ja, verschieben & ${verb}` : `Trotzdem ${verb}`);
     yes.onclick = () => busy(yes, async () => {
       if (moves.length) {
         // Könnte in der Zwischenzeit jemand einen dieser Termine gebucht haben?
@@ -2486,7 +2486,7 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur 
       }
       finish(moves.length);
     });
-    const onlyConfirm = moves.length ? el("button", { class: "btn" }, "Nur bestätigen, nichts verschieben") : null;
+    const onlyConfirm = moves.length ? el("button", { class: "btn" }, `Nur ${verb}, nichts verschieben`) : null;
     if (onlyConfirm) onlyConfirm.onclick = () => finish(0);
     openModal(moves.length ? "Termine verschieben?" : "Überschneidung",
       el("p", {}, el("b", {}, name), ` fährt dann ${fmtRange(iso(newMs), newDur)} Uhr.`),
@@ -2518,11 +2518,43 @@ function attestButton(b, onDone) {
   }); };
   return btn;
 }
+// Schüler wünscht eine andere Zeit, Fahrlehrer schlägt seinerseits eine Uhrzeit vor – der Schüler muss zusagen
+function openCounterOffer(b, slot) {
+  const origStart = slot.starts_at;   // falls der Schüler ablehnt, zurück zu dieser Zeit
+  const date = el("input", { type: "date", value: dateInput(slot.starts_at) });
+  const time = el("input", { type: "time", value: timeInput(b.wish_start || slot.starts_at), step: 300 });
+  const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. 10:30 Uhr würde bei mir passen." }, b.admin_reply || "");
+  const btn = el("button", { class: "btn ok" }, "📨 Gegenangebot senden");
+  btn.onclick = () => busy(btn, async () => {
+    const chosen = fromInputs(date.value, time.value);
+    if (isNaN(chosen)) throw new Error("Bitte Datum und Uhrzeit angeben");
+    if (chosen.getTime() <= Date.now()) throw new Error("Die Uhrzeit liegt in der Vergangenheit");
+    const note = reply.value.trim();
+    const moved = await askShiftSlots({ slotId: slot.id, name: fullName(b.profiles), oldStart: slot.starts_at, oldDur: slot.duration_min, newStart: chosen, newDur: slot.duration_min, verb: "senden" });
+    if (moved === false) return;
+    const { error: e1 } = await sb.from("slots").update({ starts_at: chosen.toISOString() }).eq("id", slot.id);
+    if (e1) throw e1;
+    const { error: e2 } = await sb.from("bookings").update({ status: "offered", counter_from: origStart, admin_reply: note || null }).eq("id", b.id);
+    if (e2) {
+      await sb.from("slots").update({ starts_at: origStart }).eq("id", slot.id);
+      throw e2;
+    }
+    pushNotify("booking", b.id, "offered");
+    notifyStep("Gegenangebot gesendet" + movedText(moved), b.profiles && b.profiles.phone,
+      waTextForStudent("offered", b.profiles, { ...slot, starts_at: chosen.toISOString() }, note, meetingOf(b.meeting_point ? b : slot)));
+  });
+  openModal(`⏱ Gegenangebot an ${fullName(b.profiles)}`,
+    el("p", {}, `Angelegt: ${fmtTime(slot.starts_at)} Uhr`, b.wish_start ? ` · Wunsch: ${fmtTime(b.wish_start)} Uhr` : ""),
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Dein Vorschlag"), time)),
+    el("label", {}, "Nachricht an den Schüler (optional)"), reply,
+    el("p", { class: "muted small" }, "Der Schüler muss in der App zusagen. Bis dahin ist der Termin für ihn reserviert. Lehnt er ab, wird der Termin wieder frei und steht wieder zur angelegten Zeit im Kalender."),
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
 const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Termine"} verschoben` : "");
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,counter_from,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -2597,6 +2629,7 @@ async function openAdminSlot(slotId) {
         if (!confirm("Angebot zurückziehen? Der Termin wird wieder frei.")) return;
         const { error } = await sb.from("bookings").delete().eq("id", b.id);
         if (error) throw error;
+        if (b.counter_from) await sb.from("slots").update({ starts_at: b.counter_from }).eq("id", slot.id);  // Gegenangebot: zurück zur angelegten Zeit
         done("Angebot zurückgezogen – Termin ist wieder frei.");
       });
       parts.push(el("div", { class: "notice" }, "Der Schüler muss in der App zusagen oder absagen."), el("div", { class: "actions" }, remind, withdraw));
@@ -2623,7 +2656,8 @@ async function openAdminSlot(slotId) {
         pushNotify("booking", b.id, "rejected");
         notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, slot, reply.value.trim()));
       });
-      parts.push(el("div", { class: "actions" }, ok, no));
+      const counter = b.wish_start ? el("button", { class: "btn", onclick: () => openCounterOffer(b, slot) }, "⏱ Gegenangebot") : null;
+      parts.push(el("div", { class: "actions" }, ok, counter, no));
     } else {
       const save = el("button", { class: "btn" }, "Änderungen speichern");
       save.onclick = () => busy(save, async () => {
@@ -3000,7 +3034,8 @@ async function adminRequests() {
       pushNotify("booking", b.id, "rejected");
       notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, b.slots, ""));
     });
-    return el("div", { class: "actions", style: "margin-top:8px" }, ok, orig, no);
+    const counter = b.wish_start ? el("button", { class: "btn small", onclick: () => openCounterOffer(b, b.slots) }, "⏱ Gegenangebot") : null;
+    return el("div", { class: "actions", style: "margin-top:8px" }, ok, orig, counter, no);
   };
 
   return el("div", {},
@@ -3945,11 +3980,11 @@ const monthName = (d) => d.toLocaleDateString("de-DE", { month: "long", year: "n
 
 async function loadControlRows(from, to) {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,transferred_at,profiles(first_name,last_name,license_class),slots!inner(starts_at,duration_min)")
+    .select("id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,transferred_at,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min)")
     .gte("slots.starts_at", from.toISOString()).lt("slots.starts_at", to.toISOString());
   if (error) throw error;
-  // Gefahrene (abgehakte) Fahrstunden + kostenpflichtige Fehlstunden
-  return data.filter((b) => b.slots && ((b.status === "confirmed" && b.actual_minutes !== null) || b.late_cancel))
+  // Alle bestätigten Fahrstunden (abgehakt oder noch nicht) + kostenpflichtige Fehlstunden
+  return data.filter((b) => b.slots && (b.status === "confirmed" || b.late_cancel))
     .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
 }
 const controlKind = (b) => (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : "Fehlstunde (kostenpflichtig)");
@@ -3967,9 +4002,18 @@ async function adminControl() {
   const m = state.controlMonth || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   state.controlMonth = m;
   const from = new Date(m.getFullYear(), m.getMonth(), 1), to = new Date(m.getFullYear(), m.getMonth() + 1, 1);
-  const rows = await loadControlRows(from, to);
+  const [allRows, examRes, theoryRes, payRes] = await Promise.all([
+    loadControlRows(from, to),
+    sb.from("exams").select("id,exam_at,duration_min").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
+    sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
+    sb.from("teacher_pay").select("*").eq("teacher_id", state.profile.id).maybeSingle(),
+  ]);
+  const isTicked = (b) => b.status === "confirmed" && b.actual_minutes !== null;
+  const isFinished = (b) => isTicked(b) || b.status !== "confirmed";
+  // Abrechnung und Übertragen betreffen nur Abgehaktes und Fehlstunden
+  const rows = allRows.filter(isFinished);
   const openOnly = !!state.controlOpenOnly;
-  const shown = openOnly ? rows.filter((b) => !b.transferred_at) : rows;
+  const shown = openOnly ? allRows.filter((b) => !b.transferred_at) : allRows;
   const openCount = () => rows.filter((b) => !b.transferred_at).length;
   const openInfo = el("span", { class: "small" });
   const updateOpen = () => (openInfo.textContent = openCount() ? `Noch zu übertragen: ${openCount()}` : "✓ Alles übertragen");
@@ -3980,14 +4024,38 @@ async function adminControl() {
     if (error) throw error;
     list.forEach((b) => (b.transferred_at = on ? new Date().toISOString() : null));
   }
+  // Noch nicht abgehakt: deutlich markiert, ab 45 Min. vor Beginn direkt hier abhaken
+  const saveTick = async (b, patch, msg) => {
+    const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
+    if (error) throw error;
+    toast(msg);
+    render();
+  };
+  const todoLine = (b) => {
+    const start = new Date(b.slots.starts_at).getTime(), nowMs = Date.now();
+    const over = start + b.slots.duration_min * 60000 <= nowMs;
+    const canTick = nowMs >= start - 45 * 60000;
+    const tick = canTick ? el("button", { type: "button", class: "tr-tick", title: `Gefahren – ${b.slots.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
+      if (askSchalt(b)) return openSchaltAsk(b, b.slots.duration_min, saveTick);
+      const btn = ev.currentTarget; btn.disabled = true;
+      try { await saveTick(b, { actual_minutes: b.slots.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(b.profiles)}: ${b.slots.duration_min} Min. gefahren`); }
+      catch (e) { btn.disabled = false; fail(e); }
+    } }, "✓") : null;
+    return el("div", { class: "cl-row todo" + (over ? " over" : "") },
+      el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
+      el("button", { type: "button", class: "cl-name name-link", title: "Termin öffnen", onclick: () => openAdminSlot(b.slots.id) }, fullName(b.profiles)),
+      el("span", { class: "cl-flag" }, over ? "nicht abgehakt" : "geplant", ` · ${b.slots.duration_min} Min.`),
+      tick);
+  };
   // Eine Zeile: Uhrzeit · Name · Minuten · Haken „übertragen“
   const line = (b) => {
+    if (!isFinished(b)) return todoLine(b);
     const ok = b.status === "confirmed";
     const box = el("input", { type: "checkbox", checked: !!b.transferred_at, title: "Ins Fahrschulsystem übertragen", "aria-label": "Übertragen" });
     const row = el("label", { class: "cl-row" + (ok ? "" : " late") + (b.transferred_at ? " sent" : "") },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
-      el("b", { class: "cl-min" }, ok ? `${b.actual_minutes} Min.` : "Fehlstunde"),
+      el("b", { class: "cl-min" }, ok ? `✓ ${b.actual_minutes} Min.` : "Fehlstunde"),
       box);
     box.addEventListener("change", async () => {
       box.disabled = true;
@@ -4005,8 +4073,17 @@ async function adminControl() {
     if (!d) days.push((d = { key, list: [] }));
     d.list.push(b);
   }
-  const dayMin = (list) => list.filter((b) => b.status === "confirmed").reduce((n, b) => n + b.actual_minutes, 0);
+  const dayMin = (list) => list.filter(isTicked).reduce((n, b) => n + b.actual_minutes, 0);
   const driven = rows.filter((b) => b.status === "confirmed"), totalMin = dayMin(rows), late = rows.length - driven.length;
+  const notTicked = allRows.filter((b) => !isFinished(b) && new Date(b.slots.starts_at).getTime() + b.slots.duration_min * 60000 <= Date.now()).length;
+  // Monatsübersicht: Prüfungen, Theorie, Gesamtzeit, unverbindlicher Lohn
+  const examsDone = (examRes.data || []).filter((e) => new Date(e.exam_at).getTime() <= Date.now());
+  const examMin = examsDone.reduce((n, e) => n + (e.duration_min || 55), 0);
+  const theory = theoryRes.data || [];
+  const theoryMin = theory.reduce((n, t) => n + t.duration_min, 0);
+  const nightMin = driven.filter((b) => b.lesson_type === "nacht").reduce((n, b) => n + b.actual_minutes, 0);
+  const allMin = totalMin + theoryMin + examMin;
+  const monthCard = monthOverview({ examCount: examsDone.length, theory, theoryMin, allMin, drivenMin: totalMin, nightMin, pay: payRes.data || null, schemaOk: !theoryRes.error });
 
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
   const next = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); render(); } }, "›");
@@ -4015,6 +4092,7 @@ async function adminControl() {
   const totals = el("div", { class: "cl-totals" },
     el("div", {}, el("b", {}, String(driven.length)), el("span", {}, "Fahrstunden")),
     el("div", {}, el("b", {}, String(totalMin)), el("span", {}, "Minuten")),
+    notTicked ? el("div", { class: "warn" }, el("b", {}, String(notTicked)), el("span", {}, "nicht abgehakt")) : null,
     late ? el("div", { class: "warn" }, el("b", {}, String(late)), el("span", {}, late === 1 ? "Fehlstunde" : "Fehlstunden")) : null);
 
   return el("div", {},
@@ -4027,6 +4105,7 @@ async function adminControl() {
       el("div", { class: "actions" },
         el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows) }, "📊 Excel"),
         el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows) }, "🖨️ Drucken / PDF"))),
+    monthCard,
     days.length ? el("div", { class: "card cl-list" },
       days.map((d) => el("div", { class: "cl-day" },
         el("div", { class: "cl-head" },
@@ -4034,7 +4113,101 @@ async function adminControl() {
           el("b", {}, dayMin(d.list) ? `${dayMin(d.list)} Min.` : "–")),
         d.list.map(line))),
       el("div", { class: "cl-sum" }, el("span", {}, `Monat gesamt · ${driven.length} Fahrstunde${driven.length === 1 ? "" : "n"}` + (late ? ` · ${late} Fehlstd.` : "")), el("b", {}, `${totalMin} Min.`)))
-      : el("p", { class: "muted" }, openOnly && rows.length ? "Alles übertragen – nichts mehr offen. 👍" : "In diesem Monat gibt es noch keine gefahrenen Fahrstunden."));
+      : el("p", { class: "muted" }, openOnly && allRows.length ? "Alles übertragen – nichts mehr offen. 👍" : "In diesem Monat gibt es noch keine bestätigten Fahrstunden."));
+}
+
+// Gesamtzeit gut lesbar
+const fmtHours = (min) => (min >= 60 ? `${Math.floor(min / 60)} Std.${min % 60 ? ` ${min % 60} Min.` : ""}` : `${min} Min.`);
+const euro = (v) => (+v || 0).toLocaleString("de-DE", { style: "currency", currency: "EUR" });
+// Unverbindliche Brutto-Schätzung: Sätze je 45 Minuten, Prüfungszuschlag je Prüfung; Fehlstunden zählen nicht mit
+function payEstimate(pay, d) {
+  const per45 = (rate, min) => (+rate || 0) * min / LESSON_MIN;
+  const parts = [
+    ["Fahrstunden", per45(pay.lesson_rate, d.drivenMin), +pay.lesson_rate > 0],
+    ["Zuschlag Theorie", per45(pay.theory_bonus, d.theoryMin), +pay.theory_bonus > 0],
+    ["Zuschlag Prüfungen", (+pay.exam_bonus || 0) * d.examCount, +pay.exam_bonus > 0],
+    ["Zuschlag Nachtfahrten", per45(pay.night_bonus, d.nightMin), +pay.night_bonus > 0],
+  ].filter((x) => x[2]);
+  return { parts, total: parts.reduce((n, x) => n + x[1], 0) };
+}
+function monthOverview(d) {
+  const addTheory = el("button", { class: "btn small", onclick: () => openTheoryForm() }, "➕ Theorie eintragen");
+  const theoryList = d.theory.length ? el("details", { class: "fold" },
+    el("summary", {}, `Theoriestunden (${d.theory.length})`),
+    d.theory.map((t) => {
+      const del = el("button", { type: "button", class: "btn small ghost danger-text" }, "Löschen");
+      del.onclick = () => busy(del, async () => {
+        if (!confirm("Diese Theoriestunde löschen?")) return;
+        const { error } = await sb.from("theory_lessons").delete().eq("id", t.id);
+        if (error) throw error;
+        render();
+      });
+      return el("div", { class: "cl-row", style: "cursor:default" },
+        el("span", { class: "cl-name" }, `${fmtDay(t.held_at)} ${fmtTime(t.held_at)}${t.note ? ` · ${t.note}` : ""}`),
+        el("b", { class: "cl-min" }, `${t.duration_min} Min.`), del);
+    })) : null;
+  const pay = d.pay || {};
+  const est = payEstimate(pay, d);
+  const field = (label, key) => {
+    const input = el("input", { type: "number", min: 0, step: "0.01", inputmode: "decimal", value: pay[key] ?? "", placeholder: "0,00" });
+    return { key, input, node: el("div", {}, el("label", {}, label), input) };
+  };
+  const fields = [field("Fahrstunde, brutto je 45 Min. (€)", "lesson_rate"), field("Zuschlag Theorie je 45 Min. (€)", "theory_bonus"),
+    field("Zuschlag je Prüfung (€)", "exam_bonus"), field("Zuschlag Nachtfahrt je 45 Min. (€)", "night_bonus")];
+  const save = el("button", { class: "btn small" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    const row = { teacher_id: state.profile.id, updated_at: new Date().toISOString() };
+    for (const f of fields) {
+      const v = f.input.value === "" ? null : +f.input.value;
+      if (v !== null && (isNaN(v) || v < 0 || v > 100000)) throw new Error("Bitte gültige Beträge eintragen");
+      row[f.key] = v;
+    }
+    const { error } = await sb.from("teacher_pay").upsert(row);
+    if (error) throw error;
+    toast("Lohnangaben gespeichert.");
+    render();
+  });
+  return el("div", { class: "card" },
+    el("h3", { class: "sec-title", style: "margin-top:0" }, "📈 Monatsübersicht"),
+    el("div", { class: "cl-totals" },
+      el("div", {}, el("b", {}, String(d.examCount)), el("span", {}, d.examCount === 1 ? "Prüfung" : "Prüfungen")),
+      el("div", {}, el("b", {}, String(d.theory.length)), el("span", {}, "Theoriestunden")),
+      el("div", {}, el("b", {}, fmtHours(d.allMin)), el("span", {}, "Gesamtzeit"))),
+    el("p", { class: "muted small", style: "margin:6px 0" }, "Gesamtzeit = abgehakte Fahrstunden, Theorie und Prüfungen."),
+    el("div", { class: "actions", style: "margin:0" }, addTheory),
+    theoryList,
+    el("hr"),
+    el("h3", { class: "sec-title", style: "margin-top:0" }, "💶 Einnahmen brutto (unverbindlich)"),
+    est.parts.length ? [
+      est.parts.map(([label, value]) => el("div", { class: "cl-row", style: "cursor:default" }, el("span", { class: "cl-name" }, label), el("b", { class: "cl-min" }, euro(value)))),
+      el("div", { class: "cl-sum" }, el("span", {}, "Ungefähr brutto"), el("b", {}, euro(est.total))),
+      el("p", { class: "muted small", style: "margin:6px 0 0" }, "Nur eine Schätzung, keine Lohnabrechnung. Fehlstunden sind nicht eingerechnet."),
+    ] : el("p", { class: "muted small" }, "Trag unten deinen Lohn ein, dann rechnet die App die Einnahmen aus."),
+    el("details", { class: "fold", open: !est.parts.length },
+      el("summary", {}, "Lohn und Zuschläge eintragen"),
+      el("p", { class: "muted small" }, "Nur du siehst diese Angaben. Schüler und andere Fahrlehrer sehen sie nicht."),
+      fields.map((f) => f.node),
+      el("div", { class: "actions" }, save)));
+}
+function openTheoryForm() {
+  const now = new Date();
+  const date = el("input", { type: "date", value: dateInput(now) });
+  const time = el("input", { type: "time", value: "18:00", step: 300 });
+  const dur = durationControl(90);
+  const note = el("input", { maxlength: 200, placeholder: "z. B. Thema 5 (optional)" });
+  const btn = el("button", { class: "btn ok" }, "✓ Theorie speichern");
+  btn.onclick = () => busy(btn, async () => {
+    const start = fromInputs(date.value, time.value);
+    if (isNaN(start)) throw new Error("Bitte Datum und Uhrzeit angeben");
+    const { error } = await sb.from("theory_lessons").insert({ teacher_id: state.profile.id, held_at: start.toISOString(), duration_min: dur.value, note: note.value.trim() || null });
+    if (error) throw error;
+    closeModal(); toast("Theoriestunde eingetragen."); render();
+  });
+  openModal("📚 Theorie eintragen",
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
+    el("label", {}, "Dauer"), dur.node,
+    el("label", {}, "Notiz"), note,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
 const controlTable = (rows) => rows.map((b) => [
@@ -4400,6 +4573,7 @@ async function studentMine() {
           b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null),
         el("span", { class: "badge " + badge[0] }, badge[1]),
         b.status === "requested" && b.wish_start ? el("div", { class: "lesson-hint" }, `⏰ Deine Wunschzeit: ${fmtTime(b.wish_start)} Uhr (ohne Garantie)`) : null,
+        isOffer && b.wish_start ? el("div", { class: "lesson-hint" }, `⏱ Gegenangebot deines Fahrlehrers. Dein Wunsch war ${fmtTime(b.wish_start)} Uhr.`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
         canCancel ? el("div", { class: "lesson-hint muted" }, isLate(b.slots.starts_at)

@@ -799,3 +799,11 @@ html.dark .btn.cancel-strong { color: #ff8a80; border-color: #ff8a80; }
 .slot-with-cancel .cancel-strong { display: block; width: 100%; margin: 6px 0 10px; }
 /* Kalender: freier Termin kann früher beginnen */
 .slot-early { display: block; width: fit-content; max-width: 100%; margin-top: 5px; padding: 3px 8px; border-radius: 8px; background: #2fb36d; color: #fff; font-size: 13px; font-weight: 700; }
+
+/* Kontrolle: noch nicht abgehakte Fahrstunden */
+.cl-row.todo { cursor: default; border-left: 3px solid var(--border); padding-left: 6px; margin-left: -9px; }
+.cl-row.todo.over { border-left-color: #f5a623; background: #f5a6231a; border-radius: 0 8px 8px 0; }
+.cl-row.todo .cl-name { text-align: left; }
+.cl-flag { flex: 0 0 auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.cl-row.todo.over .cl-flag { color: #a86a00; font-weight: 700; }
+html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
