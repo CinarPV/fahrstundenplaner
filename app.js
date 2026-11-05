@@ -3703,7 +3703,7 @@ async function studentCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
-    sb.from("bookings").select("id,status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+    sb.from("bookings").select("id,slot_id,status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
     sb.from("exams").select("id,kind,exam_at,duration_min,result,note,meeting_point").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   const exams = myExams.data || [];
@@ -3732,14 +3732,20 @@ async function studentCalendar() {
       ? (s.status === "confirmed" ? "Deine Fahrstunde"
         : s.status === "offered" ? "📨 Für dich – bitte zusagen" : "Deine Anfrage – wartet")
       : s.status === "requested" ? el("span", {}, "Von jemandem angefragt", el("div", { class: "slot-hint" }, "↻ Wird evtl. wieder frei – schau später nochmal rein"))
+      : earlyStartMs(s) ? el("span", {}, "Antippen zum Anfragen", el("div", { class: "slot-early" }, `⏰ Auch früher möglich: ab ${fmtTime(new Date(earlyStartMs(s)))} Uhr`))
       : "Antippen zum Anfragen";
     const tag = s.mine && past ? "gefahren"
       : { free: "frei", requested: "angefragt", offered: "angeboten", confirmed: "bestätigt" }[s.status] || "";
     const clickable = s.mine || (s.status === "free" && !past);
-    return el("button", {
+    const slotBtn = el("button", {
       class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
       onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
     }, slotHead(fmtRange(s.starts_at, s.duration_min), tag), label);
+    // Jede eigene bestätigte Fahrstunde lässt sich direkt im Kalender absagen
+    const ownB = s.mine && s.status === "confirmed" && !past
+      ? (own.data || []).find((b) => b.slot_id === s.slot_id && b.actual_minutes === null && b.slots) : null;
+    return ownB ? el("div", { class: "slot-with-cancel" }, slotBtn,
+      el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(ownB) }, "✗ Fahrstunde absagen")) : slotBtn;
   }, null, offExtras(null).concat(examExtras));
 
   // Zugang läuft bald ab bzw. ist abgelaufen (Schonfrist) → Hinweis an den Schüler
@@ -3803,6 +3809,14 @@ function examBanner(e) {
     el("div", { class: "tk-motto" }, el("span", {}, "Du schaffst es"), easy, el("span", { class: "tk-luck" }, "Viel Erfolg 🍀")));
 }
 
+// Freier Termin, der auf Wunsch früher beginnen kann (Fahrstunde davor wurde vorgezogen): frühester Beginn, sonst null
+function earlyStartMs(s) {
+  if (!s.earlier_from || s.status !== "free") return null;
+  const base = new Date(s.starts_at).getTime();
+  const ms = Math.max(new Date(s.earlier_from).getTime(), base - 3600000);
+  return ms < base && ms > Date.now() + 15 * 60000 ? ms : null;
+}
+
 function openBooking(s) {
   const note = el("textarea", { maxlength: 300, placeholder: "Optional, z. B. „Kann ich am Bahnhof abgeholt werden?“" });
   const counter = el("div", { class: "muted small", style: "text-align:right" }, "0 / 300");
@@ -3811,17 +3825,18 @@ function openBooking(s) {
   const base = new Date(s.starts_at).getTime();
   s._wish = null;
   // Fahrlehrer hat die Fahrstunde davor vorgezogen: Dieser Termin kann auf Wunsch früher beginnen
-  const earlyMs = s.earlier_from ? Math.max(new Date(s.earlier_from).getTime(), base - 3600000) : null;
-  const hasEarly = earlyMs && earlyMs < base && earlyMs > Date.now() + 15 * 60000;
+  const earlyMs = earlyStartMs(s);
+  const hasEarly = !!earlyMs;
   const earlyMin = hasEarly ? Math.round((earlyMs - base) / 60000) : null;
   const wishSteps = [-60, -45, -30, -15, 0, 15, 30, 45, 60];
   if (hasEarly && !wishSteps.includes(earlyMin)) { wishSteps.push(earlyMin); wishSteps.sort((a, b) => a - b); }
   const wishBtns = wishSteps.filter((m) => m === 0 || base + m * 60000 > Date.now() + 15 * 60000).map((m) => el("button", {
-    type: "button", class: "tab" + (m === 0 ? " active" : ""),
+    type: "button", class: "tab" + (m === 0 ? " active" : "") + (hasEarly && m === earlyMin ? " early-tab" : ""),
     onclick: (e) => {
       s._wish = m ? new Date(base + m * 60000).toISOString() : null;
       wishBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget));
       wishHint.hidden = !m;
+      btn.textContent = m ? `Fahrstunde für ${fmtTime(s._wish)} Uhr anfragen` : "Fahrstunde anfragen";
     },
   }, fmtTime(new Date(base + m * 60000)) + (m === 0 ? " ✓" : "")));
   const wishHint = el("div", { class: "notice", hidden: true, style: "margin-top:8px" }, el("b", {}, "⚠️ Keine Garantie: "),
@@ -3855,9 +3870,12 @@ function openBooking(s) {
   openModal("Fahrstunde anfragen",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
     earlyBox,
+    el("div", { class: "wish-box" },
+      el("b", { class: "wish-box-title" }, "🕐 Andere Uhrzeit gewünscht?"),
+      el("div", {}, "Tippe einfach deine Wunschzeit an: bis zu 1 Stunde früher oder später. Dein Fahrlehrer entscheidet, ob es passt."),
+      el("div", { class: "tabs wish-tabs" }, wishBtns),
+      el("p", { class: "small muted", style: "margin:6px 0 0" }, "✓ = angegebene Uhrzeit, am sichersten."), wishHint),
     meetingBox(meetingOf(s)),
-    el("label", {}, "Passt dir die Uhrzeit nicht ganz? Wunsch-Beginn (bis zu 1 Std. früher oder später)"), el("div", { class: "tabs wish-tabs" }, wishBtns),
-    el("p", { class: "small muted", style: "margin:4px 0 0" }, "✓ = angegebene Uhrzeit – am sichersten. Eine andere Uhrzeit ist nur ein Wunsch, ohne Garantie."), wishHint,
     el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note, counter,
     el("div", { class: "notice" },
       el("b", {}, "Wichtig: "), "Nach der Bestätigung durch deinen Fahrlehrer ist die Fahrstunde verbindlich. ",

@@ -790,3 +790,12 @@ html.dark .ptr.ok { color: #6fdc9f; }
 .btn.cancel-strong { background: none; color: #c0392b; border: 2px solid #e5484d; font-weight: 700; }
 .btn.cancel-strong:active { background: #e5484d1f; }
 html.dark .btn.cancel-strong { color: #ff8a80; border-color: #ff8a80; }
+
+/* Schüler: Wunschzeit beim Anfragen nicht zu übersehen */
+.wish-box { margin: 8px 0 12px; padding: 12px; border: 2px solid var(--teal, #28b5b9); border-radius: 12px; background: #28b5b914; }
+.wish-box-title { display: block; font-size: 16px; margin-bottom: 4px; }
+.wish-box .wish-tabs { margin-top: 10px; }
+.wish-tabs .tab.early-tab:not(.active) { border: 2px solid #2fb36d; background: #2fb36d22; font-weight: 700; }
+.slot-with-cancel .cancel-strong { display: block; width: 100%; margin: 6px 0 10px; }
+/* Kalender: freier Termin kann früher beginnen */
+.slot-early { display: block; width: fit-content; max-width: 100%; margin-top: 5px; padding: 3px 8px; border-radius: 8px; background: #2fb36d; color: #fff; font-size: 13px; font-weight: 700; }
