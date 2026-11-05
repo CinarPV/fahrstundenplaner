@@ -816,3 +816,16 @@ html.dark .btn.cancel-strong { color: #ff8a80; border-color: #ff8a80; }
 .cl-flag { flex: 0 0 auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .cl-row.todo.over .cl-flag { color: #a86a00; font-weight: 700; }
 html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
+
+/* Erfolgsmeldung deutlich grün, größer, länger sichtbar */
+.toast.ok { background: #1f8f4e; color: #fff; font-size: 16px; font-weight: 700; padding: 14px 20px; border-radius: 12px; animation: toast-pop .25s ease-out; }
+@keyframes toast-pop { from { transform: translateX(-50%) scale(.92); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+.btn.saved, .btn.saved:disabled { background: #1f8f4e; border-color: #1f8f4e; color: #fff; opacity: 1; }
+
+/* Theorie (blau) und Sperrzeiten (grau mit Streifen) in Kalender und Heute */
+:root { --theory-bg: #e8efff; --theory-fg: #2a3f8f; --theory-bd: #9fb3f0; --block-bg: #eceff1; --block-fg: #37474f; --block-bd: #90a4ae; }
+.slot.theory { background: var(--theory-bg); color: var(--theory-fg); border: 2px solid var(--theory-bd); font-weight: 600; }
+.slot.block { background: repeating-linear-gradient(135deg, var(--block-bg), var(--block-bg) 8px, #e0e5e8 8px, #e0e5e8 16px); color: var(--block-fg); border: 2px dashed var(--block-bd); font-weight: 600; }
+.tr.theory { border-left-color: var(--theory-bd); background: var(--theory-bg); }
+.tr.block { border-left-color: var(--block-bd); background: repeating-linear-gradient(135deg, var(--block-bg), var(--block-bg) 8px, #e0e5e8 8px, #e0e5e8 16px); }
+.block-row { border-left: 4px solid var(--block-bd); padding: 2px 0 8px 10px; margin: 8px 0; }

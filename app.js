@@ -39,11 +39,12 @@ function el(tag, attrs, ...children) {
 
 function toast(msg, isError) {
   const t = document.getElementById("toast");
-  t.textContent = msg;
-  t.className = "toast" + (isError ? " error" : "");
+  t.textContent = isError || /^[✓✔]/.test(msg) ? msg : "✓ " + msg;
+  t.className = "toast" + (isError ? " error" : " ok");
   t.hidden = false;
+  if (!isError) toast._ok = Date.now();   // merkt sich: gerade wurde etwas erfolgreich gespeichert
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => (t.hidden = true), isError ? 6000 : 3000);
+  toast._t = setTimeout(() => (t.hidden = true), isError ? 6000 : 4000);
 }
 
 function fail(error) {
@@ -608,8 +609,16 @@ modal.addEventListener("close", () => { if (history.state && history.state.modal
 modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
 
 async function busy(button, fn) {
+  const t0 = Date.now();
+  let saved = false;
   if (button) button.disabled = true;
-  try { await fn(); } catch (e) { fail(e); } finally { if (button) button.disabled = false; }
+  try { await fn(); saved = (toast._ok || 0) >= t0; } catch (e) { fail(e); } finally { if (button) button.disabled = false; }
+  // Bleibt der Knopf sichtbar: kurz „✓ Gespeichert“ zeigen und gesperrt lassen (verhindert doppeltes Drücken)
+  if (saved && button && button.isConnected && button.offsetParent !== null) {
+    const old = button.textContent;
+    button.textContent = "✓ Gespeichert"; button.classList.add("saved"); button.disabled = true;
+    setTimeout(() => { button.textContent = old; button.classList.remove("saved"); button.disabled = false; }, 1800);
+  }
 }
 
 /* ---------------- Rechtstexte (Impressum, Datenschutz, AGB) ---------------- */
@@ -1565,8 +1574,51 @@ function sickShare(who, msg, sent, K = AWAY.krank) {
 async function loadTimeOff() {
   const { data } = await sb.from("time_off").select("id,from_day,to_day,note").order("from_day");
   state.timeOff = data || [];
+  // Sperrzeiten innerhalb eines Tages (z. B. 8–9 Uhr) ab gestern
+  const b = await sb.from("time_blocks").select("id,starts_at,duration_min,reason").gte("starts_at", addDays(dayStart(new Date()), -1).toISOString());
+  state.timeBlocks = b.data || [];
   return state.timeOff;
 }
+const blockAt = (startMs, durMin) => (state.timeBlocks || []).find((b) => { const s = new Date(b.starts_at).getTime(); return startMs < s + b.duration_min * 60000 && startMs + durMin * 60000 > s; });
+
+// Theorie und Sperrzeiten eines Zeitraums (für Kalender und Heute)
+async function loadPlanned(from, to) {
+  const [t, b] = await Promise.all([
+    sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
+    sb.from("time_blocks").select("id,starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
+  ]);
+  return { theory: t.data || [], blocks: b.data || [] };
+}
+function openPlanned(kind, x) {
+  const isT = kind === "theory", start = isT ? x.held_at : x.starts_at, text = isT ? x.note : x.reason;
+  const del = el("button", { class: "btn danger" }, "🗑 Löschen");
+  del.onclick = () => busy(del, async () => {
+    if (!confirm(isT ? "Diese Theoriestunde löschen?" : "Diese Sperrzeit löschen?")) return;
+    const { error } = await sb.from(isT ? "theory_lessons" : "time_blocks").delete().eq("id", x.id);
+    if (error) throw error;
+    closeModal(); toast(isT ? "Theoriestunde gelöscht." : "Sperrzeit gelöscht."); render();
+  });
+  openModal(isT ? "📚 Theorieunterricht" : "⛔ Gesperrt",
+    el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr`),
+    text ? el("p", {}, isT ? "Notiz: " : "Grund: ", text) : null,
+    el("div", { class: "actions" }, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+}
+// Einträge für die Kalender-Woche
+const plannedExtras = (p) => p.theory.map((t) => ({ at: t.held_at,
+  node: el("button", { class: "slot theory", onclick: (ev) => { ev.stopPropagation(); openPlanned("theory", t); } },
+    slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) }))
+  .concat(p.blocks.map((b) => ({ at: b.starts_at,
+    node: el("button", { class: "slot block", onclick: (ev) => { ev.stopPropagation(); openPlanned("block", b); } },
+      slotHead(fmtRange(b.starts_at, b.duration_min), "gesperrt"), "⛔ " + (b.reason || "Gesperrt")) })));
+// Einträge für „Heute“
+const plannedToday = (p, day) => p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
+  node: el("div", { class: "tr theory" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
+    el("span", { class: "tr-name" }, "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
+    el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("theory", t) }, "⋯"))) }))
+  .concat(p.blocks.filter((b) => sameDay(new Date(b.starts_at), day)).map((b) => ({ at: b.starts_at,
+    node: el("div", { class: "tr block" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(b.starts_at)),
+      el("span", { class: "tr-name" }, "⛔ " + (b.reason || "Gesperrt")), el("span", { class: "tr-pill" }, `bis ${fmtTime(addMin(b.starts_at, b.duration_min))}`),
+      el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("block", b) }, "⋯"))) })));
 const offOn = (day) => { const d = dateInput(day); return (state.timeOff || []).find((t) => d >= t.from_day && d <= t.to_day); };
 const fmtDayStr = (s) => new Date(s + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
 const offRange = (t) => (t.from_day === t.to_day ? fmtDayStr(t.from_day) : `${fmtDayStr(t.from_day)} – ${fmtDayStr(t.to_day)}`);
@@ -1723,11 +1775,12 @@ async function adminToday() {
   const dayList = [];
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (d.getDay() !== 0) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
-  const [{ data: slots, error }, { data: exams }] = await Promise.all([
+  const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
     sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
+    loadPlanned(from, to),
   ]);
   if (error) throw error;
   await loadTimeOff();
@@ -1851,6 +1904,7 @@ async function adminToday() {
   for (const day of dayList) {
     const items = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day)).map((x) => ({ at: x.s.starts_at, node: row(x) }))
       .concat((exams || []).filter((e) => sameDay(new Date(e.exam_at), day)).map((e) => ({ at: e.exam_at, node: examRow(e) })))
+      .concat(plannedToday(planned, day))
       .sort((a, b) => a.at.localeCompare(b.at));
     const dayLessons = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day));
     // Tagessumme: Minuten aller stattfindenden/gefahrenen Fahrstunden (gefahren = tatsächliche, sonst geplante Dauer);
@@ -1931,6 +1985,7 @@ async function adminCalendar() {
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
+  const planned = await loadPlanned(from, to);
   const { data: weekExams } = await sb.from("exams").select("id,kind,exam_at,duration_min,result,student_id,profiles(id,first_name,last_name,phone)")
     .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at");
   const examExtras = (weekExams || []).map((e) => ({ at: e.exam_at,
@@ -1960,7 +2015,7 @@ async function adminCalendar() {
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
       null);
-  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras), true);
+  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
 
   return el("div", {},
     el("div", { class: "actions", style: "margin:0 0 12px" },
@@ -2164,24 +2219,29 @@ function newSlotForm(opts = {}) {
     examNote.node,
     el("label", {}, "Hinweis (optional, sieht auch der Schüler)"), examHint);
   // Oben: Fahrstunde (Standard) oder Prüfung. Bei Fahrstunde darunter: freigeben oder einem Schüler zuordnen.
-  const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"]];
+  const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"], ["theory", "📚 Theorie"], ["block", "⛔ Sperrzeit"]];
   const kindBtns = KINDS.map(([k, text]) => el("button", { type: "button", class: "tab kind-tab" + (k === "exam" ? " exam-mode" : ""),
-    onclick: () => setMode(k === "exam" ? "exam" : lessonMode) }, text));
+    onclick: () => setMode(k === "lesson" ? lessonMode : k) }, text));
   const SUBS = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"]];
   let lessonMode = "free";
   const subBtns = SUBS.map(([m, text]) => el("button", { type: "button", class: "tab", onclick: () => setMode(m) }, text));
   const subRow = el("div", { class: "tabs", style: "flex-wrap:wrap" }, subBtns);
   async function setMode(m) {
     mode = m;
-    if (m !== "exam") lessonMode = m;
-    kindBtns.forEach((b, i) => b.classList.toggle("active", (KINDS[i][0] === "exam") === (m === "exam")));
+    if (m === "free" || m === "assign") lessonMode = m;
+    const kindOf = m === "free" || m === "assign" ? "lesson" : m;
+    const isLesson = kindOf === "lesson";
+    kindBtns.forEach((b, i) => b.classList.toggle("active", KINDS[i][0] === kindOf));
     subBtns.forEach((b, i) => b.classList.toggle("active", SUBS[i][0] === lessonMode));
-    subRow.hidden = m === "exam";
-    assignBox.hidden = m === "free";
+    subRow.hidden = !isLesson;
+    assignBox.hidden = m !== "assign";
     assignExtras.hidden = m === "exam";
     examBox.hidden = m !== "exam";
-    slotBox.hidden = m === "exam";
-    if (m !== "free" && !students) {
+    theoryBox.hidden = m !== "theory";
+    blockBox.hidden = m !== "block";
+    dayPick.hidden = m === "exam";
+    slotBox.hidden = !isLesson;
+    if ((m === "assign" || m === "exam") && !students) {
       studentList.replaceChildren(el("p", { class: "muted small" }, "Lädt …"));
       const { data, error } = await sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
         .eq("role", "student").eq("status", "active").order("last_name");
@@ -2236,6 +2296,35 @@ function newSlotForm(opts = {}) {
       : "Tippe die Tage an, an denen du Termine anlegen möchtest.";
   }
 
+  // Theorie: Beginn, Dauer, Notiz
+  const thTime = el("input", { type: "time", value: "18:00", step: 300 });
+  const thDur = durationControl(90);
+  const thNote = el("input", { maxlength: 200, placeholder: "z. B. Thema 5 (optional)" });
+  const theoryBox = el("div", { hidden: true }, el("label", {}, "Beginn"), thTime, el("label", {}, "Dauer"), thDur.node, el("label", {}, "Notiz"), thNote);
+  // Sperrzeiten: ein oder mehrere Zeiträume, jeder mit eigener Begründung
+  const blockRows = [];
+  const blockList = el("div", {});
+  const blockBox = el("div", { hidden: true }, el("label", {}, "Welche Zeiten sollen gesperrt sein?"), blockList);
+  function addBlockRow(from, to) {
+    const f = el("input", { type: "time", value: from, step: 300 }), t = el("input", { type: "time", value: to, step: 300 });
+    const r = el("input", { maxlength: 100, placeholder: "Begründung, z. B. Arzttermin" });
+    const row = { f, t, r };
+    const rm = el("button", { type: "button", class: "btn small ghost", "aria-label": "Zeitraum entfernen", onclick: () => {
+      if (blockRows.length < 2) return;
+      blockRows.splice(blockRows.indexOf(row), 1); row.node.remove(); refresh();
+    } }, "×");
+    row.node = el("div", { class: "block-row" },
+      el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), f), el("div", {}, el("label", {}, "Bis"), t)),
+      el("div", { class: "done-row" }, r, rm));
+    blockRows.push(row); blockList.append(row.node);
+    [f, t, r].forEach((i) => i.addEventListener("input", refresh));
+  }
+  addBlockRow("08:00", "09:00");
+  blockBox.append(el("div", { class: "actions", style: "margin:6px 0 0" },
+    el("button", { type: "button", class: "btn small ghost", onclick: () => { const last = blockRows[blockRows.length - 1]; addBlockRow(last.t.value || "11:00", last.t.value ? fromMin(Math.min(1439, toMin(last.t.value) + 60)) : "12:00"); refresh(); } }, "+ weiteren Zeitraum")));
+  [thTime, thNote].forEach((i) => i.addEventListener("input", refresh));
+  thDur.input.addEventListener("input", refresh);
+
   // Uhrzeiten: angeheftete Lieblings-Uhrzeiten (gespeichert) antippen = auswählen; × = Uhrzeit entfernen.
   // Neue Uhrzeiten (einzeln oder als Reihe) werden automatisch angeheftet.
   let pinned = timePresets();
@@ -2263,37 +2352,54 @@ function newSlotForm(opts = {}) {
     pinTimes([extra.value]); times = uniq(times.concat(extra.value)); extra.value = ""; refresh();
   } }, "+ Uhrzeit anheften");
 
-  let skippedOff = 0;
-  function build() {
-    skippedOff = 0;
+  let skippedOff = 0, skippedBlocked = 0;
+  // Tage, an denen angelegt wird (einzeln, mehrere im Kalender oder Wiederholung); gesperrte Urlaubstage fallen weg
+  function pickDays() {
+    const out = [];
     if (multi.checked) {
-      const nowMulti = Date.now(), out = [];
-      for (const key of [...picked].sort()) {
-        const day = fromInputs(key, "00:00");
-        if (offOn(day)) { skippedOff++; continue; }  // Urlaub/frei: überspringen
-        for (const t of times) {
-          const at = fromInputs(key, t);
-          if (at.getTime() > nowMulti) out.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
-        }
-      }
+      for (const key of [...picked].sort()) { const day = fromInputs(key, "00:00"); if (offOn(day)) skippedOff++; else out.push(day); }
       return out;
     }
     const start = fromInputs(date.value, "00:00");
-    if (isNaN(start)) return [];
-    const now = Date.now(), list = [];
+    if (isNaN(start)) return out;
     let end = start;
     if (repeat.checked) {
       end = fromInputs(until.value, "00:00");
-      if (isNaN(end) || end < start) return [];
+      if (isNaN(end) || end < start) return out;
       const max = addDays(start, 26 * 7);              // höchstens ein halbes Jahr auf einmal
       if (end > max) end = max;
     }
     for (let day = start; day <= end; day = addDays(day, 1)) {
       if (repeat.checked && !days.has(weekdayIndex(day))) continue;
       if (offOn(day)) { skippedOff++; continue; }  // Urlaub/frei: überspringen
-      for (const t of times) {
-        const at = fromInputs(dateInput(day), t);
-        if (at.getTime() > now) list.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
+      out.push(day);
+    }
+    return out;
+  }
+  // Ergebnis je nach Art: Fahrstunden, Theorie oder Sperrzeiten
+  function build() {
+    skippedOff = 0; skippedBlocked = 0;
+    const now = Date.now(), list = [];
+    for (const day of pickDays()) {
+      const key = dateInput(day);
+      if (mode === "block") {
+        for (const r of blockRows) {
+          if (!r.f.value || !r.t.value) continue;
+          const mins = toMin(r.t.value) - toMin(r.f.value);
+          if (mins <= 0) continue;
+          const at = fromInputs(key, r.f.value);
+          if (at.getTime() + mins * 60000 > now) list.push({ starts_at: at.toISOString(), duration_min: mins, reason: r.r.value.trim() });
+        }
+      } else if (mode === "theory") {
+        const at = fromInputs(key, thTime.value);
+        if (!isNaN(at)) list.push({ starts_at: at.toISOString(), duration_min: thDur.value, note: thNote.value.trim() });
+      } else {
+        for (const t of times) {
+          const at = fromInputs(key, t);
+          if (at.getTime() <= now) continue;
+          if (blockAt(at.getTime(), dur.value)) { skippedBlocked++; continue; }   // Sperrzeit: überspringen
+          list.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
+        }
       }
     }
     return list;
@@ -2301,7 +2407,7 @@ function newSlotForm(opts = {}) {
   function refresh() {
     renderStudents();
     renderCal();
-    btn.textContent = mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
+    btn.textContent = mode === "theory" ? "📚 Theorie anlegen" : mode === "block" ? "⛔ Sperrzeit eintragen" : mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
       : mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : mode === "exam" ? " exam-btn" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
@@ -2314,16 +2420,22 @@ function newSlotForm(opts = {}) {
         el("button", { type: "button", class: "unpin", "aria-label": `Uhrzeit ${t} entfernen`, title: "Uhrzeit entfernen",
           onclick: () => { pinned = pinned.filter((x) => x !== t); times = times.filter((x) => x !== t); saveTimePresets(pinned); refresh(); } }, "×"));
     }) : [el("span", { class: "muted small" }, "Noch keine Uhrzeiten angeheftet – unten eine Uhrzeit hinzufügen.")]));
+    preview.hidden = mode === "exam";
     const list = build();
+    const [n1, nn] = mode === "block" ? ["Sperrzeit", "Sperrzeiten"] : mode === "theory" ? ["Theoriestunde", "Theoriestunden"] : ["Termin", "Termine"];
+    const skipTxt = [skippedOff ? `🏖️ ${skippedOff} gesperrte${skippedOff === 1 ? "r Tag" : " Tage"} übersprungen` : "",
+      skippedBlocked ? `⛔ ${skippedBlocked} wegen Sperrzeit übersprungen` : ""].filter(Boolean).join(" · ");
+    const nDays = new Set(list.map((x) => dateInput(x.starts_at))).size;
     preview.replaceChildren(list.length
-      ? el("span", {}, el("b", {}, `${list.length} Termin${list.length > 1 ? "e" : ""}`),
-        multi.checked
-          ? ` · ${picked.size} Tag${picked.size === 1 ? "" : "e"} · ${times.length} Uhrzeit${times.length === 1 ? "" : "en"} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
-        : repeat.checked
-          ? ` · jeden ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
-          : ` · ${fmtDate(list[0].starts_at)} · ${times.map((t) => t + " Uhr").join(", ")}`,
-        skippedOff ? ` · 🏖️ ${skippedOff} gesperrte${skippedOff === 1 ? "r Tag" : " Tage"} übersprungen` : "")
-      : el("span", { class: "muted" }, multi.checked && !picked.size ? "Bitte oben im Kalender einen oder mehrere Tage antippen." : skippedOff ? "🏖️ Dieser Tag ist gesperrt (Urlaub/frei) – unter „Tage sperren“ änderbar." : times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen."));
+      ? el("span", {}, el("b", {}, `${list.length} ${list.length === 1 ? n1 : nn}`),
+        ` · ${nDays > 1 ? `${nDays} Tage · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}` : fmtDate(list[0].starts_at)}`,
+        mode !== "block" && mode !== "theory" && nDays === 1 ? ` · ${times.map((t) => t + " Uhr").join(", ")}` : "",
+        skipTxt ? ` · ${skipTxt}` : "")
+      : el("span", { class: "muted" }, multi.checked && !picked.size ? "Bitte oben im Kalender einen oder mehrere Tage antippen."
+        : skipTxt ? skipTxt + " – nichts zu tun."
+        : mode === "block" ? "Bitte Zeiträume prüfen („Bis“ muss nach „Von“ liegen, nur Zukunft)."
+        : mode === "lesson" || mode === "free" || mode === "assign" ? (times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen.")
+        : "Bitte Datum prüfen."));
   }
   [date, until].forEach((i) => i.addEventListener("input", refresh));
   date.addEventListener("input", () => { if (!repeat.checked) { days.clear(); days.add(weekdayIndex(fromInputs(date.value, "00:00"))); } });
@@ -2362,6 +2474,27 @@ function newSlotForm(opts = {}) {
       notifyStep(`${EXAM_KIND[examKind.value]} für ${fullName(student)} eingetragen`, student.phone, text);
       return;
     }
+    if (mode === "theory" || mode === "block") {
+      const items = build();
+      if (!items.length) throw new Error(mode === "block" ? "Bitte Tage und Zeiträume prüfen" : "Bitte Datum und Beginn prüfen");
+      if (mode === "theory") {
+        const { error } = await sb.from("theory_lessons").insert(items.map((x) => ({ teacher_id: state.profile.id, held_at: x.starts_at, duration_min: x.duration_min, note: x.note || null })));
+        if (error) throw error;
+        showDate(new Date(items[0].starts_at));
+        toast(`📚 ${items.length} Theoriestunde${items.length === 1 ? "" : "n"} angelegt.`); closeModal(); render();
+        return;
+      }
+      const { error } = await sb.from("time_blocks").insert(items.map((x) => ({ teacher_id: state.profile.id, starts_at: x.starts_at, duration_min: x.duration_min, reason: x.reason || null })));
+      if (error) throw error;
+      // Hinweis, falls in dieser Zeit schon freigegebene Termine liegen
+      const t0 = Math.min(...items.map((x) => new Date(x.starts_at).getTime())), t1 = Math.max(...items.map((x) => new Date(x.starts_at).getTime() + x.duration_min * 60000));
+      const { data: sl } = await sb.from("slots").select("starts_at,duration_min").gte("starts_at", new Date(t0 - 6 * 3600000).toISOString()).lt("starts_at", new Date(t1).toISOString());
+      const clash = (sl || []).filter((q) => items.some((x) => { const a = new Date(x.starts_at).getTime(), c = new Date(q.starts_at).getTime(); return c < a + x.duration_min * 60000 && c + q.duration_min * 60000 > a; })).length;
+      showDate(new Date(items[0].starts_at));
+      toast(`⛔ ${items.length} Sperrzeit${items.length === 1 ? "" : "en"} eingetragen.` + (clash ? ` ⚠️ ${clash} schon angelegte Termine liegen in dieser Zeit – bitte im Kalender prüfen.` : ""));
+      closeModal(); render();
+      return;
+    }
     const list = build();
     if (mode === "assign" && !student) throw new Error("Bitte einen Schüler auswählen");
     await meetSlot.commit();
@@ -2392,22 +2525,22 @@ function newSlotForm(opts = {}) {
   });
 
   refresh();
-  const slotBox = el("div", {});
+  const slotBox = el("div", {}), dayPick = el("div", {});
   const node = el("div", { class: opts.inModal ? "" : "card" },
     opts.inModal ? null : el("h3", {}, "Neue Fahrstunden anlegen"),
     el("div", { class: "tabs kind-tabs" }, kindBtns),
     subRow,
     assignBox,
     el("label", {}, "Datum"), date,
+    theoryBox,
+    blockBox,
     examBox,
+    dayPick,
     slotBox,
+    preview,
     el("div", { class: "actions" }, btn),
   );
   slotBox.append(
-    el("label", { class: "check repeat-toggle" }, multi, el("span", {}, el("b", {}, "📅 Mehrere Tage wählen"), " – einzelne Tage im Kalender antippen, die Uhrzeiten gelten für alle")),
-    multiBox,
-    el("label", { class: "check repeat-toggle", style: "margin-top:8px" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
-    repeatBox,
     el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,
     el("label", {}, "Uhrzeiten – antippen zum Auswählen"),
     timeChips,
@@ -2420,8 +2553,12 @@ function newSlotForm(opts = {}) {
         el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause)),
       el("div", { class: "actions" }, makeRow)),
     meetSlot.node,
-    preview,
   );
+  dayPick.append(
+    el("label", { class: "check repeat-toggle" }, multi, el("span", {}, el("b", {}, "📅 Mehrere Tage wählen"), " – einzelne Tage im Kalender antippen, die Uhrzeiten gelten für alle")),
+    multiBox,
+    el("label", { class: "check repeat-toggle", style: "margin-top:8px" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
+    repeatBox);
   multiBox.append(
     el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 6px" },
       el("button", { type: "button", class: "btn small ghost", "aria-label": "Vorheriger Monat", onclick: () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); renderCal(); } }, "‹"),
@@ -4110,7 +4247,7 @@ async function adminControl() {
     return el("div", { class: "cl-row todo" + (over ? " over" : "") },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("button", { type: "button", class: "cl-name name-link", title: "Termin öffnen", onclick: () => openAdminSlot(b.slots.id) }, fullName(b.profiles)),
-      el("span", { class: "cl-flag" }, over ? "nicht abgehakt" : "geplant", ` · ${b.slots.duration_min} Min.`),
+      el("span", { class: "cl-flag" }, over ? "☐ nicht abgehakt" : "☐ geplant", ` · ${b.slots.duration_min} Min.`),
       tick);
   };
   // Eine Zeile: Uhrzeit · Name · Minuten · Haken „übertragen“
@@ -4145,11 +4282,12 @@ async function adminControl() {
   // Monatsübersicht: Prüfungen, Theorie, Gesamtzeit, unverbindlicher Lohn
   const examsDone = (examRes.data || []).filter((e) => new Date(e.exam_at).getTime() <= Date.now());
   const examMin = examsDone.reduce((n, e) => n + (e.duration_min || 55), 0);
-  const theory = theoryRes.data || [];
+  const theoryAll = theoryRes.data || [];
+  const theory = theoryAll.filter((t) => new Date(t.held_at).getTime() <= Date.now());   // geplante, noch nicht gehaltene zählen nicht mit
   const theoryMin = theory.reduce((n, t) => n + t.duration_min, 0);
   const nightMin = driven.filter((b) => b.lesson_type === "nacht").reduce((n, b) => n + b.actual_minutes, 0);
   const allMin = totalMin + theoryMin + examMin;
-  const monthCard = monthOverview({ examCount: examsDone.length, theory, theoryMin, allMin, drivenMin: totalMin, nightMin, pay: payRes.data || null, schemaOk: !theoryRes.error });
+  const monthCard = monthOverview({ examCount: examsDone.length, theory, theoryAll, theoryMin, allMin, drivenMin: totalMin, nightMin, pay: payRes.data || null, schemaOk: !theoryRes.error });
 
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
   const next = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); render(); } }, "›");
@@ -4198,9 +4336,10 @@ function payEstimate(pay, d) {
 }
 function monthOverview(d) {
   const addTheory = el("button", { class: "btn small", onclick: () => openTheoryForm() }, "➕ Theorie eintragen");
-  const theoryList = d.theory.length ? el("details", { class: "fold" },
-    el("summary", {}, `Theoriestunden (${d.theory.length})`),
-    d.theory.map((t) => {
+  const tl = d.theoryAll || d.theory;
+  const theoryList = tl.length ? el("details", { class: "fold" },
+    el("summary", {}, `Theoriestunden (${d.theory.length}${tl.length > d.theory.length ? ` + ${tl.length - d.theory.length} geplant` : ""})`),
+    tl.map((t) => {
       const del = el("button", { type: "button", class: "btn small ghost danger-text" }, "Löschen");
       del.onclick = () => busy(del, async () => {
         if (!confirm("Diese Theoriestunde löschen?")) return;
@@ -4209,7 +4348,7 @@ function monthOverview(d) {
         render();
       });
       return el("div", { class: "cl-row", style: "cursor:default" },
-        el("span", { class: "cl-name" }, `${fmtDay(t.held_at)} ${fmtTime(t.held_at)}${t.note ? ` · ${t.note}` : ""}`),
+        el("span", { class: "cl-name" }, `${new Date(t.held_at).getTime() > Date.now() ? "🗓 geplant · " : ""}${fmtDay(t.held_at)} ${fmtTime(t.held_at)}${t.note ? ` · ${t.note}` : ""}`),
         el("b", { class: "cl-min" }, `${t.duration_min} Min.`), del);
     })) : null;
   const pay = d.pay || {};
