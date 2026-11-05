@@ -766,3 +766,14 @@ dialog.full-page { width: min(860px, calc(100vw - 24px)); max-height: calc(100dv
 .ov-chip.done { background: var(--done-bg); color: var(--done-fg); border-color: var(--done-bd); }
 .ov-chip.off { background: #fdecea; color: #a12622; border-color: #f2b8b5; }
 html.dark .ov-chip.off { background: #3a1d1b; color: #ffb4ab; border-color: #7a3531; }
+
+/* Heute: Absagen direkt in der Zeile */
+.tr-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tr-foot .tr-meet { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-cancel { flex: 0 0 auto; margin-left: auto; border: 1px solid #e5484d66; background: none; color: #c0392b; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 700; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.tr-cancel:active { background: #e5484d1f; }
+html.dark .tr-cancel { color: #ff8a80; border-color: #ff8a8066; }
+
+/* Schüler: Termin kann früher beginnen */
+.early-hint { margin: 8px 0 12px; padding: 12px; border: 2px solid #2fb36d; border-radius: 12px; background: #2fb36d1a; }
+.early-hint > b { display: block; font-size: 16px; margin-bottom: 4px; }

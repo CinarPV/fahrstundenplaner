@@ -109,6 +109,8 @@ alter table public.settings add column if not exists meeting_point  text check (
 alter table public.settings add column if not exists meeting_points text check (char_length(meeting_points) <= 2000);
 alter table public.bookings add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
 alter table public.slots    add column if not exists meeting_point  text check (char_length(meeting_point) <= 200);
+-- Fahrstunde davor wurde vorgezogen: freier Termin kann auf Wunsch schon ab dieser Zeit beginnen (Hinweis für Schüler)
+alter table public.slots    add column if not exists earlier_from   timestamptz;
 -- Angeheftete Uhrzeiten beim Anlegen, z. B. "08:00,09:45,11:30"
 alter table public.settings add column if not exists time_presets   text check (char_length(time_presets) <= 400);
 -- Wochen-Höchstzahl nur in einem Zeitfenster (z. B. 14–18 Uhr); beide leer = ganzer Tag
@@ -686,12 +688,17 @@ end $$;
 -- und die eigenen Termine. Fremde bestätigte Fahrstunden bleiben unsichtbar.
 drop function if exists public.get_calendar(timestamptz, timestamptz);  -- Rückgabe hat sich geändert (Treffpunkt)
 create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
-returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean, meeting_point text)
+returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean, meeting_point text, earlier_from timestamptz)
 language sql stable security definer set search_path = public as $$
   select s.id, s.starts_at, s.duration_min,
          coalesce(b.status, 'free'),
          coalesce(b.student_id = auth.uid(), false),
-         coalesce(b.meeting_point, s.meeting_point)
+         coalesce(b.meeting_point, s.meeting_point),
+         case when b.id is null and s.earlier_from < s.starts_at and not exists (
+           select 1 from slots o join bookings ob on ob.slot_id = o.id and ob.status in ('requested','confirmed','offered')
+           where o.teacher_id = s.teacher_id and o.id <> s.id and o.starts_at < s.starts_at
+             and o.starts_at + make_interval(mins => o.duration_min) > s.earlier_from
+         ) then s.earlier_from end
   from slots s
   left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed','offered')
   where s.starts_at >= p_from and s.starts_at < p_to

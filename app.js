@@ -1694,7 +1694,19 @@ async function adminToday() {
       if (error) throw error;
       closeModal(); toast(`Dauer geändert: ${dur.value} Min.`); render();
     });
-    // Nicht gefahren: Grund antippen → darunter gleich Fehlstunde und (optional) neuen Schüler wählen → ein Knopf
+    const { reasonBtns, noBox } = notHeldForm(s, b);
+    openModal(`${fmtTime(s.starts_at)} Uhr · ${fullName(p)}`,
+      kind && canTick ? [el("label", {}, "War das eine Schaltstunde?"), kind.node] : null,
+      el("label", {}, canTick ? "Wie lange gefahren?" : "Geplante Dauer"), dur.node,
+      el("div", { class: "actions" }, canTick ? ok : keep),
+      canTick ? null : el("p", { class: "muted small", style: "margin:6px 0 0" }, "Abhaken geht ab 45 Minuten vor Beginn."),
+      el("hr"),
+      el("p", { class: "small", style: "margin:0 0 6px" }, el("b", {}, "✗ Nicht gefahren?")),
+      el("div", { class: "tabs type-tabs" }, reasonBtns), noBox);
+  };
+  // Nicht gefahren: Grund antippen → darunter gleich Fehlstunde und (optional) neuen Schüler wählen → ein Knopf
+  const notHeldForm = (s, b) => {
+    const p = b.profiles || {};
     let why = null;
     const late = el("input", { type: "checkbox" });
     const lateWrap = el("label", { class: "check" }, late, "Fehlstunde – kostenpflichtig");
@@ -1718,13 +1730,13 @@ async function adminToday() {
       if (why === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
       afterNotHeld(s, p, why, isLateCancel, await repl.apply(s));
     });
-    openModal(`${fmtTime(s.starts_at)} Uhr · ${fullName(p)}`,
-      kind && canTick ? [el("label", {}, "War das eine Schaltstunde?"), kind.node] : null,
-      el("label", {}, canTick ? "Wie lange gefahren?" : "Geplante Dauer"), dur.node,
-      el("div", { class: "actions" }, canTick ? ok : keep),
-      canTick ? null : el("p", { class: "muted small", style: "margin:6px 0 0" }, "Abhaken geht ab 45 Minuten vor Beginn."),
-      el("hr"),
-      el("p", { class: "small", style: "margin:0 0 6px" }, el("b", {}, "✗ Nicht gefahren?")),
+    return { reasonBtns, noBox };
+  };
+  // Knopf „Absagen“ in der Zeile: gleich die Gründe zeigen
+  const openCancel = (s, b) => {
+    const { reasonBtns, noBox } = notHeldForm(s, b);
+    openModal(`Absagen: ${fmtTime(s.starts_at)} Uhr · ${fullName(b.profiles || {})}`,
+      el("p", { class: "small", style: "margin:0 0 6px" }, el("b", {}, "Warum fällt die Fahrstunde aus?")),
       el("div", { class: "tabs type-tabs" }, reasonBtns), noBox);
   };
   // Kompakte Zeile pro Fahrstunde – alles in einer Zeile
@@ -1734,7 +1746,6 @@ async function adminToday() {
     const meet = b.meeting_point || s.meeting_point || state.settings.meeting_point || "";
     const phase = !held ? "nothere" : done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = held && !done && now >= start - 45 * 60000;   // abhaken frühestens 45 Min. vor Beginn
-    const wa = waNumber(p.phone);
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
       el("button", { type: "button", class: "tr-name name-link", title: "Infos zum Schüler", onclick: () => openStudentById(b.student_id) },
@@ -1743,8 +1754,6 @@ async function adminToday() {
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
             onclick: () => openQuick(s, b, canTick) }, `${s.duration_min} Min. ✎`),
-      phase === "next" && !canTick && wa ? el("a", { class: "tr-icon", title: "Bin gleich da (WhatsApp)", target: "_blank", rel: "noopener",
-        href: `https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${p.first_name || ""}, ich bin in ca. 5 Minuten am Treffpunkt.` + (meet ? ` 📍 ${meet}` : ""))}` }, "💬") : null,
       // Schnell abhaken mit der geplanten Dauer
       canTick ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
         if (askSchalt(b)) return openSchaltAsk(b, s.duration_min, save);
@@ -1754,7 +1763,9 @@ async function adminToday() {
       } }, "✓") : null,
       el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
-    return el("div", { class: "tr " + phase }, head, phase === "done" || phase === "nothere" ? null : meetLine);
+    const cancelBtn = phase === "next" ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "✗ Absagen") : null;
+    return el("div", { class: "tr " + phase }, head,
+      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, meetLine, cancelBtn));
   };
   const examRow = (e) => el("div", { class: "tr exam" },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
@@ -2318,6 +2329,109 @@ async function deleteLessonSlot(slot, b) {
   return true;
 }
 
+// Neue Zeit einer Fahrstunde: Welche freien Termine sind dann im Weg, und wohin passen sie?
+// Dauer bleibt gleich, die bisherige Pause zum Nachbarn auch (höchstens 30 Min.). Gebuchtes wird nie verschoben.
+function planShift(lesson, others, nowMs = Date.now()) {
+  const MIN = 60000;
+  const end = (x) => x.start + x.dur * MIN;
+  const hits = (a, b, x) => a < end(x) && x.start < b;
+  const pause = (ms) => Math.min(Math.max(0, ms), 30 * MIN);
+  const newS = lesson.newStart, newE = newS + lesson.newDur * MIN;
+  const day = new Date(newS); day.setHours(0, 0, 0, 0);
+  const dayE = addDays(day, 1).getTime();
+  const blocks = others.filter((x) => !x.free), frees = others.filter((x) => x.free && x.start > nowMs);
+  const blockedBy = (a, b) => blocks.find((x) => hits(a, b, x));
+  const moves = [], stuck = [];
+  // Nur wenn die Fahrstunde nach hinten hinausragt, rutscht der nächste freie Termin nach hinten
+  let prevNew = newE, prevOld = lesson.oldStart + lesson.oldDur * MIN;
+  for (const x of frees.filter((f) => f.start >= newS).sort((a, b) => a.start - b.start)) {
+    if (x.start >= prevNew) break;
+    const to = prevNew + pause(x.start - prevOld), toEnd = to + x.dur * MIN;
+    const b = blockedBy(to, toEnd);
+    if (b || toEnd > dayE) { stuck.push({ ...x, because: b ? b.label : "Tagesende" }); continue; }
+    moves.push({ ...x, to });
+    prevOld = end(x); prevNew = toEnd;
+  }
+  // Was davor startet, wird nie nach vorne gezogen: Überschneidung nur melden
+  for (const x of frees.filter((f) => f.start < newS && end(f) > newS)) stuck.push({ ...x, because: "liegt davor" });
+  return { moves: moves.sort((a, b) => a.start - b.start), stuck, clashes: blocks.filter((x) => hits(newS, newE, x)) };
+}
+
+// Fahrstunde endet jetzt früher: Der nächste Termin bleibt, wenn er frei ist, kann aber auf Wunsch früher beginnen
+function earlierTarget(lesson, others) {
+  const newE = lesson.newStart + lesson.newDur * 60000;
+  if (newE >= lesson.oldStart + lesson.oldDur * 60000) return null;
+  const next = others.filter((x) => x.start >= newE).sort((a, b) => a.start - b.start)[0];
+  return next && next.free && next.id && next.start > newE ? next.id : null;
+}
+
+// Vor dem Bestätigen fragen, ob überschneidende freie Termine verschoben werden sollen.
+// Ergebnis: false = abgebrochen, sonst Anzahl der verschobenen Termine.
+async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur }) {
+  const oldMs = new Date(oldStart).getTime(), newMs = new Date(newStart).getTime();
+  if (oldMs === newMs && oldDur === newDur) return 0;
+  const from = new Date(newMs); from.setHours(0, 0, 0, 0);
+  const to = addDays(from, 1);
+  const [slotRes, examRes] = await Promise.all([
+    sb.from("slots").select("id,starts_at,duration_min,bookings(status,profiles(first_name,last_name))")
+      .eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
+    sb.from("exams").select("exam_at,duration_min,profiles(first_name,last_name)")
+      .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
+  ]);
+  if (slotRes.error) throw slotRes.error;
+  if (examRes.error) throw examRes.error;
+  const others = (slotRes.data || []).filter((x) => x.id !== slotId).map((x) => {
+    const a = activeBooking(x);
+    return { id: x.id, start: new Date(x.starts_at).getTime(), dur: x.duration_min, free: !a, label: a ? `Fahrstunde ${fullName(a.profiles || {})}` : "" };
+  }).concat((examRes.data || []).map((e) => ({ start: new Date(e.exam_at).getTime(), dur: e.duration_min || 55, free: false, label: `Prüfung ${fullName(e.profiles || {})}` })));
+  const { moves, stuck, clashes } = planShift({ oldStart: oldMs, oldDur, newStart: newMs, newDur }, others);
+  const needAsk = moves.length || stuck.length || clashes.length;
+
+  const iso = (ms) => new Date(ms).toISOString();
+  const answer = !needAsk ? 0 : await new Promise((resolve) => {
+    let open = true;
+    const onClose = () => { if (open) { open = false; resolve(false); } };
+    const finish = (n) => {
+      open = false; modal.removeEventListener("close", onClose);
+      modalBody.replaceChildren(el("p", { class: "muted" }, "Wird gespeichert …"));
+      resolve(n);
+    };
+    modal.addEventListener("close", onClose, { once: true });
+    const yes = el("button", { class: "btn ok" }, moves.length ? "✓ Ja, verschieben & bestätigen" : "Trotzdem bestätigen");
+    yes.onclick = () => busy(yes, async () => {
+      if (moves.length) {
+        // Könnte in der Zwischenzeit jemand einen dieser Termine gebucht haben?
+        const { data: taken, error } = await sb.from("bookings").select("id").in("slot_id", moves.map((m) => m.id)).in("status", ["requested", "offered", "confirmed"]);
+        if (error) throw error;
+        if (taken && taken.length) throw new Error("Einer dieser Termine wurde gerade gebucht – bitte nochmal öffnen.");
+        for (const m of moves) {
+          const { error: e } = await sb.from("slots").update({ starts_at: iso(m.to), earlier_from: null }).eq("id", m.id);
+          if (e) throw e;
+        }
+      }
+      finish(moves.length);
+    });
+    const onlyConfirm = moves.length ? el("button", { class: "btn" }, "Nur bestätigen, nichts verschieben") : null;
+    if (onlyConfirm) onlyConfirm.onclick = () => finish(0);
+    openModal(moves.length ? "Termine verschieben?" : "Überschneidung",
+      el("p", {}, el("b", {}, name), ` fährt dann ${fmtRange(iso(newMs), newDur)} Uhr.`),
+      moves.length ? [
+        el("p", { class: "small", style: "margin:0 0 6px" }, moves.length === 1 ? "Dieser freie Termin überschneidet sich damit und würde so verschoben:" : "Diese freien Termine überschneiden sich damit und würden so verschoben:"),
+        moves.map((m) => el("div", { class: "list-item small" }, `${fmtRange(iso(m.start), m.dur)} → `, el("b", {}, fmtRange(iso(m.to), m.dur)))),
+        el("p", { class: "muted small" }, "Die Dauer bleibt gleich. Die Termine sind noch frei, kein Schüler ist betroffen."),
+      ] : null,
+      stuck.map((x) => el("div", { class: "notice", style: "margin:6px 0 0" }, `⚠️ Freier Termin ${fmtRange(iso(x.start), x.dur)} passt nicht mehr (${x.because}). Er bleibt stehen – bitte selbst ändern oder löschen.`)),
+      clashes.map((x) => el("div", { class: "notice", style: "margin:6px 0 0" }, `⚠️ Überschneidung mit ${x.label} (${fmtRange(iso(x.start), x.dur)}). Gebuchtes wird nicht verschoben.`)),
+      el("div", { class: "actions" }, yes, onlyConfirm, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+  });
+  if (answer === false) return false;
+  // Der Hinweis „geht auch früher“ ist nur eine Zugabe: Klappt das Speichern nicht, wird trotzdem bestätigt
+  const nextId = earlierTarget({ oldStart: oldMs, oldDur, newStart: newMs, newDur }, others);
+  if (nextId) await sb.from("slots").update({ earlier_from: iso(newMs + newDur * 60000) }).eq("id", nextId);
+  return answer;
+}
+const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Termine"} verschoben` : "");
+
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
     .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
@@ -2401,12 +2515,17 @@ async function openAdminSlot(slotId) {
     } else if (b.status === "requested") {
       const ok = el("button", { class: "btn ok" }, "✓ Bestätigen");
       ok.onclick = () => busy(ok, async () => {
+        const chosen = fromInputs(date.value, time.value);
+        if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
+        const noteText = reply.value.trim(), chosenDur = dur.value;
+        const moved = await askShiftSlots({ slotId: slot.id, name: fullName(b.profiles), oldStart: slot.starts_at, oldDur: slot.duration_min, newStart: chosen, newDur: chosenDur });
+        if (moved === false) return;
         await saveTime();
-        const { error } = await sb.from("bookings").update({ status: "confirmed", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
+        const { error } = await sb.from("bookings").update({ status: "confirmed", admin_reply: noteText || null, decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
         pushNotify("booking", b.id, "confirmed");
-        const newSlot = { starts_at: fromInputs(date.value, time.value).toISOString(), duration_min: dur.value };
-        notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, reply.value.trim(), meetingOf({ meeting_point: meet.value() })));
+        const newSlot = { starts_at: chosen.toISOString(), duration_min: chosenDur };
+        notifyStep("Fahrstunde bestätigt" + movedText(moved), b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, noteText, meetingOf({ meeting_point: meet.value() })));
       });
       const no = el("button", { class: "btn danger" }, "Ablehnen");
       no.onclick = () => busy(no, async () => {
@@ -2765,8 +2884,10 @@ async function adminRequests() {
   const decideButtons = (b) => {
     // Mit Wunschzeit: „zur Wunschzeit bestätigen“ verschiebt den Termin, sonst bleibt die angebotene Zeit
     const confirmAt = (useWish) => async () => {
-      let slot = b.slots;
+      let slot = b.slots, moved = 0;
       if (useWish && b.wish_start) {
+        moved = await askShiftSlots({ slotId: b.slots.id, name: fullName(b.profiles), oldStart: b.slots.starts_at, oldDur: b.slots.duration_min, newStart: b.wish_start, newDur: b.slots.duration_min });
+        if (moved === false) return;
         const { error } = await sb.from("slots").update({ starts_at: b.wish_start }).eq("id", b.slots.id);
         if (error) throw error;
         slot = { ...b.slots, starts_at: b.wish_start };
@@ -2774,7 +2895,7 @@ async function adminRequests() {
       const { error } = await sb.from("bookings").update({ status: "confirmed", decided_at: new Date().toISOString() }).eq("id", b.id);
       if (error) throw error;
       pushNotify("booking", b.id, "confirmed");
-      notifyStep("Fahrstunde bestätigt", b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, slot, "", meetingOf(b)));
+      notifyStep("Fahrstunde bestätigt" + movedText(moved), b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, slot, "", meetingOf(b)));
     };
     const ok = el("button", { class: "btn small ok" }, b.wish_start ? `✓ Zu ${fmtTime(b.wish_start)} Uhr bestätigen` : b.over_limit ? "✓ Ausnahme gewähren" : "✓ Bestätigen");
     ok.onclick = () => busy(ok, confirmAt(true));
@@ -3610,7 +3731,13 @@ function openBooking(s) {
   // Abweichung vorschlagen: bis zu 1 Stunde früher oder später (der Fahrlehrer entscheidet)
   const base = new Date(s.starts_at).getTime();
   s._wish = null;
-  const wishBtns = [-60, -45, -30, -15, 0, 15, 30, 45, 60].filter((m) => m === 0 || base + m * 60000 > Date.now() + 15 * 60000).map((m) => el("button", {
+  // Fahrlehrer hat die Fahrstunde davor vorgezogen: Dieser Termin kann auf Wunsch früher beginnen
+  const earlyMs = s.earlier_from ? Math.max(new Date(s.earlier_from).getTime(), base - 3600000) : null;
+  const hasEarly = earlyMs && earlyMs < base && earlyMs > Date.now() + 15 * 60000;
+  const earlyMin = hasEarly ? Math.round((earlyMs - base) / 60000) : null;
+  const wishSteps = [-60, -45, -30, -15, 0, 15, 30, 45, 60];
+  if (hasEarly && !wishSteps.includes(earlyMin)) { wishSteps.push(earlyMin); wishSteps.sort((a, b) => a - b); }
+  const wishBtns = wishSteps.filter((m) => m === 0 || base + m * 60000 > Date.now() + 15 * 60000).map((m) => el("button", {
     type: "button", class: "tab" + (m === 0 ? " active" : ""),
     onclick: (e) => {
       s._wish = m ? new Date(base + m * 60000).toISOString() : null;
@@ -3632,8 +3759,23 @@ function openBooking(s) {
     closeModal();
     render();
   });
+  let earlyBox = null;
+  if (hasEarly) {
+    const earlyText = fmtTime(new Date(earlyMs));
+    const pickEarly = el("button", { type: "button", class: "btn small ok", onclick: () => {
+      wishBtns[wishSteps.filter((m) => m === 0 || base + m * 60000 > Date.now() + 15 * 60000).indexOf(earlyMin)].click();
+      btn.scrollIntoView({ behavior: "smooth", block: "center" });
+    } }, `⏰ Ab ${earlyText} Uhr anfragen`);
+    const askTeacher = waButton(state.settings.admin_phone,
+      `Hallo, geht die Fahrstunde am ${fmtDate(s.starts_at)} auch schon ab ${earlyText} Uhr statt ${fmtTime(s.starts_at)} Uhr?`, "💬 Fahrlehrer fragen");
+    earlyBox = el("div", { class: "early-hint" },
+      el("b", {}, "⏰ Das geht auch früher!"),
+      el("div", {}, `Dieser Termin kann schon ab ${earlyText} Uhr beginnen. Frag ihn einfach an oder schreib deinem Fahrlehrer. Er entscheidet, ob es passt.`),
+      el("div", { class: "actions", style: "margin:8px 0 0" }, pickEarly, askTeacher));
+  }
   openModal("Fahrstunde anfragen",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
+    earlyBox,
     meetingBox(meetingOf(s)),
     el("label", {}, "Passt dir die Uhrzeit nicht ganz? Wunsch-Beginn (bis zu 1 Std. früher oder später)"), el("div", { class: "tabs wish-tabs" }, wishBtns),
     el("p", { class: "small muted", style: "margin:4px 0 0" }, "✓ = angegebene Uhrzeit – am sichersten. Eine andere Uhrzeit ist nur ein Wunsch, ohne Garantie."), wishHint,
