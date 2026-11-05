@@ -256,6 +256,9 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
     offered: `${hi} ich biete dir eine Fahrstunde an: ${when} (${slot.duration_min} Min.).` + (meeting ? `\n📍 Treffpunkt: ${meeting}` : ""),
     rejected: `${hi} deine Anfrage für ${when} kann ich leider nicht bestätigen.`,
     cancelled_teacher: `${hi} ich muss die Fahrstunde am ${when} leider absagen.`,
+    sick: `${hi} deine Fahrstunde am ${when} ist wegen Krankheit abgesagt.`,
+    cancelled_student: `${hi} deine Fahrstunde am ${when} ist wie von dir gewünscht abgesagt.`,
+    no_show: `${hi} du warst zur Fahrstunde am ${when} leider nicht da. Die Fahrstunde ist deshalb ausgefallen.`,
   }[kind];
   // Wo in der App geht es weiter? (statt eines Links)
   const where = {
@@ -263,6 +266,9 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
     offered: "👉 Bitte öffne die App „Easy Fahrstundenplaner“ und sag unter „Meine Fahrstunden“ zu oder ab.",
     rejected: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen anderen freien Termin aus.",
     cancelled_teacher: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen neuen Termin aus.",
+    sick: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen neuen Termin aus.",
+    cancelled_student: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen neuen Termin aus.",
+    no_show: "👉 Such dir in der App „Easy Fahrstundenplaner“ unter „Kalender“ gern einen neuen Termin aus.",
   }[kind];
   return body + (reply ? `\n${reply}` : "") + `\n\n${where}\n\n` + teacherSignature();
 }
@@ -298,21 +304,25 @@ function replacePicker(excludeId) {
 // Nach „nicht gefahren“ (+ evtl. neu vergeben): WhatsApp an den neuen Schüler bzw. bei eigener Absage an den alten
 function afterNotHeld(slot, old, status, late, res, note = "") {
   const msg = `${fullName(old)}: ${STATUS_TEXT[status]}${late ? " (Fehlstunde)" : ""}`;
+  const extra = [late ? "Das wird als Fehlstunde berechnet." : "", note ? `Grund: ${note}` : ""].filter(Boolean).join("\n");
+  const oldText = waTextForStudent(status, old, slot, extra);
   if (res) return notifyStep(`${msg} · ${fullName(res.st)} ${res.kind === "offered" ? "angeboten" : "eingetragen"}`,
-    res.st.phone, waTextForStudent(res.kind, res.st, slot, "", meetingOf(slot)), fullName(res.st));
-  if (status === "cancelled_teacher") return notifyStep(msg, old && old.phone, waTextForStudent("cancelled_teacher", old, slot, note));
-  closeModal(); toast(msg + " – Termin ist wieder frei."); render();
+    res.st.phone, waTextForStudent(res.kind, res.st, slot, "", meetingOf(slot)), fullName(res.st),
+    waButton(old && old.phone, oldText, `💬 ${fullName(old)} per WhatsApp informieren`));
+  return notifyStep(msg, old && old.phone, oldText);
 }
+// Mitteilung an den Schüler, dessen Fahrstunde nicht stattfindet (Text und Grund baut der Server)
+const pushNotHeld = (id, status) => pushNotify("booking", id, status === "cancelled_teacher" ? "cancelled_teacher" : "not_held");
 
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
-function notifyStep(msg, phone, text, who = "den Schüler") {
+function notifyStep(msg, phone, text, who = "den Schüler", extraBtn = null) {
   state.renderOnClose = true;
   const wa = waButton(phone, text, `💬 ${who[0].toUpperCase() + who.slice(1)} per WhatsApp informieren`);
   openModal("✓ " + msg,
     wa ? el("p", {}, `Möchtest du ${who} per WhatsApp informieren? Der Text ist schon vorbereitet.`)
        : el("p", { class: "muted small" }, `Für ${who} ist keine Handynummer hinterlegt – keine WhatsApp-Nachricht möglich.`),
     wa ? el("div", { class: "note" }, text) : null,
-    el("div", { class: "actions" }, wa, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+    el("div", { class: "actions" }, wa, extraBtn, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
 modal.addEventListener("close", () => { if (state.renderOnClose) { state.renderOnClose = false; render(); } });
 
@@ -1769,7 +1779,12 @@ async function adminToday() {
     const lateWrap = el("label", { class: "check" }, late, "Fehlstunde – kostenpflichtig");
     const repl = replacePicker(b.student_id);
     const noBtn = el("button", { class: "btn danger inst-big" });
-    const noBox = el("div", { hidden: true }, lateWrap, repl.node, el("div", { class: "actions" }, noBtn));
+    const reasonText = el("textarea", { maxlength: 300, rows: 2, placeholder: "z. B. Auto ist in der Werkstatt" });
+    // Begründung nur bei „Ich habe abgesagt“ – bei den anderen Gründen ist sie schon klar
+    const reasonWrap = el("div", { hidden: true }, el("label", {}, "Begründung (optional) – der Schüler sieht sie"), reasonText);
+    const noBox = el("div", { hidden: true }, reasonWrap, lateWrap, repl.node,
+      el("p", { class: "muted small", style: "margin:6px 0 0" }, "Der Schüler bekommt eine Mitteilung, danach kannst du ihm auch per WhatsApp schreiben."),
+      el("div", { class: "actions" }, noBtn));
     const syncNo = () => (noBtn.textContent = repl.student ? `Speichern & ${fullName(repl.student)} eintragen` : "Speichern – Fahrstunde fällt aus");
     repl.onChange(syncNo); syncNo();
     const reasonBtns = NOT_HELD.map(([v, t]) => el("button", { type: "button", class: "tab", onclick: (e) => {
@@ -1777,15 +1792,17 @@ async function adminToday() {
       reasonBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget));
       late.checked = v === "no_show" || (v !== "cancelled_teacher" && isLate(s.starts_at));
       lateWrap.hidden = v === "cancelled_teacher";
+      reasonWrap.hidden = v !== "cancelled_teacher";
       noBox.hidden = false;
     } }, t));
     noBtn.onclick = () => busy(noBtn, async () => {
       if (!why) throw new Error("Bitte einen Grund antippen");
       const isLateCancel = why !== "cancelled_teacher" && late.checked;
-      const { error } = await sb.from("bookings").update({ status: why, late_cancel: isLateCancel, actual_minutes: null, decided_at: new Date().toISOString() }).eq("id", b.id);
+      const note = why === "cancelled_teacher" ? reasonText.value.trim() : "";
+      const { error } = await sb.from("bookings").update({ status: why, cancel_reason: note || null, late_cancel: isLateCancel, actual_minutes: null, decided_at: new Date().toISOString() }).eq("id", b.id);
       if (error) throw error;
-      if (why === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
-      afterNotHeld(s, p, why, isLateCancel, await repl.apply(s));
+      pushNotHeld(b.id, why);
+      afterNotHeld(s, p, why, isLateCancel, await repl.apply(s), note);
     });
     return { reasonBtns, noBox };
   };
@@ -1820,9 +1837,10 @@ async function adminToday() {
       } }, "✓") : null,
       el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
-    const cancelBtn = phase === "next" ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "✗ Absagen") : null;
+    // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
+    const cancelBtn = phase === "next" && !canTick ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "Absagen") : null;
     return el("div", { class: "tr " + phase }, head,
-      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, meetLine, cancelBtn));
+      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, meetLine));
   };
   const examRow = (e) => el("div", { class: "tr exam" },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
@@ -2721,7 +2739,7 @@ function doneControls(slot, b, after, opts = {}) {
     const r = el("input", { type: "radio", name: group, value });
     return { r, node: el("label", { class: "check" }, r, text) };
   });
-  const reason = el("input", { maxlength: 300, placeholder: "Grund / Notiz (optional), z. B. „Erkältung“" });
+  const reason = el("input", { maxlength: 300, placeholder: "Begründung (optional) – der Schüler sieht sie", hidden: true });
   const late = el("input", { type: "checkbox" });
   late.checked = isLate(slot.starts_at);
   const lateWrap = el("label", { class: "check" }, late, "Fehlstunde – kostenpflichtig",
@@ -2729,6 +2747,7 @@ function doneControls(slot, b, after, opts = {}) {
   const chosen = () => (radios.find((x) => x.r.checked) || {}).r;
   radios.forEach((x) => x.r.addEventListener("change", () => {
     lateWrap.hidden = chosen().value === "cancelled_teacher";
+    reason.hidden = chosen().value !== "cancelled_teacher";
     if (chosen().value === "no_show") late.checked = true;  // nicht erschienen = Fehlstunde
   }));
   const repl = replacePicker(b.student_id);
@@ -2739,13 +2758,14 @@ function doneControls(slot, b, after, opts = {}) {
     const r = chosen();
     if (!r) throw new Error("Bitte einen Grund ankreuzen");
     const isLateCancel = r.value !== "cancelled_teacher" && late.checked;
+    const note = r.value === "cancelled_teacher" ? reason.value.trim() : "";
     const { error } = await sb.from("bookings").update({
-      status: r.value, cancel_reason: reason.value.trim() || null, late_cancel: isLateCancel,
+      status: r.value, cancel_reason: note || null, late_cancel: isLateCancel,
       actual_minutes: null, decided_at: new Date().toISOString(),
     }).eq("id", b.id);
     if (error) throw error;
-    if (r.value === "cancelled_teacher") pushNotify("booking", b.id, "cancelled_teacher");
-    afterNotHeld(slot, b.profiles, r.value, isLateCancel, await repl.apply(slot), reason.value.trim());
+    pushNotHeld(b.id, r.value);
+    afterNotHeld(slot, b.profiles, r.value, isLateCancel, await repl.apply(slot), note);
   });
   const notHeld = el("details", { class: "nothere" },
     el("summary", {}, "✗ Nicht gefahren …"),
@@ -3683,7 +3703,7 @@ async function studentCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
-    sb.from("bookings").select("status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+    sb.from("bookings").select("id,status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
     sb.from("exams").select("id,kind,exam_at,duration_min,result,note,meeting_point").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   const exams = myExams.data || [];
@@ -3746,7 +3766,9 @@ async function studentCalendar() {
     nextOwn ? el("div", { class: "card next-card" },
       el("div", { class: "next-row first", style: "cursor:default" },
         el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`)),
-      meetingBox(meetingOf(nextOwn))) : null,
+      meetingBox(meetingOf(nextOwn)),
+      new Date(nextOwn.slots.starts_at).getTime() > Date.now()
+        ? el("div", { class: "actions", style: "margin-top:8px" }, el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(nextOwn) }, "✗ Fahrstunde absagen")) : null) : null,
     weekBar(),
     grid,
     slots.length === 0 ? el("p", { class: "muted", style: "margin-top:12px" }, "In dieser Woche gibt es keine freien Termine. Schau in der nächsten Woche (›) nach.") : null,
@@ -4277,6 +4299,8 @@ async function studentMine() {
   const total = rows.reduce((sum, b) => sum + (b.status === "confirmed" && b.actual_minutes ? b.actual_minutes : 0), 0);
   const doneCount = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null).length;
   const lateRows = rows.filter((b) => b.late_cancel);
+  // Abgesagt: kommende und die der letzten 14 Tage, mit Begründung
+  const cancelledRows = rows.filter((b) => NOT_HELD_ICON[b.status] && new Date(b.slots.starts_at).getTime() >= now - 14 * 86400000);
   const seen = getSeen("mine");
   markSeen("mine");
 
@@ -4319,7 +4343,7 @@ async function studentMine() {
           el("button", { class: "btn small ok", onclick: () => answerOffer(b, true) }, "✓ Zusagen"),
           el("button", { class: "btn small danger", onclick: () => answerOffer(b, false) }, "✗ Absagen")) : null,
         withdraw || canCancel ? el("div", { class: "actions" }, withdraw,
-          canCancel ? el("button", { class: "btn small ghost danger-text", onclick: () => openStudentCancel(b) }, "Absagen") : null) : null));
+          canCancel ? el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(b) }, "✗ Fahrstunde absagen") : null) : null));
   };
 
   const wa = waButton(state.settings.admin_phone, `Hallo, hier ist ${fullName(state.profile)}.\n`, "💬 Fahrlehrer schreiben");
@@ -4347,6 +4371,11 @@ async function studentMine() {
     offers.map(card),
     el("h2", { class: "mine-h" }, "Anstehende Fahrstunden"),
     planned.length ? planned.map(card) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
+    cancelledRows.length ? el("h2", { class: "mine-h" }, `❌ Abgesagt (${cancelledRows.length})`) : null,
+    cancelledRows.map((b) => el("div", { class: "list-item small" },
+      el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
+      el("div", {}, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstunde" : ""}`),
+      b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null)),
     doneCount ? el("details", { class: "fold" },
       el("summary", {}, `✓ Gefahrene Fahrstunden (${doneCount})`),
       doneList(rows, total),

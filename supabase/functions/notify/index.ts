@@ -22,7 +22,13 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 // Wer darf welches Ereignis auslösen – und was steht in der Mitteilung?
-type Ctx = { name: string; when: string; meet: string; late: boolean };
+type Ctx = { name: string; when: string; meet: string; late: boolean; status: string; reason: string };
+const reasonText = (c: Ctx) => (c.reason ? ` Grund: ${c.reason}` : "");
+const NOT_HELD_TEXT: Record<string, (c: Ctx) => string> = {
+  sick: (c) => `Deine Fahrstunde am ${c.when} ist wegen Krankheit abgesagt.`,
+  cancelled_student: (c) => `Deine Fahrstunde am ${c.when} ist wie von dir gewünscht abgesagt.`,
+  no_show: (c) => `Du warst zur Fahrstunde am ${c.when} nicht da. Sie ist ausgefallen.`,
+};
 const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   request: (c) => ["📥 Neue Anfrage", `${c.name} möchte am ${c.when} fahren.`],
   exception: (c) => ["⚠️ Ausnahme-Bitte", `${c.name} bittet um eine Ausnahme: ${c.when}.`],
@@ -36,7 +42,8 @@ const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   rejected: (c) => ["Anfrage abgelehnt", `Deine Anfrage für ${c.when} wurde leider abgelehnt.`],
   offered: (c) => ["📨 Neues Angebot", `Dein Fahrlehrer bietet dir ${c.when} an – bitte zusagen oder absagen.`],
   assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
-  cancelled_teacher: (c) => ["Fahrstunde abgesagt", `Dein Fahrlehrer hat die Fahrstunde am ${c.when} abgesagt.`],
+  cancelled_teacher: (c) => ["❌ Fahrstunde abgesagt", `Dein Fahrlehrer hat die Fahrstunde am ${c.when} abgesagt.${reasonText(c)}`],
+  not_held: (c) => ["❌ Fahrstunde abgesagt", `${(NOT_HELD_TEXT[c.status] ?? ((x: Ctx) => `Deine Fahrstunde am ${x.when} findet nicht statt.`))(c)}${c.late ? " Das wird als Fehlstunde berechnet." : ""}${reasonText(c)}`],
 };
 
 const fmtWhen = (iso: string) =>
@@ -66,7 +73,7 @@ Deno.serve(async (req) => {
       messages.push({ to: user.id, title: "🔔 Mitteilungen sind an", body: "So sehen Mitteilungen vom Easy Fahrstundenplaner aus." });
     } else if (kind === "booking" && Array.isArray(ids) && ids.length && ids.length <= 60) {
       const { data: rows } = await admin.from("bookings")
-        .select("id,student_id,late_cancel,meeting_point,profiles(first_name,last_name),slots(starts_at,teacher_id,meeting_point)")
+        .select("id,student_id,status,cancel_reason,late_cancel,meeting_point,profiles(first_name,last_name),slots(starts_at,teacher_id,meeting_point)")
         .in("id", ids);
       for (const b of rows ?? []) {
         // deno-lint-ignore no-explicit-any
@@ -77,7 +84,7 @@ Deno.serve(async (req) => {
           const { data: st } = await admin.from("settings").select("meeting_point").eq("teacher_id", slot.teacher_id).maybeSingle();
           meet = st?.meeting_point ?? "";
         }
-        const ctx: Ctx = { name: fullName(student), when: fmtWhen(slot.starts_at), meet, late: !!b.late_cancel };
+        const ctx: Ctx = { name: fullName(student), when: fmtWhen(slot.starts_at), meet, late: !!b.late_cancel, status: b.status ?? "", reason: (b.cancel_reason ?? "").trim() };
         if (user.id === b.student_id && STUDENT_EVENTS[event]) {
           const [title, body] = STUDENT_EVENTS[event](ctx);
           messages.push({ to: slot.teacher_id, title, body });
