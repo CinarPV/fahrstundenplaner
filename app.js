@@ -2206,6 +2206,36 @@ function newSlotForm(opts = {}) {
   const dayBtns = WEEKDAYS.map((name, i) => el("button", { type: "button", class: "tab", onclick: () => { days.has(i) ? days.delete(i) : days.add(i); refresh(); } }, name));
   const setDays = (list) => { days.clear(); list.forEach((i) => days.add(i)); refresh(); };
 
+  // Mehrere einzelne Tage in einem Mini-Kalender antippen (Alternative zu „Wiederholen“)
+  const multi = el("input", { type: "checkbox" });
+  const picked = new Set();
+  let calMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const calTitle = el("b", { class: "mcal-title" });
+  const calGrid = el("div", { class: "mcal-grid" });
+  const calInfo = el("p", { class: "small muted", style: "margin:8px 0 0" });
+  const multiBox = el("div", { class: "repeat-box multi-box", hidden: true });
+  function renderCal() {
+    calTitle.textContent = monthName(calMonth);
+    const y = calMonth.getFullYear(), mo = calMonth.getMonth();
+    const lead = weekdayIndex(new Date(y, mo, 1)), nDays = new Date(y, mo + 1, 0).getDate();
+    const todayKey = dateInput(new Date());
+    const cells = WEEKDAYS.map((n) => el("span", { class: "mcal-wd" }, n));
+    for (let i = 0; i < lead; i++) cells.push(el("span", {}));
+    for (let d = 1; d <= nDays; d++) {
+      const day = new Date(y, mo, d), key = dateInput(day), on = picked.has(key), off = !!offOn(day);
+      cells.push(el("button", {
+        type: "button", disabled: key < todayKey, "aria-pressed": String(on),
+        class: "mcal-day" + (on ? " on" : "") + (off ? " off" : "") + (key === todayKey ? " today" : ""),
+        title: off ? "Gesperrt (Urlaub/frei) – wird übersprungen" : "",
+        onclick: () => { on ? picked.delete(key) : picked.add(key); refresh(); },
+      }, String(d)));
+    }
+    calGrid.replaceChildren(...cells);
+    calInfo.textContent = picked.size
+      ? `${picked.size} Tag${picked.size === 1 ? "" : "e"} gewählt: ` + [...picked].sort().map((k) => fmtDay(fromInputs(k, "12:00"))).join(", ")
+      : "Tippe die Tage an, an denen du Termine anlegen möchtest.";
+  }
+
   // Uhrzeiten: angeheftete Lieblings-Uhrzeiten (gespeichert) antippen = auswählen; × = Uhrzeit entfernen.
   // Neue Uhrzeiten (einzeln oder als Reihe) werden automatisch angeheftet.
   let pinned = timePresets();
@@ -2236,6 +2266,18 @@ function newSlotForm(opts = {}) {
   let skippedOff = 0;
   function build() {
     skippedOff = 0;
+    if (multi.checked) {
+      const nowMulti = Date.now(), out = [];
+      for (const key of [...picked].sort()) {
+        const day = fromInputs(key, "00:00");
+        if (offOn(day)) { skippedOff++; continue; }  // Urlaub/frei: überspringen
+        for (const t of times) {
+          const at = fromInputs(key, t);
+          if (at.getTime() > nowMulti) out.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
+        }
+      }
+      return out;
+    }
     const start = fromInputs(date.value, "00:00");
     if (isNaN(start)) return [];
     const now = Date.now(), list = [];
@@ -2258,6 +2300,7 @@ function newSlotForm(opts = {}) {
   }
   function refresh() {
     renderStudents();
+    renderCal();
     btn.textContent = mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
       : mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : mode === "exam" ? " exam-btn" : "");
@@ -2274,18 +2317,31 @@ function newSlotForm(opts = {}) {
     const list = build();
     preview.replaceChildren(list.length
       ? el("span", {}, el("b", {}, `${list.length} Termin${list.length > 1 ? "e" : ""}`),
-        repeat.checked
+        multi.checked
+          ? ` · ${picked.size} Tag${picked.size === 1 ? "" : "e"} · ${times.length} Uhrzeit${times.length === 1 ? "" : "en"} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
+        : repeat.checked
           ? ` · jeden ${[...days].sort().map((i) => WEEKDAYS[i]).join(", ")} · ${times.length} pro Tag · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}`
           : ` · ${fmtDate(list[0].starts_at)} · ${times.map((t) => t + " Uhr").join(", ")}`,
         skippedOff ? ` · 🏖️ ${skippedOff} gesperrte${skippedOff === 1 ? "r Tag" : " Tage"} übersprungen` : "")
-      : el("span", { class: "muted" }, skippedOff ? "🏖️ Dieser Tag ist gesperrt (Urlaub/frei) – unter „Tage sperren“ änderbar." : times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen."));
+      : el("span", { class: "muted" }, multi.checked && !picked.size ? "Bitte oben im Kalender einen oder mehrere Tage antippen." : skippedOff ? "🏖️ Dieser Tag ist gesperrt (Urlaub/frei) – unter „Tage sperren“ änderbar." : times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen."));
   }
   [date, until].forEach((i) => i.addEventListener("input", refresh));
   date.addEventListener("input", () => { if (!repeat.checked) { days.clear(); days.add(weekdayIndex(fromInputs(date.value, "00:00"))); } });
   repeat.addEventListener("change", () => {
+    if (repeat.checked && multi.checked) { multi.checked = false; multiBox.hidden = true; }
     repeatBox.hidden = !repeat.checked;
     // Beim Einschalten: Wochentag des gewählten Datums vorauswählen (weitere Tage dazu antippen)
     if (repeat.checked) setDays([weekdayIndex(fromInputs(date.value, "00:00"))]);
+    refresh();
+  });
+  multi.addEventListener("change", () => {
+    if (multi.checked && repeat.checked) { repeat.checked = false; repeatBox.hidden = true; }
+    multiBox.hidden = !multi.checked;
+    // Beim Einschalten: das oben gewählte Datum gleich vormerken
+    if (multi.checked && !picked.size && date.value && fromInputs(date.value, "23:59").getTime() > Date.now()) {
+      picked.add(date.value);
+      calMonth = new Date(fromInputs(date.value, "12:00").getFullYear(), fromInputs(date.value, "12:00").getMonth(), 1);
+    }
     refresh();
   });
   const untilIn = (w) => { until.value = dateInput(addDays(fromInputs(date.value, "00:00"), w * 7 - 1)); refresh(); };
@@ -2348,7 +2404,9 @@ function newSlotForm(opts = {}) {
     el("div", { class: "actions" }, btn),
   );
   slotBox.append(
-    el("label", { class: "check repeat-toggle" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
+    el("label", { class: "check repeat-toggle" }, multi, el("span", {}, el("b", {}, "📅 Mehrere Tage wählen"), " – einzelne Tage im Kalender antippen, die Uhrzeiten gelten für alle")),
+    multiBox,
+    el("label", { class: "check repeat-toggle", style: "margin-top:8px" }, repeat, el("span", {}, el("b", {}, "🔁 Wiederholen"), " – an bestimmten Wochentagen, z. B. jeden Mo und Mi")),
     repeatBox,
     el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,
     el("label", {}, "Uhrzeiten – antippen zum Auswählen"),
@@ -2364,6 +2422,14 @@ function newSlotForm(opts = {}) {
     meetSlot.node,
     preview,
   );
+  multiBox.append(
+    el("div", { class: "done-row", style: "justify-content:space-between;margin:0 0 6px" },
+      el("button", { type: "button", class: "btn small ghost", "aria-label": "Vorheriger Monat", onclick: () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); renderCal(); } }, "‹"),
+      calTitle,
+      el("button", { type: "button", class: "btn small ghost", "aria-label": "Nächster Monat", onclick: () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); renderCal(); } }, "›")),
+    calGrid, calInfo,
+    el("div", { class: "actions", style: "margin:6px 0 0" },
+      el("button", { type: "button", class: "btn small ghost", onclick: () => { picked.clear(); refresh(); } }, "Auswahl leeren")));
   repeatBox.append(
     el("label", {}, "An welchen Tagen?"),
     el("div", { class: "tabs", style: "margin-bottom:6px;flex-wrap:wrap" }, dayBtns),

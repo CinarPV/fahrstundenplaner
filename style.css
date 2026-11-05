@@ -347,6 +347,15 @@ h2, h3 { border-left: 5px solid var(--teal); padding-left: 10px; }
 }
 .repeat-toggle { background: #eaf6f7; border: 1px solid #bfe5e7; border-radius: 10px; padding: 10px 12px; margin-top: 14px; }
 .repeat-box { border-left: 4px solid var(--teal); padding: 2px 0 6px 12px; margin: 8px 0 4px; }
+/* Mini-Kalender: mehrere Tage antippen */
+.mcal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.mcal-wd { text-align: center; font-size: 12px; font-weight: 700; color: var(--muted); padding: 2px 0; }
+.mcal-day { appearance: none; border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 8px;
+  min-height: 40px; font: inherit; font-weight: 600; cursor: pointer; padding: 0; }
+.mcal-day:disabled { opacity: .35; cursor: default; }
+.mcal-day.today { border-color: var(--teal); box-shadow: inset 0 0 0 1px var(--teal); }
+.mcal-day.off { background: #f1eafe; color: #6b3fc9; border-color: #cdb8f5; }
+.mcal-day.on { background: var(--brand); color: #fff; border-color: var(--brand); }
 
 /* Navigation: Zurück */
 .backbtn { margin: -4px 0 12px; }
