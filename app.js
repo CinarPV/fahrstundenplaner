@@ -2505,6 +2505,19 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur 
   if (nextId) await sb.from("slots").update({ earlier_from: iso(newMs + newDur * 60000) }).eq("id", nextId);
   return answer;
 }
+// Fahrlehrer: Kurzfristig krank abgesagt und Attest liegt vor → Fehlstunde wird gestrichen
+function attestButton(b, onDone) {
+  if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
+  const btn = el("button", { class: "btn small ok" }, "📄 Attest liegt vor – Fehlstunde streichen");
+  btn.onclick = () => busy(btn, async () => {
+    if (!confirm("Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen.")) return;
+    const { error } = await sb.from("bookings").update({ late_cancel: false }).eq("id", b.id);
+    if (error) throw error;
+    toast("Fehlstunde gestrichen.");
+    onDone();
+  });
+  return btn;
+}
 const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Termine"} verschoben` : "");
 
 async function openAdminSlot(slotId) {
@@ -2636,7 +2649,8 @@ async function openAdminSlot(slotId) {
         return el("div", { class: "list-item small" },
           el("div", { class: "done-row", style: "margin:0" }, el("b", {}, fullName(h.profiles)), el("span", { class: "badge " + h.status }, STATUS_TEXT[h.status]),
             h.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null, undo),
-          h.cancel_reason ? el("div", { class: "note" }, "Grund: ", h.cancel_reason) : null);
+          h.cancel_reason ? el("div", { class: "note" }, "Grund: ", h.cancel_reason) : null,
+          attestButton(h, () => done("Fehlstunde gestrichen.")));
       }));
   }
 
@@ -3002,6 +3016,7 @@ async function adminRequests() {
         b.status === "declined" ? el("span", { class: "badge declined" }, "Angebot abgelehnt") :
         b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : el("span", { class: "badge rejected" }, "rechtzeitig"),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
+        attestButton(b, () => render()),
       ])),
     ] : null,
     offers.data.length ? [
@@ -4278,29 +4293,61 @@ function answerOffer(b, accept) {
 
 function openStudentCancel(b) {
   const late = isLate(b.slots.starts_at);
-  const reason = el("textarea", { maxlength: 150, placeholder: "Kurzer Satz, z. B. „Ich habe eine Klausur.“", style: "min-height:56px" });
+  let why = null;   // "sick" oder "other"
+  const reason = el("textarea", { maxlength: 150, placeholder: "z. B. „Ich habe eine Klausur. Kann ich die Fahrstunde absagen?“", style: "min-height:56px" });
+  // Anderer Grund: freier Text – der Schüler kann auch erst fragen, ob er absagen darf
+  const teacherWa = waNumber(state.settings.admin_phone);
+  const askBtn = teacherWa ? el("button", { type: "button", class: "btn", disabled: true, onclick: () => window.open(
+    `https://wa.me/${teacherWa}?text=${encodeURIComponent(`Hallo, hier ist ${fullName(state.profile)}. Es geht um meine Fahrstunde am ${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr:\n${reason.value.trim()}`)}`, "_blank", "noopener") }, "💬 Erst den Fahrlehrer fragen") : null;
+  const reasonWrap = el("div", { hidden: true }, el("label", {}, "Dein Grund oder deine Frage"), reason,
+    askBtn ? el("p", { class: "muted small", style: "margin:4px 0 0" }, "Du möchtest erst fragen, ob du absagen darfst? Die Fahrstunde bleibt dann bestehen, bis du sie absagst.") : null,
+    askBtn ? el("div", { class: "actions", style: "margin:6px 0 0" }, askBtn) : null);
   const agree = el("input", { type: "checkbox" });
+  const agreeText = el("span", {});
+  const agreeWrap = el("label", { class: "check", hidden: true }, agree, agreeText);
   const btn = el("button", { class: "btn danger", disabled: true }, "Fahrstunde verbindlich absagen");
-  const update = () => (btn.disabled = !(agree.checked && reason.value.trim()));
+  const update = () => {
+    btn.disabled = !(why && agree.checked && (why === "sick" || reason.value.trim()));
+    if (askBtn) askBtn.disabled = !reason.value.trim();
+  };
   reason.addEventListener("input", update);
   agree.addEventListener("change", update);
+  // Kurzfristig krank: Ohne ärztliches Attest bleibt es eine Fehlstunde
+  const lateNotice = el("div", { class: "notice danger" }, `Die Absagefrist (${fmtDeadline(b.slots.starts_at)}) ist abgelaufen. Diese Fahrstunde wird als Fehlstunde berechnet und ist kostenpflichtig.`);
+  const attestNotice = el("div", { class: "notice danger", hidden: true },
+    el("b", {}, "📄 Ärztliches Attest erforderlich"), el("br"),
+    `Die Absagefrist (${fmtDeadline(b.slots.starts_at)}) ist abgelaufen. Du musst deinem Fahrlehrer ein ärztliches Attest vorlegen. Eine AU (Krankschreibung) reicht nicht. Ohne ärztliches Attest gilt die Absage als Fehlstunde und ist kostenpflichtig.`);
+  const choose = (v, e) => {
+    why = v;
+    whyBtns.forEach((x) => x.classList.toggle("active", x === e.currentTarget));
+    reasonWrap.hidden = v === "sick";
+    attestNotice.hidden = !(late && v === "sick");
+    lateNotice.hidden = !late || v === "sick";
+    agreeWrap.hidden = false;
+    agree.checked = false;
+    agreeText.textContent = late && v === "sick"
+      ? "Ich sage wegen Krankheit ab und lege ein ärztliches Attest vor. Ohne Attest ist es eine kostenpflichtige Fehlstunde."
+      : late ? "Ich sage diese Fahrstunde ab und weiß, dass sie als Fehlstunde kostenpflichtig ist."
+      : "Ich möchte diese Fahrstunde absagen.";
+    update();
+  };
+  const whyBtns = [["sick", "🤒 Ich bin krank"], ["other", "📝 Anderer Grund"]].map(([v, t]) =>
+    el("button", { type: "button", class: "tab", onclick: (e) => choose(v, e) }, t));
   btn.onclick = () => busy(btn, async () => {
-    const { data: wasLate, error } = await sb.rpc("cancel_booking", { p_booking: b.id, p_reason: reason.value.trim() });
+    const text0 = why === "sick" ? "Krank" : reason.value.trim();
+    const { data: wasLate, error } = await sb.rpc("cancel_booking", { p_booking: b.id, p_reason: text0 });
     if (error) throw error;
     pushNotify("booking", b.id, "cancel");
-    const text = `Hallo, hier ist ${fullName(state.profile)}. Ich habe meine Fahrstunde am ${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr abgesagt.\nGrund: ${reason.value.trim()}`;
-    notifyStep(wasLate ? "Abgesagt – als Fehlstunde vermerkt (kostenpflichtig)" : "Fahrstunde abgesagt",
+    const needAttest = wasLate && why === "sick";
+    const text = `Hallo, hier ist ${fullName(state.profile)}. Ich habe meine Fahrstunde am ${fmtDate(b.slots.starts_at)} um ${fmtTime(b.slots.starts_at)} Uhr abgesagt.\nGrund: ${text0}` + (needAttest ? "\nIch reiche ein ärztliches Attest nach." : "");
+    notifyStep(needAttest ? "Abgesagt – bitte ärztliches Attest vorlegen, sonst Fehlstunde" : wasLate ? "Abgesagt – als Fehlstunde vermerkt (kostenpflichtig)" : "Fahrstunde abgesagt",
       state.settings.admin_phone, text, "deinen Fahrlehrer");
   });
   openModal("Fahrstunde absagen",
     el("p", {}, el("b", {}, fmtDate(b.slots.starts_at)), el("br"), fmtRange(b.slots.starts_at, b.slots.duration_min)),
-    late
-      ? el("div", { class: "notice danger" }, `Die Absagefrist (${fmtDeadline(b.slots.starts_at)}) ist abgelaufen. Diese Fahrstunde wird als Fehlstunde berechnet und ist kostenpflichtig.`)
-      : el("div", { class: "notice" }, `Du sagst rechtzeitig ab (Frist: ${fmtDeadline(b.slots.starts_at)}) – die Absage ist kostenlos.`),
-    el("label", {}, "Warum sagst du ab?"), reason,
-    el("label", { class: "check" }, agree, late
-      ? "Ich sage diese Fahrstunde ab und weiß, dass sie als Fehlstunde kostenpflichtig ist."
-      : "Ich möchte diese Fahrstunde absagen."),
+    late ? lateNotice : el("div", { class: "notice" }, `Du sagst rechtzeitig ab (Frist: ${fmtDeadline(b.slots.starts_at)}) – die Absage ist kostenlos.`),
+    el("label", {}, "Warum sagst du ab?"), el("div", { class: "tabs type-tabs" }, whyBtns),
+    attestNotice, reasonWrap, agreeWrap,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Doch nicht")));
 }
 
