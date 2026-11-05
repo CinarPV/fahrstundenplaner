@@ -777,3 +777,10 @@ html.dark .tr-cancel { color: #ff8a80; border-color: #ff8a8066; }
 /* Schüler: Termin kann früher beginnen */
 .early-hint { margin: 8px 0 12px; padding: 12px; border: 2px solid #2fb36d; border-radius: 12px; background: #2fb36d1a; }
 .early-hint > b { display: block; font-size: 16px; margin-bottom: 4px; }
+
+/* Nach unten ziehen zum Aktualisieren */
+html, body { overscroll-behavior-y: contain; }
+.ptr { position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; z-index: 900; transform: translate(-50%, var(--ptr-y, 0px)); padding: 8px 14px; border-radius: 999px; background: var(--card, #fff); color: var(--text, #123); border: 1px solid var(--border, #ccd); box-shadow: 0 4px 14px #0003; font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none; }
+.ptr[hidden] { display: none; }
+.ptr.ok { border-color: #2fb36d; color: #1e8a4c; }
+html.dark .ptr.ok { color: #6fdc9f; }

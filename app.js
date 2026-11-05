@@ -1220,6 +1220,63 @@ function renderNewPassword() {
 
 /* ---------------- Hauptansicht ---------------- */
 
+// Ganz oben nach unten ziehen: Loslassen oder kurz halten aktualisiert die Daten (und sucht nach einer neuen App-Version)
+(function pullToRefresh() {
+  const PULL = 90;      // so weit muss der Finger ziehen (Pixel)
+  const HOLD = 500;     // gezogen und gehalten: danach aktualisiert es von selbst (ms)
+  const box = el("div", { class: "ptr", hidden: true, "aria-live": "polite" });
+  document.body.append(box);
+  let startX = 0, startY = 0, active = false, ready = false, busyNow = false, timer = null;
+  const show = (text, cls = "") => { box.textContent = text; box.className = "ptr " + cls; box.hidden = false; };
+  const hide = () => { box.hidden = true; box.style.removeProperty("--ptr-y"); };
+  const reset = () => { active = false; ready = false; clearTimeout(timer); timer = null; };
+  const blocked = (t) => modal.open || t.closest("input,textarea,select,[contenteditable]")
+    || ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement || {}).tagName);
+  // Innen scrollende Bereiche nicht stören
+  const innerScrolled = (t) => { for (let n = t; n && n !== document.body; n = n.parentElement) if (n.scrollTop > 0) return true; return false; };
+  const refresh = async () => {
+    if (busyNow) return;
+    reset();
+    // Halb ausgefülltes Formular nicht einfach überschreiben
+    if (state.dirty && !confirm("Nicht gespeicherte Eingaben gehen verloren. Trotzdem aktualisieren?")) { hide(); return; }
+    busyNow = true;
+    show("⟳ Wird aktualisiert …", "spin");
+    box.style.setProperty("--ptr-y", "16px");
+    try {
+      navigator.serviceWorker && navigator.serviceWorker.getRegistration && navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+      if (!state.profile || !state.active) return location.reload();
+      await render();
+      show("✓ Aktualisiert", "ok");
+    } catch (e) { hide(); fail(e); }
+    finally { busyNow = false; setTimeout(() => { if (!busyNow && !active) hide(); }, 900); }
+  };
+  document.addEventListener("touchstart", (e) => {
+    reset();
+    if (busyNow || e.touches.length !== 1 || window.scrollY > 0 || blocked(e.target) || innerScrolled(e.target)) return;
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY; active = true;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!active) return;
+    const dx = e.touches[0].clientX - startX, dy = e.touches[0].clientY - startY;
+    if (e.touches.length !== 1 || window.scrollY > 0 || dy < 0 || Math.abs(dx) > Math.max(dy, 12)) { reset(); if (!busyNow) hide(); return; }
+    if (dy < 15) return;
+    box.style.setProperty("--ptr-y", Math.min(dy * 0.4, 44) + "px");
+    if (dy >= PULL) {
+      if (!ready) { ready = true; show("↻ Loslassen zum Aktualisieren", "ok"); timer = setTimeout(refresh, HOLD); }
+    } else {
+      ready = false; clearTimeout(timer); timer = null;
+      show("↓ Weiter ziehen zum Aktualisieren");
+    }
+  }, { passive: true });
+  const end = () => {
+    if (!active) return;
+    const go = ready; reset();
+    if (go) refresh(); else if (!busyNow) hide();
+  };
+  document.addEventListener("touchend", end, { passive: true });
+  document.addEventListener("touchcancel", () => { reset(); if (!busyNow) hide(); }, { passive: true });
+})();
+
 async function render() {
   if (!state.profile) return;
   state.dirty = false;
