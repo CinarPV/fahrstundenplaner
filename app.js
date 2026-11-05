@@ -2509,13 +2509,13 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur 
 function attestButton(b, onDone) {
   if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
   const btn = el("button", { class: "btn small ok" }, "📄 Attest liegt vor – Fehlstunde streichen");
-  btn.onclick = () => busy(btn, async () => {
+  btn.onclick = (e) => { e.stopPropagation(); return busy(btn, async () => {
     if (!confirm("Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen.")) return;
     const { error } = await sb.from("bookings").update({ late_cancel: false }).eq("id", b.id);
     if (error) throw error;
     toast("Fehlstunde gestrichen.");
     onDone();
-  });
+  }); };
   return btn;
 }
 const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Termine"} verschoben` : "");
@@ -3250,7 +3250,8 @@ async function openStudent(st) {
         el("span", { class: "badge " + b.status }, b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
       b.actual_minutes !== null ? el("div", { class: "small" }, `Gefahren: ${fmtMinutes(b.actual_minutes)} · ${typeLabel(b.lesson_type)}`) : null,
       b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null,
-      b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null))
+      b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null,
+      attestButton(b, () => openStudent(st))))
       : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
     el("hr"),
     el("h3", { class: "access-sec" }, "⏳ Zugang"),
