@@ -39,12 +39,12 @@ function el(tag, attrs, ...children) {
 
 function toast(msg, isError) {
   const t = document.getElementById("toast");
-  t.textContent = isError || /^[✓✔]/.test(msg) ? msg : "✓ " + msg;
+  t.textContent = isError ? msg : msg.replace(/^[✓✔]\s*/, "");   // das Häkchen setzt das Design
   t.className = "toast" + (isError ? " error" : " ok");
   t.hidden = false;
   if (!isError) toast._ok = Date.now();   // merkt sich: gerade wurde etwas erfolgreich gespeichert
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => (t.hidden = true), isError ? 6000 : 4000);
+  toast._t = setTimeout(() => (t.hidden = true), isError ? 6000 : 2000);
 }
 
 function fail(error) {
@@ -249,6 +249,11 @@ function meetingBox(point) {
     el("a", { href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(point), target: "_blank", rel: "noopener" }, "Karte öffnen"));
 }
 // Nachrichtentext vom Fahrlehrer an den Schüler
+function waTextChange(profile, oldStart, newStart, dur, reply) {
+  const f = (iso) => `${fmtDate(iso)} um ${fmtTime(iso)} Uhr`;
+  return `Hallo ${(profile && profile.first_name) || ""}, ich würde deine Fahrstunde am ${f(oldStart)} gern verschieben auf ${f(newStart)} (${dur} Min.). Passt dir das?`
+    + (reply ? `\n${reply}` : "") + `\n\n👉 Bitte öffne die App „Easy Fahrstundenplaner“ und sag unter „Meine Fahrstunden“ zu oder ab.\n\n` + teacherSignature();
+}
 function waTextForStudent(kind, profile, slot, reply, meeting) {
   const when = `${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr`;
   const hi = `Hallo ${(profile && profile.first_name) || ""},`;
@@ -611,13 +616,13 @@ modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); }
 async function busy(button, fn) {
   const t0 = Date.now();
   let saved = false;
-  if (button) button.disabled = true;
-  try { await fn(); saved = (toast._ok || 0) >= t0; } catch (e) { fail(e); } finally { if (button) button.disabled = false; }
+  if (button) { button.disabled = true; button.classList.add("working"); }
+  try { await fn(); saved = (toast._ok || 0) >= t0; } catch (e) { fail(e); } finally { if (button) { button.disabled = false; button.classList.remove("working"); } }
   // Bleibt der Knopf sichtbar: kurz „✓ Gespeichert“ zeigen und gesperrt lassen (verhindert doppeltes Drücken)
   if (saved && button && button.isConnected && button.offsetParent !== null) {
     const old = button.textContent;
     button.textContent = "✓ Gespeichert"; button.classList.add("saved"); button.disabled = true;
-    setTimeout(() => { button.textContent = old; button.classList.remove("saved"); button.disabled = false; }, 1800);
+    setTimeout(() => { button.textContent = old; button.classList.remove("saved"); button.disabled = false; }, 1400);
   }
 }
 
@@ -1119,8 +1124,10 @@ async function enablePush() {
   const j = sub.toJSON();
   const { error } = await sb.from("push_subscriptions").upsert({ user_id: state.profile.id, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }, { onConflict: "endpoint" });
   if (error) throw error;
+  try { localStorage.setItem("fsp_push_on_" + state.profile.id, "1"); } catch { /* egal */ }
 }
 async function disablePush() {
+  try { localStorage.removeItem("fsp_push_on_" + state.profile.id); } catch { /* egal */ }   // bewusst aus → keine Erinnerung
   const reg = await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.getSubscription();
   if (sub) { await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); }
@@ -1157,12 +1164,31 @@ function pushCard() {
 // Nach der Anmeldung EINMAL fragen, ob Mitteilungen erlaubt werden sollen – danach nie wieder (änderbar in Einstellungen/Profil)
 async function maybeAskPush() {
   if (!state.profile || (!isAdmin() && !state.active) || state.profile.must_change_password) return;
-  if (!pushSupported() || Notification.permission !== "default" || document.querySelector("dialog[open]")) return;
+  if (!pushSupported() || document.querySelector("dialog[open]")) return;
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   if (ios && !installed) return;  // iPhone: geht nur mit installierter App
-  const key = "fsp_push_asked_" + state.profile.id;
-  try { if (localStorage.getItem(key)) return; } catch { return; }
-  const remember = () => { try { localStorage.setItem(key, String(Date.now())); } catch { /* egal */ } };
+  const uid = state.profile.id, key = "fsp_push_asked_" + uid, onKey = "fsp_push_on_" + uid, remKey = "fsp_push_rem_" + uid;
+  const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, String(v)); } catch { /* egal */ } };
+  let sub = null;
+  try { sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); } catch { /* egal */ }
+  if (Notification.permission === "granted" && sub) { lsSet(onKey, 1); return; }   // alles in Ordnung
+  const wasOn = lsGet(onKey) === "1";   // war schon einmal an (und nicht bewusst ausgeschaltet) → Update/Neuinstallation hat es zurückgesetzt
+  if (Notification.permission === "granted" && !sub) { try { await enablePush(); return; } catch { /* dann Erinnerung zeigen */ } }
+  const asked = !!lsGet(key);
+  const lastRem = Number(lsGet(remKey) || 0);
+  if (Notification.permission === "denied") {
+    if (!wasOn || Date.now() - lastRem < 86400000) return;
+    lsSet(remKey, Date.now());
+    return openModal("🔔 Mitteilungen sind blockiert",
+      el("p", {}, "Dein Handy blockiert Mitteilungen für diese App, deshalb bekommst du keine Nachrichten mehr (z. B. bei bestätigten oder geänderten Fahrstunden)."),
+      el("p", { class: "small" }, "Bitte in den ", el("b", {}, "Handy-Einstellungen → Mitteilungen"), " für den Easy Fahrstundenplaner wieder erlauben."),
+      el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "Verstanden")));
+  }
+  if (asked && !wasOn) return;                                   // früher abgelehnt: nicht nerven
+  if (asked && Date.now() - lastRem < 86400000) return;          // Erinnerung höchstens einmal am Tag
+  lsSet(remKey, Date.now());
+  const remember = () => lsSet(key, Date.now());
   const examples = isAdmin()
     ? ["📥 Ein Schüler fragt eine Fahrstunde an", "⚠️ Ein Schüler bittet um eine Ausnahme", "❌ Ein Schüler sagt eine Fahrstunde ab", "✅ Ein Schüler nimmt dein Angebot an"]
     : ["✅ Deine Fahrstunde wurde bestätigt", "📨 Dein Fahrlehrer bietet dir eine Fahrstunde an", "❌ Eine Fahrstunde wurde abgesagt oder abgelehnt", "🎓 Dein Prüfungstermin wurde eingetragen"];
@@ -1178,7 +1204,8 @@ async function maybeAskPush() {
     remember(); closeModal();
     toast(`Du kannst Mitteilungen jederzeit unter ${where} einschalten.`);
   } }, "Jetzt nicht");
-  openModal("🔔 Mitteilungen einschalten",
+  openModal(wasOn ? "🔔 Mitteilungen wieder einschalten" : "🔔 Mitteilungen einschalten",
+    wasOn ? el("div", { class: "notice", style: "margin:0 0 10px" }, "Deine Mitteilungen sind ausgeschaltet – das kann nach einem Update passieren. Bitte einmal wieder einschalten, sonst verpasst du Änderungen an deinen Fahrstunden.") : null,
     el("p", {}, "Der Easy Fahrstundenplaner schickt dir eine ", el("b", {}, "Mitteilung aufs Handy"), " – auch wenn die App geschlossen ist. Zum Beispiel:"),
     el("ul", { class: "push-ask" }, examples.map((t) => el("li", {}, t))),
     el("div", { class: "notice", style: "margin:4px 0 12px" }, "Gleich fragt dein Handy nach – bitte dort auf ", el("b", {}, "„Erlauben“"), " tippen."),
@@ -2063,7 +2090,9 @@ async function openBackfill(preStudent) {
   who.addEventListener("change", paintTypes);
   paintTypes();
   const btn = el("button", { class: "btn ok" }, "✓ Nachtragen");
+  const log = el("div", { class: "retro-log" });
   btn.onclick = () => busy(btn, async () => {
+    let okMsg = "";
     const st = students.find((x) => x.id === who.value);
     if (!st) throw new Error("Bitte einen Schüler wählen");
     const start = fromInputs(date.value, time.value);
@@ -2075,17 +2104,21 @@ async function openBackfill(preStudent) {
       const res = result.querySelector("input:checked").value || null;
       const { error } = await sb.from("exams").insert({ student_id: st.id, kind, exam_at: start.toISOString(), duration_min: dur.value, result: res });
       if (error) throw error;
-      toast(`✓ ${EXAM_KIND[kind]} von ${fullName(st)} nachgetragen.`);
+      okMsg = `${EXAM_KIND[kind]} · ${fullName(st)} · ${fmtDay(start.toISOString())} ${fmtTime(start.toISOString())} Uhr`;
     } else {
       const { data: slot, error } = await sb.from("slots").insert({ starts_at: start.toISOString(), duration_min: dur.value }).select("id").single();
       if (error) throw error;
       const { error: e2 } = await sb.from("bookings").insert({ slot_id: slot.id, student_id: st.id, status: "confirmed",
         actual_minutes: dur.value, lesson_type: type, decided_at: new Date().toISOString() });
       if (e2) { await sb.from("slots").delete().eq("id", slot.id); throw e2; }
-      toast(`✓ ${fullName(st)}: ${dur.value} Min. ${LESSON_TYPES[type]} nachgetragen.`);
+      okMsg = `${LESSON_TYPES[type]} · ${fullName(st)} · ${fmtDay(start.toISOString())} ${fmtTime(start.toISOString())} Uhr · ${dur.value} Min.`;
     }
-    closeModal();
-    render();
+    // Fenster bleibt offen: gleich die nächste Fahrstunde eintragen (Schüler, Art und Dauer bleiben stehen)
+    toast("Nachgetragen: " + okMsg);
+    log.prepend(el("div", { class: "list-item small" }, "✓ " + okMsg));
+    state.renderOnClose = true;   // Kalender/Kontrolle werden beim Schließen aktualisiert
+    const next = new Date(start.getTime() + dur.value * 60000);   // Vorschlag: direkt im Anschluss
+    if (next.getTime() < Date.now()) { date.value = dateInput(next); time.value = timeInput(next); }
   });
   openModal("✍️ Gefahrenes nachtragen",
     el("p", { class: "muted small" }, "Für Fahrten, die schon stattgefunden haben (z. B. vergessen einzutragen). Wird sofort als gefahren abgehakt – der Schüler bekommt keine Mitteilung."),
@@ -2093,7 +2126,8 @@ async function openBackfill(preStudent) {
     el("label", {}, "Was?"), typeRow, result,
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
     el("label", {}, "Dauer (gefahrene Minuten)"), dur.node,
-    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Fertig")),
+    log);
 }
 
 // Mehrere Termine der angezeigten Tage auf einmal löschen: freie, gebuchte und schon gefahrene
@@ -2115,7 +2149,7 @@ function openDeleteMany(slots) {
   const label = () => { const n = picked().length; btn.textContent = `🗑 ${n} Termin${n === 1 ? "" : "e"} löschen`; };
   list.forEach((it) => it.box.addEventListener("change", label)); label();
   const sel = (fn) => () => { list.forEach((it) => (it.box.checked = fn(it))); label(); };
-  const GROUPS = [["free", "Frei (noch nicht gebucht)"], ["booked", "⚠️ Gebucht / angefragt – Schüler bekommt eine Absage"], ["past", "Vergangen / gefahren – verschwindet auch aus Kontrolle und Statistik"]];
+  const GROUPS = [["free", "Frei (noch nicht gebucht)"], ["booked", "⚠️ Gebucht / angefragt – Termin wird wieder frei, Schüler bekommt eine Absage"], ["past", "Vergangen / gefahren – verschwindet auch aus Kontrolle und Statistik"]];
   btn.onclick = () => busy(btn, async () => {
     const chosen = picked();
     if (!chosen.length) throw new Error("Nichts ausgewählt");
@@ -2125,8 +2159,9 @@ function openDeleteMany(slots) {
       + (past.length ? `\n\n${past.length} davon sind schon gefahren/vergangen – sie verschwinden aus Kontrolle und Statistik.` : ""))) return;
     const notify = booked.filter((it) => ["confirmed", "offered"].includes(it.b.status)).map((it) => it.b.id);
     if (notify.length) { try { await sb.functions.invoke("notify", { body: { kind: "booking", ids: notify, event: "cancelled_teacher" } }); } catch { /* kein Muss */ } }
-    const { error } = await sb.from("slots").delete().in("id", chosen.map((it) => it.x.id));
-    if (error) throw error;
+    const freeIds = booked.map((it) => it.b.id), slotIds = chosen.filter((it) => it.group !== "booked").map((it) => it.x.id);
+    if (freeIds.length) { const { error: e1 } = await sb.from("bookings").delete().in("id", freeIds); if (e1) throw e1; }   // gebucht → Termin wird wieder frei
+    if (slotIds.length) { const { error: e2 } = await sb.from("slots").delete().in("id", slotIds); if (e2) throw e2; }
     toast(`🗑 ${chosen.length} Termin${chosen.length === 1 ? "" : "e"} gelöscht.`);
     closeModal();
     render();
@@ -2593,13 +2628,23 @@ async function deleteLessonSlot(slot, b) {
   const p = (b && b.profiles) || {};
   const upcoming = b && b.status === "confirmed" && b.actual_minutes === null && new Date(slot.starts_at).getTime() > Date.now();
   const who = b ? ` mit ${fullName(p)}` : "";
-  const msg = upcoming
+  const freeing = !!b && b.actual_minutes === null && new Date(slot.starts_at).getTime() > Date.now() && ["requested", "confirmed", "offered"].includes(b.status);
+  const msg = freeing
+    ? (upcoming ? `⚠️ Die Fahrstunde${who} am ${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr ist BESTÄTIGT. ` : `Anfrage${who} am ${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr: `)
+      + `Wirklich löschen?\n\nDer Termin wird wieder frei – zur ursprünglich freigegebenen Zeit.` + (upcoming || b.status === "offered" ? "\nDer Schüler bekommt eine Mitteilung." : "")
+    : upcoming
     ? `⚠️ Achtung: Die Fahrstunde${who} am ${fmtDate(slot.starts_at)} um ${fmtTime(slot.starts_at)} Uhr ist BESTÄTIGT und hat noch nicht stattgefunden.\n\nWirklich löschen? Der Schüler bekommt eine Mitteilung, dass die Fahrstunde abgesagt ist.`
     : b && b.status === "requested" ? `Anfrage${who} löschen? Der Termin verschwindet komplett.`
     : `Diesen Termin${who} am ${fmtDate(slot.starts_at)} endgültig löschen?\n\nEr verschwindet auch aus Kontrolle und Statistik.`;
   if (!confirm(msg)) return false;
   if (upcoming || (b && b.status === "offered")) {
     try { await sb.functions.invoke("notify", { body: { kind: "booking", ids: [b.id], event: "cancelled_teacher" } }); } catch { /* Mitteilung ist kein Muss */ }
+  }
+  if (freeing) {   // nur die Buchung entfernen: der Termin bleibt frei (Datenbank stellt die ursprüngliche Zeit wieder her)
+    const { error: eb } = await sb.from("bookings").delete().eq("id", b.id);
+    if (eb) throw eb;
+    toast("🗑 Fahrstunde gelöscht – Termin ist wieder frei.");
+    return true;
   }
   const { error } = await sb.from("slots").delete().eq("id", slot.id);
   if (error) throw error;
@@ -2757,7 +2802,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,counter_from,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,counter_from,change_start,change_dur,change_note,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -2859,16 +2904,57 @@ async function openAdminSlot(slotId) {
         pushNotify("booking", b.id, "rejected");
         notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, slot, reply.value.trim()));
       });
-      const counter = b.wish_start ? el("button", { class: "btn", onclick: () => openCounterOffer(b, slot) }, "⏱ Gegenangebot") : null;
+      const counter = el("button", { class: "btn", onclick: () => openCounterOffer(b, slot) }, "⏱ Gegenangebot");
       parts.push(el("div", { class: "actions" }, ok, counter, no));
     } else {
       const save = el("button", { class: "btn" }, "Änderungen speichern");
+      // Bestätigte, noch nicht gefahrene Fahrstunde: Zeit/Dauer ändern = Anfrage an den Schüler (er muss zusagen)
+      const askable = b.status === "confirmed" && b.actual_minutes === null && new Date(slot.starts_at).getTime() > Date.now();
+      const timeDiff = () => askable && (fromInputs(date.value, time.value).getTime() !== new Date(slot.starts_at).getTime() || dur.value !== slot.duration_min);
+      const sync = () => { save.textContent = timeDiff() ? "📨 Änderung an Schüler senden" : "Änderungen speichern"; };
+      [date, time].forEach((i) => i.addEventListener("input", sync));
+      dur.input.addEventListener("input", sync);
+      async function proposeChange() {
+        const chosen = fromInputs(date.value, time.value);
+        if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
+        if (chosen.getTime() <= Date.now()) throw new Error("Die neue Zeit liegt in der Vergangenheit");
+        const endMs = chosen.getTime() + dur.value * 60000;
+        const { data: near, error: en } = await sb.from("slots").select("id,starts_at,duration_min,bookings(status)")
+          .gte("starts_at", new Date(chosen.getTime() - 12 * 3600000).toISOString()).lt("starts_at", new Date(endMs).toISOString()).neq("id", slot.id);
+        if (en) throw en;
+        const clash = (near || []).some((q) => (q.bookings || []).some((x) => ["requested", "confirmed", "offered"].includes(x.status))
+          && new Date(q.starts_at).getTime() < endMs && new Date(q.starts_at).getTime() + q.duration_min * 60000 > chosen.getTime());
+        if (clash) throw new Error("Zu dieser Zeit ist schon eine andere Fahrstunde eingetragen.");
+        if (meet.value() !== slotMeet(b)) {   // Treffpunkt ändert sich sofort, nur die Zeit braucht die Zusage
+          await meet.commit();
+          const { error: em } = await sb.from("slots").update({ meeting_point: meet.value() }).eq("id", slot.id);
+          if (em) throw em;
+        }
+        const note = reply.value.trim();
+        const { error } = await sb.from("bookings").update({ change_start: chosen.toISOString(), change_dur: dur.value, change_note: note || null, decided_at: new Date().toISOString() }).eq("id", b.id);
+        if (error) throw error;
+        pushNotify("booking", b.id, "change");
+        notifyStep("Änderung an den Schüler gesendet – er muss zusagen", b.profiles && b.profiles.phone, waTextChange(b.profiles, slot.starts_at, chosen.toISOString(), dur.value, note));
+      }
       save.onclick = () => busy(save, async () => {
+        if (timeDiff()) return proposeChange();
         await saveTime();
         const { error } = await sb.from("bookings").update({ admin_reply: reply.value.trim() || null }).eq("id", b.id);
         if (error) throw error;
         done("Gespeichert.");
       });
+      if (askable && b.change_start) {
+        const back = el("button", { class: "btn small ghost" }, "Änderung zurückziehen");
+        back.onclick = () => busy(back, async () => {
+          const { error } = await sb.from("bookings").update({ change_start: null, change_dur: null, change_note: null }).eq("id", b.id);
+          if (error) throw error;
+          done("Änderungsanfrage zurückgezogen.");
+        });
+        parts.push(el("div", { class: "notice wish" }, el("b", {}, `⏳ Änderung vorgeschlagen: ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || slot.duration_min)} Uhr`),
+          el("div", { class: "small" }, "Der Schüler muss noch zusagen. Bis dahin bleibt die Fahrstunde zur bisherigen Zeit bestehen."), el("div", { class: "actions", style: "margin:6px 0 0" }, back)));
+      } else if (askable) {
+        parts.push(el("div", { class: "small muted" }, "Zeit oder Dauer ändern? Der Schüler bekommt dann eine Anfrage und muss in der App zusagen."));
+      }
       parts.push(el("div", { class: "actions" }, save));
     }
   }
@@ -4670,6 +4756,25 @@ function answerOffer(b, accept) {
     note, el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Zurück")));
 }
 
+function answerChange(b, accept) {
+  const note = el("input", { maxlength: 300, placeholder: accept ? "Nachricht (optional)" : "Kurzer Grund (optional), z. B. „Da habe ich Schule.“" });
+  const btn = el("button", { class: "btn " + (accept ? "ok" : "danger") }, accept ? "✓ Neue Zeit bestätigen" : "✗ Bisherige Zeit behalten");
+  btn.onclick = () => busy(btn, async () => {
+    const { error } = await sb.rpc("respond_change", { p_booking: b.id, p_accept: accept, p_note: note.value.trim() });
+    if (error) throw error;
+    pushNotify("booking", b.id, accept ? "change_ok" : "change_no");
+    const f = (iso) => `${fmtDate(iso)} um ${fmtTime(iso)} Uhr`;
+    const text = `Hallo, hier ist ${fullName(state.profile)}. ` + (accept ? `Die neue Zeit für die Fahrstunde passt mir: ${f(b.change_start)}. 👍` : `Die neue Zeit passt mir leider nicht. Ich bleibe bei ${f(b.slots.starts_at)}.`) +
+      (note.value.trim() ? `\n${note.value.trim()}` : "");
+    notifyStep(accept ? "Zugesagt – die Fahrstunde ist verschoben" : "Abgesagt – die Fahrstunde bleibt zur bisherigen Zeit", state.settings.admin_phone, text, "deinen Fahrlehrer");
+  });
+  openModal(accept ? "Neue Zeit bestätigen" : "Änderung ablehnen",
+    el("p", {}, "Bisher: ", el("b", {}, `${fmtDate(b.slots.starts_at)}, ${fmtRange(b.slots.starts_at, b.slots.duration_min)} Uhr`), el("br"),
+      "Neu: ", el("b", {}, `${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || b.slots.duration_min)} Uhr`)),
+    accept ? null : el("div", { class: "notice" }, "Wenn du ablehnst, bleibt deine Fahrstunde zur bisherigen Zeit bestehen. Bitte sprich ggf. kurz mit deinem Fahrlehrer."),
+    note, el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Zurück")));
+}
+
 function openStudentCancel(b) {
   const late = isLate(b.slots.starts_at);
   let why = null;   // "sick" oder "other"
@@ -4732,7 +4837,7 @@ function openStudentCancel(b) {
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_note,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -4753,6 +4858,7 @@ async function studentMine() {
     const start = new Date(b.slots.starts_at);
     const future = start.getTime() > now;
     const isOffer = b.status === "offered" && future;
+    const hasChange = b.status === "confirmed" && !!b.change_start && future && b.actual_minutes === null;
     const canCancel = b.status === "confirmed" && b.actual_minutes === null && future;
     const withdraw = b.status === "requested" ? el("button", { class: "btn small ghost" }, "Anfrage zurückziehen") : null;
     if (withdraw) withdraw.onclick = () => busy(withdraw, async () => {
@@ -4763,11 +4869,12 @@ async function studentMine() {
       toast("Anfrage zurückgezogen.");
       render();
     });
-    const badge = isOffer ? ["offered", "Angebot – bitte antworten"]
+    const badge = hasChange ? ["offered", "Änderung – bitte antworten"]
+      : isOffer ? ["offered", "Angebot – bitte antworten"]
       : b.status === "requested" ? ["requested", "Angefragt – wartet"]
       : ["confirmed", "✓ Bestätigt"];
     const meet = b.status === "confirmed" || isOffer ? meetingOf(b) : "";
-    return el("div", { class: "lesson-card" + (isOffer ? " offer" : "") },
+    return el("div", { class: "lesson-card" + (isOffer || hasChange ? " offer" : "") },
       el("div", { class: "date-chip" },
         el("span", { class: "w" }, start.toLocaleDateString("de-DE", { weekday: "short" })),
         el("span", { class: "d" }, start.getDate()),
@@ -4787,6 +4894,10 @@ async function studentMine() {
         isOffer ? el("div", { class: "actions" },
           el("button", { class: "btn small ok", onclick: () => answerOffer(b, true) }, "✓ Zusagen"),
           el("button", { class: "btn small danger", onclick: () => answerOffer(b, false) }, "✗ Absagen")) : null,
+        hasChange ? el("div", { class: "lesson-hint" }, `🔄 Dein Fahrlehrer möchte die Fahrstunde verschieben auf ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || b.slots.duration_min)} Uhr.` + (b.change_note ? `  💬 ${b.change_note}` : "")) : null,
+        hasChange ? el("div", { class: "actions" },
+          el("button", { class: "btn small ok", onclick: () => answerChange(b, true) }, "✓ Neue Zeit passt"),
+          el("button", { class: "btn small danger", onclick: () => answerChange(b, false) }, "✗ Passt nicht")) : null,
         withdraw || canCancel ? el("div", { class: "actions" }, withdraw,
           canCancel ? el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(b) }, "✗ Fahrstunde absagen") : null) : null));
   };

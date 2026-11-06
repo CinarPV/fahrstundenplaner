@@ -817,10 +817,20 @@ html.dark .btn.cancel-strong { color: #ff8a80; border-color: #ff8a80; }
 .cl-row.todo.over .cl-flag { color: #a86a00; font-weight: 700; }
 html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 
-/* Erfolgsmeldung deutlich grün, größer, länger sichtbar */
-.toast.ok { background: #1f8f4e; color: #fff; font-size: 16px; font-weight: 700; padding: 14px 20px; border-radius: 12px; animation: toast-pop .25s ease-out; }
-@keyframes toast-pop { from { transform: translateX(-50%) scale(.92); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
-.btn.saved, .btn.saved:disabled { background: #1f8f4e; border-color: #1f8f4e; color: #fff; opacity: 1; }
+/* Erfolgsmeldung: schlank, in den Farben der App, nur kurz sichtbar (2 Sek.) */
+.toast.ok { background: #fff; color: var(--brand); border: 1px solid #cfe3ee; border-left: 5px solid var(--teal); border-radius: 999px;
+  font-size: 15px; font-weight: 700; padding: 9px 18px 9px 12px; box-shadow: 0 6px 20px rgba(5,103,154,.18); animation: toast-pop .22s ease-out; }
+.toast.ok::before { content: "✓"; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--teal); color: #fff; font-size: 13px; margin-right: 9px; vertical-align: middle; }
+@keyframes toast-pop { from { transform: translateX(-50%) translateY(8px); opacity: 0; } to { transform: translateX(-50%) translateY(0); opacity: 1; } }
+/* Knöpfe: beim Drücken eindrücken, beim Speichern pulsieren, danach kurz „✓ Gespeichert“ */
+.btn { transition: transform .08s ease; }
+.btn:active:not(:disabled) { transform: scale(.96); }
+.btn.working { animation: btn-pulse .8s ease-in-out infinite; }
+@keyframes btn-pulse { 50% { opacity: .65; } }
+.btn.saved, .btn.saved:disabled { background: var(--teal); border-color: var(--teal); color: #fff; opacity: 1; animation: btn-pop .35s ease-out; }
+@keyframes btn-pop { 0% { transform: scale(.94); } 60% { transform: scale(1.04); } 100% { transform: scale(1); } }
+.retro-log { margin-top: 12px; }
 
 /* Theorie (blau) und Sperrzeiten (grau mit Streifen) in Kalender und Heute */
 :root { --theory-bg: #e8efff; --theory-fg: #2a3f8f; --theory-bd: #9fb3f0; --block-bg: #eceff1; --block-fg: #37474f; --block-bd: #90a4ae; }
