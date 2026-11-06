@@ -42,9 +42,12 @@ function toast(msg, isError) {
   t.textContent = isError ? msg : msg.replace(/^[✓✔]\s*/, "");   // das Häkchen setzt das Design
   t.className = "toast" + (isError ? " error" : " ok");
   t.hidden = false;
+  // Offene Fenster (Dialoge) liegen sonst VOR der Meldung → in die oberste Schicht holen
+  try { t.setAttribute("popover", "manual"); if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch { /* ältere Browser */ }
   if (!isError) toast._ok = Date.now();   // merkt sich: gerade wurde etwas erfolgreich gespeichert
+  t.onclick = () => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; };
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => (t.hidden = true), isError ? 6000 : 2000);
+  toast._t = setTimeout(() => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; }, isError ? 9000 : 2000);
 }
 
 function fail(error) {
@@ -566,6 +569,7 @@ function durationControl(initial, opts = {}) {
 }
 
 function openModal(title, ...content) {
+  openModal._n = (openModal._n || 0) + 1;
   modal.classList.remove("full-page");
   modalBody.replaceChildren(
     el("div", { class: "modal-head" },
@@ -613,11 +617,24 @@ window.addEventListener("popstate", (e) => {
 modal.addEventListener("close", () => { if (history.state && history.state.modal) history.back(); });
 modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
 
+// Wurde im Hintergrund „Abbrechen“ in einer Rückfrage gedrückt? (dann keine Erfolgsmeldung)
+let lastConfirm = true;
+const _confirm = window.confirm.bind(window);
+window.confirm = (m) => (lastConfirm = _confirm(m));
 async function busy(button, fn) {
-  const t0 = Date.now();
+  const t0 = Date.now(), n0 = openModal._n || 0;
   let saved = false;
+  lastConfirm = true;
   if (button) { button.disabled = true; button.classList.add("working"); }
-  try { await fn(); saved = (toast._ok || 0) >= t0; } catch (e) { fail(e); } finally { if (button) { button.disabled = false; button.classList.remove("working"); } }
+  try {
+    await fn();
+    saved = (toast._ok || 0) >= t0;
+    // Jeder Knopf bestätigt sich: kam weder eine Meldung noch ein neues Fenster, kurz „Erledigt“ zeigen
+    if (!saved && lastConfirm && (openModal._n || 0) === n0) { toast("Erledigt"); saved = true; }
+  } catch (e) {
+    fail(e);
+    if (button) { button.classList.add("failed"); setTimeout(() => button.classList.remove("failed"), 700); }
+  } finally { if (button) { button.disabled = false; button.classList.remove("working"); } }
   // Bleibt der Knopf sichtbar: kurz „✓ Gespeichert“ zeigen und gesperrt lassen (verhindert doppeltes Drücken)
   if (saved && button && button.isConnected && button.offsetParent !== null) {
     const old = button.textContent;
@@ -1644,26 +1661,56 @@ function openPlanned(kind, x) {
     text ? el("p", {}, "Notiz: ", text) : null,
     el("div", { class: "actions" }, tick, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
-// Einträge für die Kalender-Woche
+// Einträge für die Kalender-Woche (eigene Einträge sehen aus wie normale Fahrstunden/Prüfungen, nur mit 📵 = ohne App)
 const plannedExtras = (p) => p.theory.map((t) => ({ at: t.held_at,
   node: el("button", { class: "slot theory", onclick: (ev) => { ev.stopPropagation(); openPlanned("theory", t); } },
     slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) }))
   .concat(p.own.map((x) => ({ at: x.starts_at,
-    node: el("button", { class: "slot own", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
-      slotHead(fmtRange(x.starts_at, x.duration_min), x.kind === "exam" ? "Prüfung" : x.done ? "gefahren" : "ohne App"), `👤 ${x.student_name} · ${ownLabel(x)}`) })));
+    node: x.kind === "exam"
+      ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), `📵 ${x.student_name}`)
+      : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+          slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
+          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + `📵 ${x.student_name}`) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
   node: el("div", { class: "tr theory" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
     el("span", { class: "tr-name" }, "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
     el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("theory", t) }, "⋯"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
-    const canTick = x.kind === "lesson" && !x.done && Date.now() >= new Date(x.starts_at).getTime() - 45 * 60000;
-    return { at: x.starts_at,
-      node: el("div", { class: "tr own" + (x.done ? " done" : "") }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
-        el("span", { class: "tr-name" }, `👤 ${x.student_name} · ${ownLabel(x)}`), el("span", { class: "tr-pill" }, `${x.done ? "✓ " : ""}${x.duration_min} Min.`),
-        canTick ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
-        el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("own", x) }, "⋯"))) };
+    const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
+    const name = el("button", { type: "button", class: "tr-name name-link", title: "Details", onclick: () => openPlanned("own", x) }, (x.kind === "exam" ? "🎓 " : "") + `📵 ${x.student_name}`);
+    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr exam" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
+    const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
+    const canTick = !x.done && now >= start - 45 * 60000;
+    return { at: x.starts_at, node: el("div", { class: "tr " + phase }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
+      x.done ? el("span", { class: "tr-pill ok" }, `✓ ${x.duration_min} Min.`)
+        : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), onclick: () => openPlanned("own", x) }, `${x.duration_min} Min. ✎`),
+      canTick ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
+      el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("own", x) }, "⋯"))) };
   }));
+// Prüft, ob die neuen Einträge mit etwas Bestehendem kollidieren → verständliche Meldung statt Doppelbelegung
+async function findClash(items) {
+  const starts = items.map((x) => new Date(x.starts_at).getTime()), ends = items.map((x, i) => starts[i] + x.duration_min * 60000);
+  const lo = new Date(Math.min(...starts) - 6 * 3600000).toISOString(), hi = new Date(Math.max(...ends)).toISOString();
+  const [sl, ow, ex] = await Promise.all([
+    sb.from("slots").select("starts_at,duration_min,bookings(status,profiles(first_name,last_name))").gte("starts_at", lo).lt("starts_at", hi),
+    sb.from("own_entries").select("student_name,starts_at,duration_min").eq("teacher_id", state.profile.id).gte("starts_at", lo).lt("starts_at", hi),
+    sb.from("exams").select("exam_at,duration_min,profiles(first_name,last_name)").gte("exam_at", lo).lt("exam_at", hi),
+  ]);
+  const hit = (aS, aD, bS, bD) => aS < bS + bD * 60000 && bS < aS + aD * 60000;
+  const when = (iso, d) => `${fmtDay(iso)} ${fmtRange(iso, d)} Uhr`;
+  for (let i = 0; i < items.length; i++) {
+    const x = items[i];
+    for (const q of sl.data || []) {
+      const bk = (q.bookings || []).find((y) => ["requested", "confirmed", "offered"].includes(y.status));
+      if (bk && hit(starts[i], x.duration_min, new Date(q.starts_at).getTime(), q.duration_min)) return `Nicht gespeichert: Zu dieser Zeit ist schon eine Fahrstunde mit ${fullName(bk.profiles)} eingetragen (${when(q.starts_at, q.duration_min)}). Bitte eine andere Zeit wählen.`;
+    }
+    for (const q of ow.data || []) if (hit(starts[i], x.duration_min, new Date(q.starts_at).getTime(), q.duration_min)) return `Nicht gespeichert: Zu dieser Zeit ist schon ${q.student_name} eingetragen (${when(q.starts_at, q.duration_min)}). Bitte eine andere Zeit wählen.`;
+    for (const q of ex.data || []) if (hit(starts[i], x.duration_min, new Date(q.exam_at).getTime(), q.duration_min || 55)) return `Nicht gespeichert: Zu dieser Zeit ist schon eine Prüfung von ${fullName(q.profiles)} eingetragen (${when(q.exam_at, q.duration_min || 55)}). Bitte eine andere Zeit wählen.`;
+  }
+  return "";
+}
 const offOn = (day) => { const d = dateInput(day); return (state.timeOff || []).find((t) => d >= t.from_day && d <= t.to_day); };
 const fmtDayStr = (s) => new Date(s + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
 const offRange = (t) => (t.from_day === t.to_day ? fmtDayStr(t.from_day) : `${fmtDayStr(t.from_day)} – ${fmtDayStr(t.to_day)}`);
@@ -2136,7 +2183,7 @@ async function openBackfill(preStudent) {
     log.prepend(el("div", { class: "list-item small" }, "✓ " + okMsg));
     state.renderOnClose = true;   // Kalender/Kontrolle werden beim Schließen aktualisiert
     const next = new Date(start.getTime() + dur.value * 60000);   // Vorschlag: direkt im Anschluss
-    if (next.getTime() < Date.now()) { date.value = dateInput(next); time.value = timeInput(next); }
+    if (next.getTime() < Date.now()) time.value = timeInput(next);   // Datum bleibt, nur die Uhrzeit rückt vor
   });
   openModal("✍️ Gefahrenes nachtragen",
     el("p", { class: "muted small" }, "Für Fahrten, die schon stattgefunden haben (z. B. vergessen einzutragen). Wird sofort als gefahren abgehakt – der Schüler bekommt keine Mitteilung."),
@@ -2361,11 +2408,12 @@ function newSlotForm(opts = {}) {
   const ownTime = el("input", { type: "time", value: "10:00", step: 300 });
   const ownDur = durationControl(state.settings.default_duration || 90);
   const ownNote = el("input", { maxlength: 200, placeholder: "Notiz (optional)" });
-  const paintOwnTypes = () => ownTypeRow.replaceChildren(...Object.keys(LESSON_TYPES).filter((t) => t !== "schaltpruefung").concat("exam").map((t) => el("button", {
+  const paintOwnTypes = () => ownTypeRow.replaceChildren(...Object.keys(LESSON_TYPES).filter((t) => t !== "schaltpruefung").concat("exam", "theory").map((t) => el("button", {
     type: "button", class: "tab" + (t === ownType ? " active" : ""),
-    onclick: () => { ownType = t; ownDur.set(t === "exam" ? 55 : state.settings.default_duration || 90); paintOwnTypes(); refresh(); },
-  }, t === "exam" ? "🎓 Prüfung" : typeLabel(t))));
+    onclick: () => { ownType = t; ownDur.set(t === "exam" ? 55 : t === "theory" ? 90 : state.settings.default_duration || 90); paintOwnTypes(); refresh(); },
+  }, t === "exam" ? "🎓 Prüfung" : t === "theory" ? "📚 Theorie" : typeLabel(t))));
   paintOwnTypes();
+  const saveLog = el("div", { class: "retro-log" });
   const ownBox = el("div", { hidden: true },
     el("div", { class: "notice", style: "margin:0 0 8px" }, "Für Schüler, die die App nicht nutzen. Der Eintrag steht nur in deinem Kalender, zählt aber in Kontrolle und Lohnberechnung. Für andere Schüler ist diese Zeit nicht mehr buchbar."),
     el("label", {}, "Name"), ownName, el("label", {}, "Was?"), ownTypeRow,
@@ -2521,32 +2569,43 @@ function newSlotForm(opts = {}) {
     }
     if (mode === "theory" || mode === "own") {
       const items = build();
-      if (!items.length) throw new Error("Bitte Datum und Beginn prüfen");
-      if (mode === "theory") {
-        const { error } = await sb.from("theory_lessons").insert(items.map((x) => ({ teacher_id: state.profile.id, held_at: x.starts_at, duration_min: x.duration_min, note: x.note || null })));
-        if (error) throw error;
-        showDate(new Date(items[0].starts_at));
-        toast(`📚 ${items.length} Theoriestunde${items.length === 1 ? "" : "n"} angelegt.`); closeModal(); render();
-        return;
-      }
+      if (!items.length) throw new Error("Nichts angelegt: Bitte Datum und Uhrzeit prüfen (bei „Mehrere Tage“ mindestens einen Tag antippen).");
       const name = ownName.value.trim();
-      if (!name) throw new Error("Bitte den Namen des Schülers eintragen");
-      const isExam = ownType === "exam", nowMs = Date.now();
-      const rows = items.map((x) => ({ teacher_id: state.profile.id, kind: isExam ? "exam" : "lesson", lesson_type: isExam ? null : ownType, student_name: name,
-        starts_at: x.starts_at, duration_min: x.duration_min, note: ownNote.value.trim() || null,
-        done: new Date(x.starts_at).getTime() + x.duration_min * 60000 <= nowMs }));   // schon vorbei → gleich als gefahren abgehakt
-      const { error } = await sb.from("own_entries").insert(rows);
-      if (error) throw error;
-      // Für andere Schüler nicht mehr buchbar: freie Termine in dieser Zeit entfernen, gebuchte nur melden
-      const t0 = Math.min(...items.map((x) => new Date(x.starts_at).getTime())), t1 = Math.max(...items.map((x) => new Date(x.starts_at).getTime() + x.duration_min * 60000));
-      const { data: sl } = await sb.from("slots").select("id,starts_at,duration_min,bookings(status)").gte("starts_at", new Date(t0 - 6 * 3600000).toISOString()).lt("starts_at", new Date(t1).toISOString());
-      const hit = (sl || []).filter((q) => items.some((x) => { const a = new Date(x.starts_at).getTime(), c = new Date(q.starts_at).getTime(); return c < a + x.duration_min * 60000 && c + q.duration_min * 60000 > a; }));
-      const isBooked = (q) => (q.bookings || []).some((y) => ["requested", "confirmed", "offered"].includes(y.status));
-      const freeIds = hit.filter((q) => !isBooked(q)).map((q) => q.id), bookedN = hit.filter(isBooked).length;
-      if (freeIds.length) { const { error: ed } = await sb.from("slots").delete().in("id", freeIds); if (ed) throw ed; }
+      if (mode === "own" && !name) throw new Error("Nicht gespeichert: Bitte den Namen des Schülers eintragen.");
+      const asTheory = mode === "theory" || ownType === "theory";
+      const isExam = mode === "own" && ownType === "exam";
+      let summary, extra = "";
+      if (asTheory) {
+        const noteTxt = mode === "own" ? [name, ownNote.value.trim()].filter(Boolean).join(" · ") : thNote.value.trim();
+        const { error } = await sb.from("theory_lessons").insert(items.map((x) => ({ teacher_id: state.profile.id, held_at: x.starts_at, duration_min: x.duration_min, note: noteTxt || null })));
+        if (error) throw error;
+        summary = "📚 Theorie" + (noteTxt ? ` · ${noteTxt}` : "");
+      } else {
+        const clash = await findClash(items);
+        if (clash) throw new Error(clash);
+        const nowMs = Date.now();
+        const rows = items.map((x) => ({ teacher_id: state.profile.id, kind: isExam ? "exam" : "lesson", lesson_type: isExam ? null : ownType, student_name: name,
+          starts_at: x.starts_at, duration_min: x.duration_min, note: ownNote.value.trim() || null,
+          done: new Date(x.starts_at).getTime() + x.duration_min * 60000 <= nowMs }));   // schon vorbei → gleich als gefahren abgehakt
+        const { error } = await sb.from("own_entries").insert(rows);
+        if (error) throw error;
+        // Für andere Schüler nicht mehr buchbar: freie Termine in dieser Zeit entfernen
+        const t0 = Math.min(...items.map((x) => new Date(x.starts_at).getTime())), t1 = Math.max(...items.map((x) => new Date(x.starts_at).getTime() + x.duration_min * 60000));
+        const { data: sl } = await sb.from("slots").select("id,starts_at,duration_min,bookings(status)").gte("starts_at", new Date(t0 - 6 * 3600000).toISOString()).lt("starts_at", new Date(t1).toISOString());
+        const freeIds = (sl || []).filter((q) => !(q.bookings || []).some((y) => ["requested", "confirmed", "offered"].includes(y.status))
+          && items.some((x) => { const a = new Date(x.starts_at).getTime(), c = new Date(q.starts_at).getTime(); return c < a + x.duration_min * 60000 && c + q.duration_min * 60000 > a; })).map((q) => q.id);
+        if (freeIds.length) { const { error: ed } = await sb.from("slots").delete().in("id", freeIds); if (ed) throw ed; extra = ` · ${freeIds.length} freie Termine entfernt`; }
+        summary = `${isExam ? "🎓 Prüfung" : typeLabel(ownType)} · ${name}`;
+      }
+      // Fenster bleibt offen: Datum bleibt, die Uhrzeit rückt hinter den letzten Eintrag – gleich der nächste
+      const nDays = new Set(items.map((x) => dateInput(x.starts_at))).size;
+      toast(`${items.length} Eintrag${items.length === 1 ? "" : "e"} gespeichert`);
+      saveLog.prepend(el("div", { class: "list-item small" }, `✓ ${summary} · ` + (nDays > 1 ? `${nDays} Tage` : `${fmtDay(items[0].starts_at)} ${fmtTime(items[0].starts_at)} Uhr`) + extra));
+      const lastEnd = new Date(Math.max(...items.map((x) => new Date(x.starts_at).getTime() + x.duration_min * 60000)));
+      if (mode === "own") { ownTime.value = timeInput(lastEnd); ownName.focus(); ownName.select(); } else thTime.value = timeInput(lastEnd);
+      state.renderOnClose = true;   // Kalender/Kontrolle werden beim Schließen aktualisiert
       showDate(new Date(items[0].starts_at));
-      toast(`${items.length} Eintrag${items.length === 1 ? "" : "e"} für ${name} gespeichert.` + (freeIds.length ? ` ${freeIds.length} freie Termine entfernt.` : "") + (bookedN ? ` ⚠️ ${bookedN} gebuchte Termine liegen in dieser Zeit – bitte prüfen.` : ""));
-      closeModal(); render();
+      refresh();
       return;
     }
     const list = build();
@@ -2593,6 +2652,7 @@ function newSlotForm(opts = {}) {
     slotBox,
     preview,
     el("div", { class: "actions" }, btn),
+    saveLog,
   );
   slotBox.append(
     el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,

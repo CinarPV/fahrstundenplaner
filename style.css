@@ -839,3 +839,10 @@ html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 .tr.theory { border-left-color: var(--theory-bd); background: var(--theory-bg); }
 .tr.own { border-left-color: #8fd3cb; background: #e6f6f4; }
 .tr.own.done { opacity: .85; }
+
+/* Meldungen als Popover: liegen über offenen Fenstern; UA-Standard (inset:0, Rahmen) zurücksetzen */
+.toast[popover] { inset: auto auto max(20px, calc(env(safe-area-inset-bottom) + 12px)) 50%; margin: 0; border: 0; overflow: visible; width: max-content; max-width: calc(100vw - 32px); }
+.toast.error { font-size: 15px; font-weight: 600; padding: 12px 16px; border-radius: 12px; line-height: 1.35; box-shadow: 0 8px 24px rgba(180,30,30,.35); }
+.toast.error::before { content: "⚠️ "; }
+.btn.failed { animation: btn-shake .4s ease-in-out; outline: 2px solid var(--danger); }
+@keyframes btn-shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
