@@ -1601,51 +1601,69 @@ function sickShare(who, msg, sent, K = AWAY.krank) {
 async function loadTimeOff() {
   const { data } = await sb.from("time_off").select("id,from_day,to_day,note").order("from_day");
   state.timeOff = data || [];
-  // Sperrzeiten innerhalb eines Tages (z. B. 8–9 Uhr) ab gestern
-  const b = await sb.from("time_blocks").select("id,starts_at,duration_min,reason").gte("starts_at", addDays(dayStart(new Date()), -1).toISOString());
+  // Eigene Einträge (Schüler ohne App) ab gestern – dort werden keine Fahrstunden angelegt
+  const b = await sb.from("own_entries").select("id,starts_at,duration_min").gte("starts_at", addDays(dayStart(new Date()), -1).toISOString());
   state.timeBlocks = b.data || [];
   return state.timeOff;
 }
 const blockAt = (startMs, durMin) => (state.timeBlocks || []).find((b) => { const s = new Date(b.starts_at).getTime(); return startMs < s + b.duration_min * 60000 && startMs + durMin * 60000 > s; });
 
-// Theorie und Sperrzeiten eines Zeitraums (für Kalender und Heute)
+// Theorie und eigene Einträge (Schüler ohne App) eines Zeitraums – nur für den Fahrlehrer sichtbar
 async function loadPlanned(from, to) {
-  const [t, b] = await Promise.all([
+  const [t, o] = await Promise.all([
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
-    sb.from("time_blocks").select("id,starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
   ]);
-  return { theory: t.data || [], blocks: b.data || [] };
+  return { theory: t.data || [], own: o.data || [] };
+}
+const ownLabel = (x) => (x.kind === "exam" ? "🎓 Prüfung" : typeLabel(x.lesson_type));
+async function setOwnDone(x, on) {
+  const { error } = await sb.from("own_entries").update({ done: on }).eq("id", x.id);
+  if (error) throw error;
+  toast(on ? `${x.student_name}: ${x.duration_min} Min. gefahren` : "Haken zurückgenommen");
+  render();
 }
 function openPlanned(kind, x) {
-  const isT = kind === "theory", start = isT ? x.held_at : x.starts_at, text = isT ? x.note : x.reason;
+  const isT = kind === "theory", start = isT ? x.held_at : x.starts_at, text = x.note;
   const del = el("button", { class: "btn danger" }, "🗑 Löschen");
   del.onclick = () => busy(del, async () => {
-    if (!confirm(isT ? "Diese Theoriestunde löschen?" : "Diese Sperrzeit löschen?")) return;
-    const { error } = await sb.from(isT ? "theory_lessons" : "time_blocks").delete().eq("id", x.id);
+    if (!confirm(isT ? "Diese Theoriestunde löschen?" : "Diesen Eintrag löschen? Er verschwindet auch aus Kontrolle und Lohnberechnung.")) return;
+    const { error } = await sb.from(isT ? "theory_lessons" : "own_entries").delete().eq("id", x.id);
     if (error) throw error;
-    closeModal(); toast(isT ? "Theoriestunde gelöscht." : "Sperrzeit gelöscht."); render();
+    closeModal(); toast("Gelöscht."); render();
   });
-  openModal(isT ? "📚 Theorieunterricht" : "⛔ Gesperrt",
-    el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr`),
-    text ? el("p", {}, isT ? "Notiz: " : "Grund: ", text) : null,
-    el("div", { class: "actions" }, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+  let tick = null;
+  if (!isT && x.kind === "lesson") {
+    tick = el("button", { class: "btn" + (x.done ? " ghost" : " ok") }, x.done ? "Haken zurücknehmen" : "✓ Als gefahren abhaken");
+    tick.onclick = () => busy(tick, async () => { await setOwnDone(x, !x.done); closeModal(); });
+  }
+  openModal(isT ? "📚 Theorieunterricht" : `${ownLabel(x)} · ${x.student_name}`,
+    el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr · ${x.duration_min} Min.`),
+    !isT ? el("p", { class: "small muted" }, "Eintrag nur für deinen Kalender – der Schüler hat keinen App-Zugang, andere Schüler sehen diese Zeit nicht als frei.") : null,
+    !isT && x.kind === "lesson" ? el("p", {}, x.done ? "✓ Abgehakt – zählt in Kontrolle und Lohn" : "☐ Noch nicht abgehakt") : null,
+    text ? el("p", {}, "Notiz: ", text) : null,
+    el("div", { class: "actions" }, tick, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
 // Einträge für die Kalender-Woche
 const plannedExtras = (p) => p.theory.map((t) => ({ at: t.held_at,
   node: el("button", { class: "slot theory", onclick: (ev) => { ev.stopPropagation(); openPlanned("theory", t); } },
     slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) }))
-  .concat(p.blocks.map((b) => ({ at: b.starts_at,
-    node: el("button", { class: "slot block", onclick: (ev) => { ev.stopPropagation(); openPlanned("block", b); } },
-      slotHead(fmtRange(b.starts_at, b.duration_min), "gesperrt"), "⛔ " + (b.reason || "Gesperrt")) })));
+  .concat(p.own.map((x) => ({ at: x.starts_at,
+    node: el("button", { class: "slot own", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+      slotHead(fmtRange(x.starts_at, x.duration_min), x.kind === "exam" ? "Prüfung" : x.done ? "gefahren" : "ohne App"), `👤 ${x.student_name} · ${ownLabel(x)}`) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
   node: el("div", { class: "tr theory" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
     el("span", { class: "tr-name" }, "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
     el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("theory", t) }, "⋯"))) }))
-  .concat(p.blocks.filter((b) => sameDay(new Date(b.starts_at), day)).map((b) => ({ at: b.starts_at,
-    node: el("div", { class: "tr block" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(b.starts_at)),
-      el("span", { class: "tr-name" }, "⛔ " + (b.reason || "Gesperrt")), el("span", { class: "tr-pill" }, `bis ${fmtTime(addMin(b.starts_at, b.duration_min))}`),
-      el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("block", b) }, "⋯"))) })));
+  .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
+    const canTick = x.kind === "lesson" && !x.done && Date.now() >= new Date(x.starts_at).getTime() - 45 * 60000;
+    return { at: x.starts_at,
+      node: el("div", { class: "tr own" + (x.done ? " done" : "") }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
+        el("span", { class: "tr-name" }, `👤 ${x.student_name} · ${ownLabel(x)}`), el("span", { class: "tr-pill" }, `${x.done ? "✓ " : ""}${x.duration_min} Min.`),
+        canTick ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
+        el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("own", x) }, "⋯"))) };
+  }));
 const offOn = (day) => { const d = dateInput(day); return (state.timeOff || []).find((t) => d >= t.from_day && d <= t.to_day); };
 const fmtDayStr = (s) => new Date(s + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
 const offRange = (t) => (t.from_day === t.to_day ? fmtDayStr(t.from_day) : `${fmtDayStr(t.from_day)} – ${fmtDayStr(t.to_day)}`);
@@ -1821,7 +1839,7 @@ async function adminToday() {
   const go = (n) => { state.todayDate = noSunday(addDays(first, n), n); render(); };
 
   const save = async (b, patch, msg) => {
-    const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
+    const { error } = b._own ? await sb.from("own_entries").update({ done: true }).eq("id", b.id) : await sb.from("bookings").update(patch).eq("id", b.id);
     if (error) throw error;
     toast(msg);
     render();
@@ -2254,7 +2272,7 @@ function newSlotForm(opts = {}) {
     examNote.node,
     el("label", {}, "Hinweis (optional, sieht auch der Schüler)"), examHint);
   // Oben: Fahrstunde (Standard) oder Prüfung. Bei Fahrstunde darunter: freigeben oder einem Schüler zuordnen.
-  const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"], ["theory", "📚 Theorie"], ["block", "⛔ Sperrzeit"]];
+  const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"], ["theory", "📚 Theorie"], ["own", "👤 Ohne App"]];
   const kindBtns = KINDS.map(([k, text]) => el("button", { type: "button", class: "tab kind-tab" + (k === "exam" ? " exam-mode" : ""),
     onclick: () => setMode(k === "lesson" ? lessonMode : k) }, text));
   const SUBS = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Einem Schüler zuordnen"]];
@@ -2273,7 +2291,7 @@ function newSlotForm(opts = {}) {
     assignExtras.hidden = m === "exam";
     examBox.hidden = m !== "exam";
     theoryBox.hidden = m !== "theory";
-    blockBox.hidden = m !== "block";
+    ownBox.hidden = m !== "own";
     dayPick.hidden = m === "exam";
     slotBox.hidden = !isLesson;
     if ((m === "assign" || m === "exam") && !students) {
@@ -2336,27 +2354,24 @@ function newSlotForm(opts = {}) {
   const thDur = durationControl(90);
   const thNote = el("input", { maxlength: 200, placeholder: "z. B. Thema 5 (optional)" });
   const theoryBox = el("div", { hidden: true }, el("label", {}, "Beginn"), thTime, el("label", {}, "Dauer"), thDur.node, el("label", {}, "Notiz"), thNote);
-  // Sperrzeiten: ein oder mehrere Zeiträume, jeder mit eigener Begründung
-  const blockRows = [];
-  const blockList = el("div", {});
-  const blockBox = el("div", { hidden: true }, el("label", {}, "Welche Zeiten sollen gesperrt sein?"), blockList);
-  function addBlockRow(from, to) {
-    const f = el("input", { type: "time", value: from, step: 300 }), t = el("input", { type: "time", value: to, step: 300 });
-    const r = el("input", { maxlength: 100, placeholder: "Begründung, z. B. Arzttermin" });
-    const row = { f, t, r };
-    const rm = el("button", { type: "button", class: "btn small ghost", "aria-label": "Zeitraum entfernen", onclick: () => {
-      if (blockRows.length < 2) return;
-      blockRows.splice(blockRows.indexOf(row), 1); row.node.remove(); refresh();
-    } }, "×");
-    row.node = el("div", { class: "block-row" },
-      el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), f), el("div", {}, el("label", {}, "Bis"), t)),
-      el("div", { class: "done-row" }, r, rm));
-    blockRows.push(row); blockList.append(row.node);
-    [f, t, r].forEach((i) => i.addEventListener("input", refresh));
-  }
-  addBlockRow("08:00", "09:00");
-  blockBox.append(el("div", { class: "actions", style: "margin:6px 0 0" },
-    el("button", { type: "button", class: "btn small ghost", onclick: () => { const last = blockRows[blockRows.length - 1]; addBlockRow(last.t.value || "11:00", last.t.value ? fromMin(Math.min(1439, toMin(last.t.value) + 60)) : "12:00"); refresh(); } }, "+ weiteren Zeitraum")));
+  // Fahrstunde/Prüfung eines Schülers ohne App-Zugang: nur im Kalender des Fahrlehrers, zählt in Kontrolle und Lohn
+  const ownName = el("input", { maxlength: 80, placeholder: "Name des Schülers", autocomplete: "off" });
+  let ownType = "normal";
+  const ownTypeRow = el("div", { class: "tabs type-tabs" });
+  const ownTime = el("input", { type: "time", value: "10:00", step: 300 });
+  const ownDur = durationControl(state.settings.default_duration || 90);
+  const ownNote = el("input", { maxlength: 200, placeholder: "Notiz (optional)" });
+  const paintOwnTypes = () => ownTypeRow.replaceChildren(...Object.keys(LESSON_TYPES).filter((t) => t !== "schaltpruefung").concat("exam").map((t) => el("button", {
+    type: "button", class: "tab" + (t === ownType ? " active" : ""),
+    onclick: () => { ownType = t; ownDur.set(t === "exam" ? 55 : state.settings.default_duration || 90); paintOwnTypes(); refresh(); },
+  }, t === "exam" ? "🎓 Prüfung" : typeLabel(t))));
+  paintOwnTypes();
+  const ownBox = el("div", { hidden: true },
+    el("div", { class: "notice", style: "margin:0 0 8px" }, "Für Schüler, die die App nicht nutzen. Der Eintrag steht nur in deinem Kalender, zählt aber in Kontrolle und Lohnberechnung. Für andere Schüler ist diese Zeit nicht mehr buchbar."),
+    el("label", {}, "Name"), ownName, el("label", {}, "Was?"), ownTypeRow,
+    el("label", {}, "Beginn"), ownTime, el("label", {}, "Dauer"), ownDur.node, el("label", {}, "Notiz"), ownNote);
+  [ownName, ownTime, ownNote].forEach((i) => i.addEventListener("input", refresh));
+  ownDur.input.addEventListener("input", refresh);
   [thTime, thNote].forEach((i) => i.addEventListener("input", refresh));
   thDur.input.addEventListener("input", refresh);
 
@@ -2411,20 +2426,15 @@ function newSlotForm(opts = {}) {
     }
     return out;
   }
-  // Ergebnis je nach Art: Fahrstunden, Theorie oder Sperrzeiten
+  // Ergebnis je nach Art: Fahrstunden, Theorie oder eigene Einträge
   function build() {
     skippedOff = 0; skippedBlocked = 0;
     const now = Date.now(), list = [];
     for (const day of pickDays()) {
       const key = dateInput(day);
-      if (mode === "block") {
-        for (const r of blockRows) {
-          if (!r.f.value || !r.t.value) continue;
-          const mins = toMin(r.t.value) - toMin(r.f.value);
-          if (mins <= 0) continue;
-          const at = fromInputs(key, r.f.value);
-          if (at.getTime() + mins * 60000 > now) list.push({ starts_at: at.toISOString(), duration_min: mins, reason: r.r.value.trim() });
-        }
+      if (mode === "own") {
+        const at = fromInputs(key, ownTime.value);
+        if (!isNaN(at)) list.push({ starts_at: at.toISOString(), duration_min: ownDur.value });
       } else if (mode === "theory") {
         const at = fromInputs(key, thTime.value);
         if (!isNaN(at)) list.push({ starts_at: at.toISOString(), duration_min: thDur.value, note: thNote.value.trim() });
@@ -2432,7 +2442,7 @@ function newSlotForm(opts = {}) {
         for (const t of times) {
           const at = fromInputs(key, t);
           if (at.getTime() <= now) continue;
-          if (blockAt(at.getTime(), dur.value)) { skippedBlocked++; continue; }   // Sperrzeit: überspringen
+          if (blockAt(at.getTime(), dur.value)) { skippedBlocked++; continue; }   // eigener Eintrag: überspringen
           list.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
         }
       }
@@ -2442,7 +2452,7 @@ function newSlotForm(opts = {}) {
   function refresh() {
     renderStudents();
     renderCal();
-    btn.textContent = mode === "theory" ? "📚 Theorie anlegen" : mode === "block" ? "⛔ Sperrzeit eintragen" : mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
+    btn.textContent = mode === "theory" ? "📚 Theorie anlegen" : mode === "own" ? "👤 Eintragen" : mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
       : mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : mode === "exam" ? " exam-btn" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
@@ -2457,18 +2467,18 @@ function newSlotForm(opts = {}) {
     }) : [el("span", { class: "muted small" }, "Noch keine Uhrzeiten angeheftet – unten eine Uhrzeit hinzufügen.")]));
     preview.hidden = mode === "exam";
     const list = build();
-    const [n1, nn] = mode === "block" ? ["Sperrzeit", "Sperrzeiten"] : mode === "theory" ? ["Theoriestunde", "Theoriestunden"] : ["Termin", "Termine"];
+    const [n1, nn] = mode === "own" ? ["Eintrag", "Einträge"] : mode === "theory" ? ["Theoriestunde", "Theoriestunden"] : ["Termin", "Termine"];
     const skipTxt = [skippedOff ? `🏖️ ${skippedOff} gesperrte${skippedOff === 1 ? "r Tag" : " Tage"} übersprungen` : "",
-      skippedBlocked ? `⛔ ${skippedBlocked} wegen Sperrzeit übersprungen` : ""].filter(Boolean).join(" · ");
+      skippedBlocked ? `⛔ ${skippedBlocked} wegen eigenem Eintrag übersprungen` : ""].filter(Boolean).join(" · ");
     const nDays = new Set(list.map((x) => dateInput(x.starts_at))).size;
     preview.replaceChildren(list.length
       ? el("span", {}, el("b", {}, `${list.length} ${list.length === 1 ? n1 : nn}`),
         ` · ${nDays > 1 ? `${nDays} Tage · ${fmtDay(list[0].starts_at)} bis ${fmtDay(list[list.length - 1].starts_at)}` : fmtDate(list[0].starts_at)}`,
-        mode !== "block" && mode !== "theory" && nDays === 1 ? ` · ${times.map((t) => t + " Uhr").join(", ")}` : "",
+        mode !== "own" && mode !== "theory" && nDays === 1 ? ` · ${times.map((t) => t + " Uhr").join(", ")}` : "",
         skipTxt ? ` · ${skipTxt}` : "")
       : el("span", { class: "muted" }, multi.checked && !picked.size ? "Bitte oben im Kalender einen oder mehrere Tage antippen."
         : skipTxt ? skipTxt + " – nichts zu tun."
-        : mode === "block" ? "Bitte Zeiträume prüfen („Bis“ muss nach „Von“ liegen, nur Zukunft)."
+        : mode === "own" ? "Bitte Datum prüfen."
         : mode === "lesson" || mode === "free" || mode === "assign" ? (times.length ? "Noch keine Termine – Datum bzw. Wochentage prüfen (nur zukünftige Zeiten)." : "Bitte oben eine oder mehrere Uhrzeiten antippen.")
         : "Bitte Datum prüfen."));
   }
@@ -2509,9 +2519,9 @@ function newSlotForm(opts = {}) {
       notifyStep(`${EXAM_KIND[examKind.value]} für ${fullName(student)} eingetragen`, student.phone, text);
       return;
     }
-    if (mode === "theory" || mode === "block") {
+    if (mode === "theory" || mode === "own") {
       const items = build();
-      if (!items.length) throw new Error(mode === "block" ? "Bitte Tage und Zeiträume prüfen" : "Bitte Datum und Beginn prüfen");
+      if (!items.length) throw new Error("Bitte Datum und Beginn prüfen");
       if (mode === "theory") {
         const { error } = await sb.from("theory_lessons").insert(items.map((x) => ({ teacher_id: state.profile.id, held_at: x.starts_at, duration_min: x.duration_min, note: x.note || null })));
         if (error) throw error;
@@ -2519,14 +2529,23 @@ function newSlotForm(opts = {}) {
         toast(`📚 ${items.length} Theoriestunde${items.length === 1 ? "" : "n"} angelegt.`); closeModal(); render();
         return;
       }
-      const { error } = await sb.from("time_blocks").insert(items.map((x) => ({ teacher_id: state.profile.id, starts_at: x.starts_at, duration_min: x.duration_min, reason: x.reason || null })));
+      const name = ownName.value.trim();
+      if (!name) throw new Error("Bitte den Namen des Schülers eintragen");
+      const isExam = ownType === "exam", nowMs = Date.now();
+      const rows = items.map((x) => ({ teacher_id: state.profile.id, kind: isExam ? "exam" : "lesson", lesson_type: isExam ? null : ownType, student_name: name,
+        starts_at: x.starts_at, duration_min: x.duration_min, note: ownNote.value.trim() || null,
+        done: new Date(x.starts_at).getTime() + x.duration_min * 60000 <= nowMs }));   // schon vorbei → gleich als gefahren abgehakt
+      const { error } = await sb.from("own_entries").insert(rows);
       if (error) throw error;
-      // Hinweis, falls in dieser Zeit schon freigegebene Termine liegen
+      // Für andere Schüler nicht mehr buchbar: freie Termine in dieser Zeit entfernen, gebuchte nur melden
       const t0 = Math.min(...items.map((x) => new Date(x.starts_at).getTime())), t1 = Math.max(...items.map((x) => new Date(x.starts_at).getTime() + x.duration_min * 60000));
-      const { data: sl } = await sb.from("slots").select("starts_at,duration_min").gte("starts_at", new Date(t0 - 6 * 3600000).toISOString()).lt("starts_at", new Date(t1).toISOString());
-      const clash = (sl || []).filter((q) => items.some((x) => { const a = new Date(x.starts_at).getTime(), c = new Date(q.starts_at).getTime(); return c < a + x.duration_min * 60000 && c + q.duration_min * 60000 > a; })).length;
+      const { data: sl } = await sb.from("slots").select("id,starts_at,duration_min,bookings(status)").gte("starts_at", new Date(t0 - 6 * 3600000).toISOString()).lt("starts_at", new Date(t1).toISOString());
+      const hit = (sl || []).filter((q) => items.some((x) => { const a = new Date(x.starts_at).getTime(), c = new Date(q.starts_at).getTime(); return c < a + x.duration_min * 60000 && c + q.duration_min * 60000 > a; }));
+      const isBooked = (q) => (q.bookings || []).some((y) => ["requested", "confirmed", "offered"].includes(y.status));
+      const freeIds = hit.filter((q) => !isBooked(q)).map((q) => q.id), bookedN = hit.filter(isBooked).length;
+      if (freeIds.length) { const { error: ed } = await sb.from("slots").delete().in("id", freeIds); if (ed) throw ed; }
       showDate(new Date(items[0].starts_at));
-      toast(`⛔ ${items.length} Sperrzeit${items.length === 1 ? "" : "en"} eingetragen.` + (clash ? ` ⚠️ ${clash} schon angelegte Termine liegen in dieser Zeit – bitte im Kalender prüfen.` : ""));
+      toast(`${items.length} Eintrag${items.length === 1 ? "" : "e"} für ${name} gespeichert.` + (freeIds.length ? ` ${freeIds.length} freie Termine entfernt.` : "") + (bookedN ? ` ⚠️ ${bookedN} gebuchte Termine liegen in dieser Zeit – bitte prüfen.` : ""));
       closeModal(); render();
       return;
     }
@@ -2568,7 +2587,7 @@ function newSlotForm(opts = {}) {
     assignBox,
     el("label", {}, "Datum"), date,
     theoryBox,
-    blockBox,
+    ownBox,
     examBox,
     dayPick,
     slotBox,
@@ -4291,12 +4310,19 @@ async function adminControl() {
   const m = state.controlMonth || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   state.controlMonth = m;
   const from = new Date(m.getFullYear(), m.getMonth(), 1), to = new Date(m.getFullYear(), m.getMonth() + 1, 1);
-  const [allRows, examRes, theoryRes, payRes] = await Promise.all([
+  const [bookRows, examRes, theoryRes, payRes, ownRes] = await Promise.all([
     loadControlRows(from, to),
     sb.from("exams").select("id,exam_at,duration_min").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
     sb.from("teacher_pay").select("*").eq("teacher_id", state.profile.id).maybeSingle(),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
   ]);
+  // Eigene Fahrstunden (Schüler ohne App) wie normale Fahrstunden behandeln
+  const ownAll = ownRes.data || [];
+  const allRows = bookRows.concat(ownAll.filter((x) => x.kind === "lesson").map((x) => ({
+    id: x.id, _own: true, _src: x, status: "confirmed", actual_minutes: x.done ? x.duration_min : null, lesson_type: x.lesson_type || "normal",
+    transferred_at: x.transferred_at, profiles: { first_name: x.student_name, last_name: "" }, slots: { id: null, starts_at: x.starts_at, duration_min: x.duration_min } })))
+    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
   const isTicked = (b) => b.status === "confirmed" && b.actual_minutes !== null;
   const isFinished = (b) => isTicked(b) || b.status !== "confirmed";
   // Abrechnung und Übertragen betreffen nur Abgehaktes und Fehlstunden
@@ -4309,13 +4335,15 @@ async function adminControl() {
   updateOpen();
 
   async function setTransferred(list, on) {
-    const { error } = await sb.from("bookings").update({ transferred_at: on ? new Date().toISOString() : null }).in("id", list.map((b) => b.id));
-    if (error) throw error;
+    const stamp = on ? new Date().toISOString() : null;
+    const bk = list.filter((b) => !b._own), ow = list.filter((b) => b._own);
+    if (bk.length) { const { error } = await sb.from("bookings").update({ transferred_at: stamp }).in("id", bk.map((b) => b.id)); if (error) throw error; }
+    if (ow.length) { const { error } = await sb.from("own_entries").update({ transferred_at: stamp }).in("id", ow.map((b) => b.id)); if (error) throw error; }
     list.forEach((b) => (b.transferred_at = on ? new Date().toISOString() : null));
   }
   // Noch nicht abgehakt: deutlich markiert, ab 45 Min. vor Beginn direkt hier abhaken
   const saveTick = async (b, patch, msg) => {
-    const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
+    const { error } = b._own ? await sb.from("own_entries").update({ done: true }).eq("id", b.id) : await sb.from("bookings").update(patch).eq("id", b.id);
     if (error) throw error;
     toast(msg);
     render();
@@ -4325,14 +4353,14 @@ async function adminControl() {
     const over = start + b.slots.duration_min * 60000 <= nowMs;
     const canTick = nowMs >= start - 45 * 60000;
     const tick = canTick ? el("button", { type: "button", class: "tr-tick", title: `Gefahren – ${b.slots.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
-      if (askSchalt(b)) return openSchaltAsk(b, b.slots.duration_min, saveTick);
+      if (!b._own && askSchalt(b)) return openSchaltAsk(b, b.slots.duration_min, saveTick);
       const btn = ev.currentTarget; btn.disabled = true;
       try { await saveTick(b, { actual_minutes: b.slots.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(b.profiles)}: ${b.slots.duration_min} Min. gefahren`); }
       catch (e) { btn.disabled = false; fail(e); }
     } }, "✓") : null;
     return el("div", { class: "cl-row todo" + (over ? " over" : "") },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
-      el("button", { type: "button", class: "cl-name name-link", title: "Termin öffnen", onclick: () => openAdminSlot(b.slots.id) }, fullName(b.profiles)),
+      el("button", { type: "button", class: "cl-name name-link", title: "Termin öffnen", onclick: () => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id)) }, fullName(b.profiles) + (b._own ? " · ohne App" : "")),
       el("span", { class: "cl-flag" }, over ? "☐ nicht abgehakt" : "☐ geplant", ` · ${b.slots.duration_min} Min.`),
       tick);
   };
@@ -4366,8 +4394,10 @@ async function adminControl() {
   const driven = rows.filter((b) => b.status === "confirmed"), totalMin = dayMin(rows), late = rows.length - driven.length;
   const notTicked = allRows.filter((b) => !isFinished(b) && new Date(b.slots.starts_at).getTime() + b.slots.duration_min * 60000 <= Date.now()).length;
   // Monatsübersicht: Prüfungen, Theorie, Gesamtzeit, unverbindlicher Lohn
-  const examsDone = (examRes.data || []).filter((e) => new Date(e.exam_at).getTime() <= Date.now());
-  const examMin = examsDone.reduce((n, e) => n + (e.duration_min || 55), 0);
+  const examsApp = (examRes.data || []).filter((e) => new Date(e.exam_at).getTime() <= Date.now());
+  const examsOwn = ownAll.filter((x) => x.kind === "exam" && new Date(x.starts_at).getTime() <= Date.now());   // Prüfungen von Schülern ohne App
+  const examsDone = examsApp.concat(examsOwn);
+  const examMin = examsApp.reduce((n, e) => n + (e.duration_min || 55), 0) + examsOwn.reduce((n, x) => n + x.duration_min, 0);
   const theoryAll = theoryRes.data || [];
   const theory = theoryAll.filter((t) => new Date(t.held_at).getTime() <= Date.now());   // geplante, noch nicht gehaltene zählen nicht mit
   const theoryMin = theory.reduce((n, t) => n + t.duration_min, 0);

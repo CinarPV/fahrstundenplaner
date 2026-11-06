@@ -835,7 +835,7 @@ html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 /* Theorie (blau) und Sperrzeiten (grau mit Streifen) in Kalender und Heute */
 :root { --theory-bg: #e8efff; --theory-fg: #2a3f8f; --theory-bd: #9fb3f0; --block-bg: #eceff1; --block-fg: #37474f; --block-bd: #90a4ae; }
 .slot.theory { background: var(--theory-bg); color: var(--theory-fg); border: 2px solid var(--theory-bd); font-weight: 600; }
-.slot.block { background: repeating-linear-gradient(135deg, var(--block-bg), var(--block-bg) 8px, #e0e5e8 8px, #e0e5e8 16px); color: var(--block-fg); border: 2px dashed var(--block-bd); font-weight: 600; }
+.slot.own { background: #e6f6f4; color: #0d5c55; border: 2px solid #8fd3cb; font-weight: 600; }
 .tr.theory { border-left-color: var(--theory-bd); background: var(--theory-bg); }
-.tr.block { border-left-color: var(--block-bd); background: repeating-linear-gradient(135deg, var(--block-bg), var(--block-bg) 8px, #e0e5e8 8px, #e0e5e8 16px); }
-.block-row { border-left: 4px solid var(--block-bd); padding: 2px 0 8px 10px; margin: 8px 0; }
+.tr.own { border-left-color: #8fd3cb; background: #e6f6f4; }
+.tr.own.done { opacity: .85; }
