@@ -47,10 +47,11 @@ window.FSP_LEGAL = {
           "Verantwortlich für die Daten der Fahrschülerinnen und Fahrschüler ist jeweils die Fahrlehrerin bzw. der Fahrlehrer, bei der/dem sie sich registriert haben. Soweit andere Fahrlehrer die App nutzen, verarbeitet der Betreiber deren Schülerdaten in deren Auftrag (Auftragsverarbeitung, Art. 28 DSGVO) und hat selbst keinen Einblick in diese Daten.",
         ] },
         { h: "3. Welche Daten wir verarbeiten", p: [
-          "• Konto: Vor- und Nachname, E-Mail-Adresse, Passwort (nur verschlüsselt gespeichert, für niemanden lesbar).",
+          "• Konto: Vor- und Nachname, E-Mail-Adresse, Passwort (nur verschlüsselt gespeichert, für niemanden lesbar), Anrede (Frau/Mann, damit Nachrichten richtig formuliert sind).",
           "• Ausbildungsangaben: Führerscheinklasse (B, B197, B Automatik), Angabe „Umschreiber“, WhatsApp-Nummer.",
           "• Angabe „Sehhilfe“ (Brille/Kontaktlinsen): Dies ist ein Gesundheitsdatum. Es wird nur mit deiner ausdrücklichen Einwilligung gespeichert (siehe Nr. 4).",
           "• Fahrstunden: Termine, Anfragen, Zusagen und Absagen, gefahrene Minuten, Art der Fahrt (z. B. Überland, Autobahn, Nacht), Absagegründe, Fehlstunden sowie Nachrichten zwischen Schüler und Fahrlehrer.",
+          "• Für Fahrlehrerinnen und Fahrlehrer zusätzlich: eigene Termine (Theorieunterricht, blockierte Zeiten mit Begründung, Urlaubs- und freie Tage), Einträge zu Fahrschülerinnen und Fahrschülern ohne App-Zugang (nur Name, Termine und Notiz) sowie freiwillige Lohnangaben für eine unverbindliche Einnahmen-Berechnung. Diese Angaben sieht nur die jeweilige Fahrlehrerin bzw. der jeweilige Fahrlehrer selbst.",
           "• Technisch: Beim Aufruf der Seite verarbeiten die Server unserer Dienstleister deine IP-Adresse, Datum/Uhrzeit und Browser-Angaben, um die Seite auszuliefern und abzusichern.",
         ] },
         { h: "4. Zwecke und Rechtsgrundlagen", p: [
@@ -110,7 +111,8 @@ window.FSP_LEGAL = {
           "• Bestätigte Fahrstunden können bis zum Vortag, 18:00 Uhr, kostenfrei in der App abgesagt werden.",
           "• Bei späterer Absage oder Nichterscheinen gilt die Fahrstunde als Fehlstunde und ist kostenpflichtig. Das gilt auch, wenn eine Fahrstunde erst nach Ablauf dieser Frist gebucht und bestätigt wurde.",
           "• Die Höhe der Kosten für eine Fehlstunde richtet sich nach dem Ausbildungsvertrag bzw. der Preisliste der Fahrschule.",
-          "• Bei Krankheit oder anderen wichtigen Gründen entscheidet der Fahrlehrer im Einzelfall.",
+          "• Bei kurzfristiger Absage wegen Krankheit entfällt die Fehlstunde nur, wenn ein ärztliches Attest vorgelegt wird. Eine Arbeitsunfähigkeitsbescheinigung (AU) reicht nicht aus.",
+          "• Bei anderen wichtigen Gründen entscheidet der Fahrlehrer im Einzelfall.",
         ] },
         { h: "5. Pflichten der Nutzer", p: [
           "• Die App darf nur für die Organisation der Fahrausbildung genutzt werden.",

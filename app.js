@@ -2599,10 +2599,20 @@ function newSlotForm(opts = {}) {
     if (!students) return;
     const q = search.value.trim().toLowerCase();
     const list = students.filter((st) => !q || fullName(st).toLowerCase().includes(q));
-    studentList.replaceChildren(...(list.length ? list.map((st) => el("button", {
+    // Schüler ohne App gleich mit anbieten – Antippen wechselt zu „👤 Ohne App“ (Name und Art schon eingetragen)
+    const own = ownNameList.filter((n) => !q || n.toLowerCase().includes(q));
+    const ownBtns = own.map((n) => el("button", { type: "button", class: "pick", onclick: () => {
+      const toExam = mode === "exam";
+      setMode("own").then(() => {
+        ownName.value = n; ownType = toExam ? "exam" : "normal";
+        ownDur.set(toExam ? 55 : state.settings.default_duration || 90);
+        paintOwnTypes(); refresh();
+      });
+    } }, el("b", {}, n), " ", el("span", { class: "badge" }, "ohne App")));
+    studentList.replaceChildren(...(list.length || ownBtns.length ? list.map((st) => el("button", {
       type: "button", class: "pick" + (student && student.id === st.id ? " active" : ""),
       onclick: () => { student = st; refresh(); },
-    }, el("b", {}, fullName(st)), " ", studentTags(st))) : [el("p", { class: "muted small" }, students.length ? "Kein Treffer." : "Noch keine freigeschalteten Schüler.")]));
+    }, el("b", {}, fullName(st)), " ", studentTags(st))).concat(ownBtns) : [el("p", { class: "muted small" }, students.length ? "Kein Treffer." : "Noch keine freigeschalteten Schüler.")]));
   }
   search.addEventListener("input", renderStudents);
 
@@ -2651,9 +2661,13 @@ function newSlotForm(opts = {}) {
   // Schüler ohne App: einmal eingetippte Namen wieder vorschlagen
   const ownNames = el("datalist", { id: "own-names-" + Math.random().toString(36).slice(2) });
   ownName.setAttribute("list", ownNames.id);
+  let ownNameList = [];
   sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id).then(({ data }) => {
-    const names = [...new Set((data || []).map((x) => (x.student_name || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "de"));
-    ownNames.replaceChildren(...names.map((n) => el("option", { value: n })));
+    const seen = new Map();
+    for (const x of data || []) { const n = (x.student_name || "").trim(); if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n); }
+    ownNameList = [...seen.values()].sort((a, b) => a.localeCompare(b, "de"));
+    ownNames.replaceChildren(...ownNameList.map((n) => el("option", { value: n })));
+    renderStudents();
   });
   let ownType = "normal";
   const ownTypeRow = el("div", { class: "tabs type-tabs" });
@@ -4295,7 +4309,8 @@ async function fetchAll(makeQuery) {
 }
 async function loadOwnData() {
   const tid = state.profile.id;
-  const [settings, students, slots, bookings, progress, exams, time_off, topics] = await Promise.all([
+  const opt = (q) => q.then(({ data }) => data || []);   // neuere Tabellen: fehlt eine, bleibt die Sicherung trotzdem möglich
+  const [settings, students, slots, bookings, progress, exams, time_off, topics, own_entries, theory_lessons, time_blocks, teacher_pay] = await Promise.all([
     sb.from("settings").select("*").eq("teacher_id", tid).maybeSingle().then(({ data, error }) => { if (error) throw error; return data; }),
     fetchAll(() => sb.from("profiles").select("*").eq("teacher_id", tid).order("last_name")),
     fetchAll(() => sb.from("slots").select("*").eq("teacher_id", tid).order("starts_at")),
@@ -4304,8 +4319,12 @@ async function loadOwnData() {
     fetchAll(() => sb.from("exams").select("*").order("exam_at")), // nur eigene Schüler
     fetchAll(() => sb.from("time_off").select("*").eq("teacher_id", tid).order("from_day")),
     fetchAll(() => sb.from("training_topics").select("*").eq("teacher_id", tid).order("sort")), // eigene Strecken/Themen
+    opt(sb.from("own_entries").select("*").eq("teacher_id", tid).order("starts_at")),       // Schüler ohne App
+    opt(sb.from("theory_lessons").select("*").eq("teacher_id", tid).order("held_at")),
+    opt(sb.from("time_blocks").select("*").eq("teacher_id", tid).order("starts_at")),
+    opt(sb.from("teacher_pay").select("*").eq("teacher_id", tid)),
   ]);
-  return { settings, students, slots, bookings, progress, exams, time_off, topics };
+  return { settings, students, slots, bookings, progress, exams, time_off, topics, own_entries, theory_lessons, time_blocks, teacher_pay };
 }
 const today = () => dateInput(new Date());
 const backupKey = () => `fsp_backup_${state.profile && state.profile.id}`;
@@ -4362,9 +4381,18 @@ async function openRestore(f) {
   btn.onclick = () => busy(btn, async () => {
     const { data: res, error } = await sb.rpc("restore_backup", { p_data: data });
     if (error) throw error;
+    // Eigene Einträge (ohne App, Theorie, Blockierungen, Lohn) zurückholen – nur die eigenen
+    let extra = 0;
+    for (const t of ["own_entries", "theory_lessons", "time_blocks", "teacher_pay"]) {
+      const rows = (Array.isArray(data[t]) ? data[t] : []).filter((x) => x && x.teacher_id === state.profile.id);
+      if (!rows.length) continue;
+      const { error: e } = await sb.from(t).upsert(rows);
+      if (e) throw e;
+      extra += t === "teacher_pay" ? 0 : rows.length;
+    }
     state.renderOnClose = true;
     openModal("✓ Wiederhergestellt",
-      el("p", {}, `${res.students} Schüler, ${res.slots} Termine und ${res.bookings} Buchungen wurden auf den Stand vom ${new Date(data.created_at).toLocaleString("de-DE")} gebracht.`),
+      el("p", {}, `${res.students} Schüler, ${res.slots} Termine und ${res.bookings} Buchungen${extra ? ` sowie ${extra} eigene Einträge (ohne App, Theorie, Blockierungen)` : ""} wurden auf den Stand vom ${new Date(data.created_at).toLocaleString("de-DE")} gebracht.`),
       res.skipped ? el("p", { class: "muted small" }, `${res.skipped} ${res.skipped === 1 ? "Eintrag wurde" : "Einträge wurden"} übersprungen – z. B. weil ein Schülerkonto inzwischen gelöscht wurde oder ein Termin inzwischen anders vergeben ist.`) : null,
       el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "Fertig")));
   });
