@@ -1089,3 +1089,110 @@ end $$;
 drop trigger if exists bookings_restore_slot on public.bookings;
 create trigger bookings_restore_slot after update of status or delete on public.bookings
   for each row execute function public.restore_slot_time();
+-- Anrede: Frau (w) oder Mann (m) – für richtige Wörter in Nachrichten
+alter table public.profiles add column if not exists gender text check (gender in ('m','w'));
+alter table public.settings add column if not exists teacher_gender text check (teacher_gender in ('m','w'));
+create or replace function public.set_my_gender(p_gender text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  if p_gender not in ('m','w') then raise exception 'Bitte Frau oder Mann wählen'; end if;
+  update profiles set gender = p_gender where id = auth.uid();
+  update settings set teacher_gender = p_gender where teacher_id = auth.uid();
+end $$;
+grant execute on function public.set_my_gender(text) to authenticated;
+
+-- Erste Dauer merken und Vorschlag, wenn nach einer Absage nur noch wenig Zeit frei ist
+alter table public.slots add column if not exists original_dur int;
+alter table public.slots add column if not exists review_start timestamptz;
+alter table public.slots add column if not exists review_dur int;
+
+create or replace function public.remember_first_time()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if (new.starts_at is distinct from old.starts_at or new.duration_min is distinct from old.duration_min)
+     and exists (select 1 from bookings x where x.slot_id = new.id and x.status in ('requested','offered','confirmed')) then
+    new.original_start := coalesce(old.original_start, old.starts_at);
+    new.original_dur := coalesce(old.original_dur, old.duration_min);
+  end if;
+  if new.original_start is null then new.original_dur := null; end if;
+  return new;
+end $$;
+drop trigger if exists slots_remember_first_time on public.slots;
+create trigger slots_remember_first_time before update of starts_at, duration_min, original_start on public.slots
+  for each row execute function public.remember_first_time();
+
+-- Ist im Zeitraum etwas eingetragen? (gebuchte Fahrstunden, Schüler ohne App, blockierte Zeiten)
+create or replace function public.slot_busy_until(p_teacher uuid, p_slot uuid, p_at timestamptz)
+returns timestamptz language sql stable security definer set search_path = public as $$
+  select max(e) from (
+    select o.starts_at + make_interval(mins => o.duration_min) e from slots o
+      join bookings x on x.slot_id = o.id and x.status in ('requested','offered','confirmed')
+      where o.teacher_id = p_teacher and o.id <> p_slot and o.starts_at <= p_at and o.starts_at + make_interval(mins => o.duration_min) > p_at
+    union all
+    select w.starts_at + make_interval(mins => w.duration_min) from own_entries w
+      where w.teacher_id = p_teacher and w.starts_at <= p_at and w.starts_at + make_interval(mins => w.duration_min) > p_at
+    union all
+    select b.starts_at + make_interval(mins => b.duration_min) from time_blocks b
+      where b.teacher_id = p_teacher and b.starts_at <= p_at and b.starts_at + make_interval(mins => b.duration_min) > p_at
+  ) z;
+$$;
+create or replace function public.slot_next_busy(p_teacher uuid, p_slot uuid, p_from timestamptz, p_to timestamptz)
+returns timestamptz language sql stable security definer set search_path = public as $$
+  select min(s) from (
+    select o.starts_at s from slots o join bookings x on x.slot_id = o.id and x.status in ('requested','offered','confirmed')
+      where o.teacher_id = p_teacher and o.id <> p_slot and o.starts_at > p_from and o.starts_at < p_to
+    union all select w.starts_at from own_entries w where w.teacher_id = p_teacher and w.starts_at > p_from and w.starts_at < p_to
+    union all select b.starts_at from time_blocks b where b.teacher_id = p_teacher and b.starts_at > p_from and b.starts_at < p_to
+  ) z;
+$$;
+
+-- Fahrstunde fällt weg (Absage, Ablehnung, Löschen): zurück zur ersten Zeit.
+-- Ist dort inzwischen etwas eingetragen: in die freie Lücke rücken („hinten dran“) und kürzen; unter 60 Min. fragt die App nach.
+create or replace function public.restore_slot_time()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_teacher uuid; v_orig timestamptz; v_dur int; v_s timestamptz; v_e timestamptz; v_b timestamptz; v_n timestamptz; v_gap int; r record; i int := 0;
+begin
+  if old.status not in ('requested','offered','confirmed') then return null; end if;
+  if tg_op = 'UPDATE' and new.status in ('requested','offered','confirmed') then return null; end if;
+  if exists (select 1 from bookings x where x.slot_id = old.slot_id and x.id <> old.id and x.status in ('requested','offered','confirmed')) then return null; end if;
+  select teacher_id, original_start, coalesce(original_dur, duration_min) into v_teacher, v_orig, v_dur from slots where id = old.slot_id;
+  if v_teacher is null or v_orig is null or v_orig <= now() then return null; end if;
+  -- freie Lücke ab der ersten Zeit suchen
+  v_s := v_orig; v_e := v_orig + make_interval(mins => v_dur);
+  loop
+    v_b := slot_busy_until(v_teacher, old.slot_id, v_s);
+    exit when v_b is null or i > 20;
+    v_s := v_b; i := i + 1;
+  end loop;
+  v_n := slot_next_busy(v_teacher, old.slot_id, v_s, v_e);
+  if v_n is not null then v_e := v_n; end if;
+  v_gap := greatest(0, floor(extract(epoch from (v_e - v_s)) / 60)::int);
+  if v_s = v_orig and v_gap = v_dur then
+    update slots set starts_at = v_orig, duration_min = v_dur, original_start = null, original_dur = null, earlier_from = null, review_start = null, review_dur = null where id = old.slot_id;
+  elsif v_gap >= 60 then
+    update slots set starts_at = v_s, duration_min = v_gap, original_start = null, original_dur = null, earlier_from = null, review_start = null, review_dur = null where id = old.slot_id;
+  else
+    update slots set review_start = v_s, review_dur = v_gap where id = old.slot_id;   -- App fragt den Fahrlehrer
+  end if;
+  -- freie Termine desselben Tages, die deswegen verschoben wurden, ebenfalls zurück (wenn dort nichts liegt)
+  for r in
+    select s.id, s.original_start, s.duration_min from slots s
+    where s.teacher_id = v_teacher and s.id <> old.slot_id and s.original_start is not null and s.original_start > now()
+      and (s.original_start at time zone 'Europe/Berlin')::date = (v_orig at time zone 'Europe/Berlin')::date
+      and not exists (select 1 from bookings x where x.slot_id = s.id and x.status in ('requested','offered','confirmed'))
+    order by s.original_start
+  loop
+    if slot_busy_until(v_teacher, r.id, r.original_start) is null
+       and slot_next_busy(v_teacher, r.id, r.original_start, r.original_start + make_interval(mins => r.duration_min)) is null then
+      update slots set starts_at = r.original_start, original_start = null, earlier_from = null where id = r.id;
+    end if;
+  end loop;
+  update slots s set earlier_from = null
+  where s.teacher_id = v_teacher and s.earlier_from is not null
+    and (s.starts_at at time zone 'Europe/Berlin')::date = (v_orig at time zone 'Europe/Berlin')::date;
+  return null;
+end $$;
+drop trigger if exists bookings_restore_slot on public.bookings;
+create trigger bookings_restore_slot after update of status or delete on public.bookings
+  for each row execute function public.restore_slot_time();

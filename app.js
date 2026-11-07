@@ -199,7 +199,7 @@ function waNumber(phone) {
 }
 function waButton(phone, text, label = "💬 Per WhatsApp schreiben") {
   const n = waNumber(phone);
-  return n ? el("a", { class: "btn ok", href: `https://wa.me/${n}?text=${encodeURIComponent(text)}`, target: "_blank", rel: "noopener" }, label) : null;
+  return n ? el("a", { class: "btn ok", href: `https://wa.me/${n}?text=${encodeURIComponent(typeof genderText === "function" ? genderText(text) : text)}`, target: "_blank", rel: "noopener" }, label) : null;
 }
 // Angeheftete Uhrzeiten des Fahrlehrers (Einstellungen), z. B. "08:00,09:45,11:30"
 const timePresets = () => (state.settings.time_presets ?? "08:00").split(",").map((x) => x.trim()).filter((x) => /^\d\d:\d\d$/.test(x)).sort();
@@ -341,6 +341,66 @@ function getSeen(name) { try { return localStorage.getItem(seenKey(name)) || "19
 function markSeen(name) { try { localStorage.setItem(seenKey(name), new Date().toISOString()); } catch { /* egal */ } }
 
 // Formularfelder für Profildaten (Registrierung ausgenommen)
+// Anrede: Frau oder Mann – für richtige Wörter in Nachrichten (Fahrlehrerin/Fahrlehrer, Schülerin/Schüler)
+async function saveGender(g) {
+  const { error } = await sb.rpc("set_my_gender", { p_gender: g });
+  if (error) throw error;
+  state.profile.gender = g;
+  if (state.profile.role === "teacher") state.settings.teacher_gender = g;
+}
+function genderPicker(current, onPick) {
+  const btns = [["w", "👩 Frau"], ["m", "👨 Mann"]].map(([g, t]) => el("button", { type: "button", class: "tab" + (g === current ? " active" : ""),
+    onclick: (e) => { btns.forEach((x) => x.classList.toggle("active", x === e.currentTarget)); onPick(g); } }, t));
+  return el("div", { class: "tabs type-tabs" }, btns);
+}
+function genderCard() {
+  return el("div", { class: "card" }, el("h3", {}, "Anrede"),
+    el("p", { class: "muted small" }, "Damit Nachrichten richtig formuliert sind."),
+    genderPicker(state.profile.gender, (g) => saveGender(g).then(() => toast("Anrede gespeichert.")).catch(fail)));
+}
+// Noch keine Anrede gespeichert → einmal fragen (gilt auch für schon angemeldete Nutzer)
+function maybeAskGender() {
+  if (!state.profile || state.profile.gender || modal.open) return false;
+  let chosen = null;
+  const ok = el("button", { class: "btn ok", disabled: true }, "Speichern");
+  ok.onclick = () => busy(ok, async () => { await saveGender(chosen); closeModal(); toast("Danke!"); render(); });
+  openModal("👋 Kurze Frage",
+    el("p", {}, isAdmin() ? "Bist du Fahrlehrerin oder Fahrlehrer?" : "Bist du Schülerin oder Schüler?"),
+    el("p", { class: "muted small" }, "Damit Nachrichten und Mitteilungen richtig formuliert sind."),
+    genderPicker(null, (g) => { chosen = g; ok.disabled = false; }),
+    el("div", { class: "actions" }, ok));
+  return true;
+}
+// Fahrlehrerin: Texte in der Schüler-App weiblich (Seiten, Fenster, Meldungen und vorbereitete WhatsApp-Texte)
+const FEMALE_TEACHER = [
+  [/\bDeines Fahrlehrers\b/g, "Deiner Fahrlehrerin"], [/\bdeines Fahrlehrers\b/g, "deiner Fahrlehrerin"],
+  [/\bDeinem Fahrlehrer\b/g, "Deiner Fahrlehrerin"], [/\bdeinem Fahrlehrer\b/g, "deiner Fahrlehrerin"],
+  [/\bDeinen Fahrlehrer\b/g, "Deine Fahrlehrerin"], [/\bdeinen Fahrlehrer\b/g, "deine Fahrlehrerin"],
+  [/\bDein Fahrlehrer\b/g, "Deine Fahrlehrerin"], [/\bdein Fahrlehrer\b/g, "deine Fahrlehrerin"],
+  [/\bMeines Fahrlehrers\b/g, "Meiner Fahrlehrerin"], [/\bmeines Fahrlehrers\b/g, "meiner Fahrlehrerin"],
+  [/\bMeinem Fahrlehrer\b/g, "Meiner Fahrlehrerin"], [/\bmeinem Fahrlehrer\b/g, "meiner Fahrlehrerin"],
+  [/\bMeinen Fahrlehrer\b/g, "Meine Fahrlehrerin"], [/\bmeinen Fahrlehrer\b/g, "meine Fahrlehrerin"],
+  [/\bMein Fahrlehrer\b/g, "Meine Fahrlehrerin"], [/\bmein Fahrlehrer\b/g, "meine Fahrlehrerin"],
+  [/\bDer Fahrlehrer\b/g, "Die Fahrlehrerin"], [/\bder Fahrlehrer\b/g, "die Fahrlehrerin"],
+  [/\bden Fahrlehrer\b/g, "die Fahrlehrerin"], [/\bdem Fahrlehrer\b/g, "der Fahrlehrerin"], [/\bdes Fahrlehrers\b/g, "der Fahrlehrerin"],
+  [/\bFahrlehrer(?![a-zäöüß])/g, "Fahrlehrerin"],
+  [/\bEr entscheidet\b/g, "Sie entscheidet"], [/\ber entscheidet\b/g, "sie entscheidet"], [/\bbestätigt er\b/g, "bestätigt sie"],
+  [/\ber kann ihn verlängern\b/g, "sie kann ihn verlängern"],
+];
+const femaleTeacherView = () => state.profile && state.profile.role === "student" && state.settings && state.settings.teacher_gender === "w";
+const genderText = (t) => (femaleTeacherView() && typeof t === "string" ? FEMALE_TEACHER.reduce((x, [a, b]) => x.replace(a, b), t) : t);
+function genderizeNode(root) {
+  if (!femaleTeacherView() || !root) return;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    if (!/Fahrlehrer|Er entscheidet|er entscheidet|bestätigt er|er kann ihn/.test(n.nodeValue)) continue;
+    const v = genderText(n.nodeValue);
+    if (v !== n.nodeValue) n.nodeValue = v;
+  }
+}
+new MutationObserver((list) => { if (!femaleTeacherView()) return; for (const m of list) m.addedNodes.forEach((n) => genderizeNode(n.nodeType === 3 ? n.parentNode : n)); })
+  .observe(document.body, { childList: true, subtree: true });
+
 function profileFields(p) {
   const first = el("input", { value: p.first_name || "", autocomplete: "given-name" });
   const last = el("input", { value: p.last_name || "", autocomplete: "family-name" });
@@ -715,7 +775,7 @@ async function loadUserAndRender() {
   renderUserbox();
   render();
   if (isAdmin() && state.profile.status === "active") cleanupOldData();
-  setTimeout(() => { if (!maybeAskInstall()) maybeAskPush(); }, 3600);  // nach dem Startbildschirm: erst Installieren, dann Mitteilungen
+  setTimeout(() => { if (!maybeAskGender() && !maybeAskInstall()) maybeAskPush(); }, 3600);  // nach dem Startbildschirm: erst Installieren, dann Mitteilungen
 }
 
 // Daten älter als 15 Monate automatisch löschen – beim Fahrlehrer höchstens einmal am Tag (still im Hintergrund)
@@ -847,6 +907,7 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
   const glasses = el("input", { type: "checkbox" });
   const conversion = el("input", { type: "checkbox" });
   const phone = el("input", { type: "tel", autocomplete: "tel", placeholder: "z. B. 0151 23456789", required: mode === "register" });
+  let regGender = null;
   // Sehhilfe ist ein Gesundheitsdatum → nur mit ausdrücklicher Einwilligung (Art. 9 DSGVO)
   const glassesConsent = el("input", { type: "checkbox" });
   const glassesConsentRow = el("label", { class: "check", hidden: true }, glassesConsent,
@@ -893,17 +954,19 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
           if (!firstSetup && !waNumber(phone.value)) throw new Error("Bitte eine gültige WhatsApp-Nummer angeben, z. B. 0151 23456789");
           if (glasses.checked && !glassesConsent.checked) throw new Error("Bitte die Einwilligung zur Angabe „Sehhilfe“ bestätigen – oder den Haken bei Sehhilfe entfernen.");
           if (!terms.checked) throw new Error("Bitte den Nutzungsbedingungen zustimmen.");
+          if (!regGender) throw new Error("Bitte die Anrede wählen (Frau oder Mann).");
           const { data, error } = await sb.auth.signUp({
             email: email.value.trim(), password: pw.value,
             options: {
               data: {
                 first_name: first.value.trim(), last_name: last.value.trim(),
                 license_class: licenseClass.value, needs_glasses: glasses.checked && glassesConsent.checked, is_conversion: conversion.checked,
-                phone: phone.value.trim(), teacher: teacherSel.value, accepted_terms: true,
+                phone: phone.value.trim(), teacher: teacherSel.value, accepted_terms: true, gender: regGender,
               },
               emailRedirectTo: location.origin + location.pathname },
           });
           if (error) throw error;
+          if (data.session) { try { await sb.rpc("set_my_gender", { p_gender: regGender }); } catch { /* wird nach dem Anmelden erfragt */ } }
           if (!data.session) {
             app.replaceChildren(el("div", { class: "card narrow" },
               el("h2", {}, "Fast geschafft"),
@@ -918,6 +981,7 @@ function renderAuth(mode = (urlTeacherSlug() && new URLSearchParams(location.sea
       el("div", {}, el("label", {}, "Vorname"), first),
       el("div", {}, el("label", {}, "Nachname"), last)) : null,
     mode === "register" ? [
+      el("label", {}, "Anrede"), genderPicker(null, (g) => (regGender = g)),
       teacherInfo, teacherWrap,
       (studentOnly.append(
         el("label", {}, "Führerscheinklasse"), licenseClass,
@@ -978,10 +1042,46 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
 const askLater = (id, hours) => { try { localStorage.setItem("fsp_ask_" + id, String(Date.now() + hours * 3600000)); } catch { /* egal */ } };
 const askedLater = (id) => { try { return +(localStorage.getItem("fsp_ask_" + id) || 0) > Date.now(); } catch { return false; } };
 let askingDone = false;
+// Termin konnte nach einer Absage nicht ganz zur ersten Zeit zurück (dort ist jetzt eine andere Fahrstunde):
+// Die Datenbank hat die freie Lücke berechnet – unter 60 Min. fragt die App nach.
+async function askSlotReview() {
+  const { data, error } = await sb.from("slots").select("id,starts_at,duration_min,review_start,review_dur")
+    .eq("teacher_id", state.profile.id).not("review_start", "is", null).gte("review_start", new Date().toISOString()).order("review_start").limit(1);
+  if (error || !data || !data.length) return false;
+  const x = data[0];
+  const clear = { review_start: null, review_dur: null };
+  const take = el("button", { class: "btn ok", hidden: !(x.review_dur >= 15) }, `✓ ${x.review_dur} Min. ab ${fmtTime(x.review_start)} Uhr freigeben`);
+  take.onclick = () => busy(take, async () => {
+    const { error: e } = await sb.from("slots").update({ starts_at: x.review_start, duration_min: x.review_dur, original_start: null, ...clear }).eq("id", x.id);
+    if (e) throw e;
+    closeModal(); toast(`Freigegeben: ${fmtRange(x.review_start, x.review_dur)} Uhr.`); render();
+  });
+  const keep = el("button", { class: "btn" }, `So lassen (${fmtRange(x.starts_at, x.duration_min)} Uhr)`);
+  keep.onclick = () => busy(keep, async () => {
+    const { error: e } = await sb.from("slots").update({ original_start: null, ...clear }).eq("id", x.id);
+    if (e) throw e;
+    closeModal(); render();
+  });
+  const del = el("button", { class: "btn danger" }, "Termin löschen");
+  del.onclick = () => busy(del, async () => {
+    const { error: e } = await sb.from("slots").delete().eq("id", x.id);
+    if (e) throw e;
+    closeModal(); toast("Termin gelöscht."); render();
+  });
+  openModal("⚠️ Wenig Zeit frei",
+    el("p", {}, "Eine abgesagte Fahrstunde sollte wieder zu ihrer ersten Zeit frei werden. Dort ist inzwischen aber eine andere Fahrstunde eingetragen."),
+    el("p", {}, el("b", {}, fmtDate(x.review_start)), el("br"),
+      x.review_dur >= 15 ? `Frei wären nur noch ${x.review_dur} Min. (${fmtRange(x.review_start, x.review_dur)} Uhr).` : "Dort ist keine Zeit mehr frei."),
+    el("p", { class: "muted small" }, `Der Termin steht im Moment um ${fmtRange(x.starts_at, x.duration_min)} Uhr.`),
+    el("div", { class: "actions" }, take, keep, del));
+  return true;
+}
 async function askFinishedLessons() {
   if (askingDone || !state.profile || !isAdmin() || !state.active || document.hidden || modal.open || state.dirty) return;
   askingDone = true;
   try {
+    if (maybeAskGender()) return;   // Anrede zuerst (falls noch nicht gespeichert)
+    if (await askSlotReview()) return;
     const now = Date.now(), since = new Date(now - 7 * 86400000).toISOString(), until = new Date(now).toISOString();
     const [bk, ow] = await Promise.all([
       sb.from("bookings").select("id,status,actual_minutes,lesson_type,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min,teacher_id)")
@@ -1511,7 +1611,7 @@ function openCopyWeek(slots) {
 // Ältere oder spätere Tage über ‹ › oder „📅 Datum“ wählen.
 const PHONE_MQ = matchMedia("(max-width: 600px)");
 const isPhone = () => PHONE_MQ.matches;
-const PHONE_DAYS = 7, PAST_DAYS = 5;
+const PHONE_DAYS = 17, PAST_DAYS = 5;   // Handy: 17 Tage = gut 14 Tage ohne Sonntage
 const dayStart = (d) => { d = new Date(d); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); };
 // state.listStart = erster sichtbarer Tag (Standard: heute)
 const listAnchor = () => state.listStart || (state.listStart = dayStart(new Date()));
@@ -1741,8 +1841,31 @@ function openPlanned(kind, x) {
     tick = el("button", { class: "btn" + (x.done ? " ghost" : " ok") }, x.done ? "Haken zurücknehmen" : "✓ Als gefahren abhaken");
     tick.onclick = () => busy(tick, async () => { await setOwnDone(x, !x.done); closeModal(); });
   }
+  // Ändern: Schüler ohne App (und Theorie) sofort – es wird anderweitig abgesprochen
+  const eDate = el("input", { type: "date", value: dateInput(start) });
+  const eTime = el("input", { type: "time", value: timeInput(start), step: 300 });
+  const eDur = durationControl(x.duration_min);
+  const eName = isT ? null : el("input", { maxlength: 80, value: x.student_name || "" });
+  const eSave = el("button", { class: "btn" }, "Änderung speichern");
+  eSave.onclick = () => busy(eSave, async () => {
+    const at = fromInputs(eDate.value, eTime.value);
+    if (isNaN(at)) throw new Error("Bitte Datum und Uhrzeit angeben");
+    if (eName && !eName.value.trim()) throw new Error("Bitte den Namen eintragen");
+    const { error } = isT
+      ? await sb.from("theory_lessons").update({ held_at: at.toISOString(), duration_min: eDur.value }).eq("id", x.id)
+      : await sb.from("own_entries").update({ starts_at: at.toISOString(), duration_min: eDur.value, student_name: eName.value.trim() }).eq("id", x.id);
+    if (error) throw error;
+    closeModal(); toast("Geändert."); render();
+  });
+  const editBox = el("details", { class: "fold" }, el("summary", {}, "✎ Ändern (Datum, Uhrzeit, Dauer)"),
+    eName ? [el("label", {}, "Name"), eName] : null,
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), eDate), el("div", {}, el("label", {}, "Beginn"), eTime)),
+    el("label", {}, "Dauer"), eDur.node,
+    el("p", { class: "muted small" }, isT ? "" : "Der Schüler hat keine App – die Änderung gilt sofort."),
+    el("div", { class: "actions" }, eSave));
   openModal(isT ? "📚 Theorieunterricht" : `${ownLabel(x)} · ${x.student_name}`,
     el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr · ${x.duration_min} Min.`),
+    editBox,
     !isT ? el("p", { class: "small muted" }, "Eintrag nur für deinen Kalender – der Schüler hat keinen App-Zugang, andere Schüler sehen diese Zeit nicht als frei.") : null,
     !isT && x.kind === "lesson" ? el("p", {}, x.done ? "✓ Abgehakt – zählt in Kontrolle und Lohn" : "☐ Noch nicht abgehakt") : null,
     text ? el("p", {}, "Notiz: ", text) : null,
@@ -1949,6 +2072,8 @@ function weekGrid(slots, renderSlot, onAddDay, extras = [], overview = false) {
     const day = addDays(r.from, i);
     const daySlots = slots.filter((s) => sameDay(new Date(s.starts_at), day));
     const dayExtras = extras.filter((x) => sameDay(new Date(x.at), day)).map((x) => x.node);
+    // Sonntage nur zeigen, wenn dort etwas steht (Tage davor bleiben, damit „Letzte Tage“ stimmt)
+    if (isPhone() && i >= PAST_DAYS && day.getDay() === 0 && !daySlots.length && !dayExtras.length) continue;
     days.push(el("div", {
       class: "day" + (sameDay(day, today) ? " today" : "") + (onAddDay ? " tappable" : ""),
       onclick: onAddDay ? (e) => { if (!e.target.closest(".slot")) onAddDay(day); } : null,
@@ -1979,7 +2104,7 @@ function weekGrid(slots, renderSlot, onAddDay, extras = [], overview = false) {
 
 async function adminToday() {
   // Die nächsten 6 Tage ohne Sonntag untereinander (Start: heute) – wischen oder ‹ › blättert tageweise
-  const DAYS = 6;
+  const DAYS = 14;
   const noSunday = (d, dir = 1) => { while (d.getDay() === 0) d = addDays(d, dir); return d; };
   const first = noSunday(dayStart(state.todayDate || new Date()));
   const dayList = [];
@@ -3043,10 +3168,10 @@ function attestButton(b, onDone) {
   return btn;
 }
 // Schüler wünscht eine andere Zeit, Fahrlehrer schlägt seinerseits eine Uhrzeit vor – der Schüler muss zusagen
-function openCounterOffer(b, slot) {
+function openCounterOffer(b, slot, preset = null) {
   const origStart = slot.starts_at;   // falls der Schüler ablehnt, zurück zu dieser Zeit
-  const date = el("input", { type: "date", value: dateInput(slot.starts_at) });
-  const time = el("input", { type: "time", value: timeInput(b.wish_start || slot.starts_at), step: 300 });
+  const date = el("input", { type: "date", value: dateInput(preset || slot.starts_at) });
+  const time = el("input", { type: "time", value: timeInput(preset || b.wish_start || slot.starts_at), step: 300 });
   const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. 10:30 Uhr würde bei mir passen." }, b.admin_reply || "");
   const btn = el("button", { class: "btn ok" }, "📨 Gegenangebot senden");
   btn.onclick = () => busy(btn, async () => {
@@ -3158,12 +3283,36 @@ async function openAdminSlot(slotId) {
         if (b.counter_from) await sb.from("slots").update({ starts_at: b.counter_from }).eq("id", slot.id);  // Gegenangebot: zurück zur angelegten Zeit
         done("Angebot zurückgezogen – Termin ist wieder frei.");
       });
-      parts.push(el("div", { class: "notice" }, "Der Schüler muss in der App zusagen oder absagen."), el("div", { class: "actions" }, remind, withdraw));
+      // Zeit oder Dauer ändern: Das Angebot geht neu an den Schüler (er muss weiterhin zusagen)
+      const reoffer = el("button", { class: "btn ok", hidden: true }, "📨 Geändertes Angebot senden");
+      const syncRe = () => (reoffer.hidden = Math.round(fromInputs(date.value, time.value).getTime() / 60000) === Math.round(new Date(slot.starts_at).getTime() / 60000) && dur.value === slot.duration_min);
+      [date, time].forEach((i) => i.addEventListener("input", syncRe)); dur.input.addEventListener("input", syncRe);
+      reoffer.onclick = () => busy(reoffer, async () => {
+        const chosen = fromInputs(date.value, time.value);
+        if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
+        if (chosen.getTime() <= Date.now()) throw new Error("Die neue Zeit liegt in der Vergangenheit");
+        const moved = await askShiftSlots({ slotId: slot.id, name: fullName(b.profiles), oldStart: slot.starts_at, oldDur: slot.duration_min, newStart: chosen, newDur: dur.value, verb: "senden" });
+        if (moved === false) return;
+        await saveTime();
+        const note = reply.value.trim();
+        const { error } = await sb.from("bookings").update({ admin_reply: note || null }).eq("id", b.id);
+        if (error) throw error;
+        pushNotify("booking", b.id, "offered");
+        notifyStep("Geändertes Angebot gesendet" + movedText(moved), b.profiles && b.profiles.phone,
+          waTextForStudent("offered", b.profiles, { starts_at: chosen.toISOString(), duration_min: dur.value }, note, meetingOf({ meeting_point: meet.value() })));
+      });
+      parts.push(el("div", { class: "notice" }, "Der Schüler muss in der App zusagen oder absagen. Änderst du oben Zeit oder Dauer, bekommt er das Angebot neu."), el("div", { class: "actions" }, reoffer, remind, withdraw));
     } else if (b.status === "requested") {
       const ok = el("button", { class: "btn ok" }, "✓ Bestätigen");
+      // App-Schüler: Eine Uhrzeit, die weder angelegt noch gewünscht war, geht als Gegenangebot raus (er muss zusagen)
+      const minOf = (v) => Math.round(new Date(v).getTime() / 60000);   // auf die Minute genau vergleichen
+      const otherTime = () => { const t = minOf(fromInputs(date.value, time.value)); return t !== minOf(slot.starts_at) && (!b.wish_start || t !== minOf(b.wish_start)); };
+      const syncOk = () => (ok.textContent = otherTime() ? "📨 Als Gegenangebot senden" : "✓ Bestätigen");
+      [date, time].forEach((i) => i.addEventListener("input", syncOk)); syncOk();
       ok.onclick = () => busy(ok, async () => {
         const chosen = fromInputs(date.value, time.value);
         if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
+        if (otherTime()) return openCounterOffer(b, slot, chosen);
         const noteText = reply.value.trim(), chosenDur = dur.value;
         const moved = await askShiftSlots({ slotId: slot.id, name: fullName(b.profiles), oldStart: slot.starts_at, oldDur: slot.duration_min, newStart: chosen, newDur: chosenDur });
         if (moved === false) return;
@@ -4308,6 +4457,7 @@ function adminSettings() {
     toast("Einstellungen gespeichert.");
   });
   return el("div", {},
+    genderCard(),
     isOwner() && (window.FSP_LEGAL_MISSING || []).length ? el("div", { class: "notice danger", style: "margin-bottom:16px" },
       "Impressum/Datenschutz unvollständig: Bitte in der Datei legal.js deine Anschrift und E-Mail eintragen (",
       (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
@@ -5054,7 +5204,7 @@ function studentProfile() {
     el("h2", {}, "Mein Profil"),
     el("p", { class: "muted small" }, state.profile.email || ""),
     f.node, el("div", { class: "actions" }, save),
-    el("hr"), passwordCard(), pushCard(), backgroundCard(), installHint());
+    el("hr"), genderCard(), passwordCard(), pushCard(), backgroundCard(), installHint());
 }
 
 /* ---------------- Schüler: Meine Fahrstunden ---------------- */
