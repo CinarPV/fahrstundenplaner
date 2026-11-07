@@ -846,3 +846,12 @@ html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 .toast.error::before { content: "⚠️ "; }
 .btn.failed { animation: btn-shake .4s ease-in-out; outline: 2px solid var(--danger); }
 @keyframes btn-shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+
+/* Prüfung in „Heute“ wie im Kalender; Theorie gestreift und umrandet; blockierte Zeiten grau gestreift */
+.tr.exam { border: 2px solid var(--exam-bd); border-left-width: 4px; background: var(--exam-bg); color: var(--exam-fg); font-weight: 600; }
+.slot.theory, .tr.theory { border: 2px solid var(--theory-bd); background: repeating-linear-gradient(135deg, var(--theory-bg) 0 10px, transparent 10px 20px), var(--card); box-shadow: 0 0 0 1px var(--theory-bd) inset; }
+.tr.theory { border-left-width: 4px; font-weight: 600; }
+.slot.block, .tr.block { border: 2px solid #8a8f98; background: repeating-linear-gradient(135deg, #8a8f981f 0 8px, #8a8f9838 8px 16px), var(--card); color: var(--text); }
+.tr.block { border-left-width: 4px; }
+.kind-tabs { grid-template-columns: 1fr 1fr 1fr; }
+@media (max-width: 380px) { .kind-tabs { grid-template-columns: 1fr 1fr; } .kind-tabs .tab { font-size: 15px; } }

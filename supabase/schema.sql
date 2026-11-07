@@ -1016,3 +1016,76 @@ create policy pay_own on public.teacher_pay for all
   with check (teacher_id = auth.uid() and public.is_teacher());
 grant select, insert, update, delete on public.theory_lessons to authenticated;
 grant select, insert, update, delete on public.teacher_pay to authenticated;
+
+-- Urlaubstage pro Jahr (für „noch übrig“)
+alter table public.teacher_pay add column if not exists vacation_days int check (vacation_days between 0 and 366);
+
+-- Blockierte Zeiten des Fahrlehrers (Begründung sieht nur er)
+create table if not exists public.time_blocks (
+  id            uuid primary key default gen_random_uuid(),
+  teacher_id    uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  starts_at     timestamptz not null,
+  duration_min  int not null check (duration_min between 5 and 1440),
+  reason        text not null check (char_length(reason) between 1 and 200),
+  created_at    timestamptz not null default now()
+);
+create index if not exists blocks_teacher_idx on public.time_blocks (teacher_id, starts_at);
+alter table public.time_blocks enable row level security;
+drop policy if exists blocks_own on public.time_blocks;
+create policy blocks_own on public.time_blocks for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+grant select, insert, update, delete on public.time_blocks to authenticated;
+
+-- Erste freigegebene Uhrzeit eines verschobenen Termins
+alter table public.slots add column if not exists original_start timestamptz;
+
+-- Wird ein gebuchter Termin verschoben (Wunschzeit, Gegenangebot, Änderung): erste Zeit merken
+create or replace function public.remember_first_time()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.starts_at is distinct from old.starts_at
+     and exists (select 1 from bookings x where x.slot_id = new.id and x.status in ('requested','offered','confirmed')) then
+    new.original_start := coalesce(old.original_start, old.starts_at);
+  end if;
+  return new;
+end $$;
+drop trigger if exists slots_remember_first_time on public.slots;
+create trigger slots_remember_first_time before update of starts_at on public.slots
+  for each row execute function public.remember_first_time();
+
+-- Fahrstunde fällt weg (Absage, Ablehnung, Löschen): Termin steht wieder zur ersten freigegebenen Uhrzeit im Kalender.
+-- Freie Termine desselben Tages, die deswegen verschoben wurden, gehen mit zurück, soweit keine Fahrstunde im Weg ist.
+create or replace function public.restore_slot_time()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_teacher uuid; v_orig timestamptz; r record;
+begin
+  if old.status not in ('requested','offered','confirmed') then return null; end if;
+  if tg_op = 'UPDATE' and new.status in ('requested','offered','confirmed') then return null; end if;
+  if exists (select 1 from bookings x where x.slot_id = old.slot_id and x.id <> old.id and x.status in ('requested','offered','confirmed')) then return null; end if;
+  select teacher_id, original_start into v_teacher, v_orig from slots where id = old.slot_id;
+  if v_teacher is null or v_orig is null or v_orig <= now() then return null; end if;
+  for r in
+    select s.id, s.original_start, s.duration_min from slots s
+    where s.teacher_id = v_teacher and s.original_start is not null and s.original_start > now()
+      and (s.original_start at time zone 'Europe/Berlin')::date = (v_orig at time zone 'Europe/Berlin')::date
+      and not exists (select 1 from bookings x where x.slot_id = s.id and x.status in ('requested','offered','confirmed'))
+    order by s.original_start
+  loop
+    if not exists (
+      select 1 from slots o join bookings x on x.slot_id = o.id and x.status in ('requested','offered','confirmed')
+      where o.teacher_id = v_teacher and o.id <> r.id
+        and o.starts_at < r.original_start + make_interval(mins => r.duration_min)
+        and o.starts_at + make_interval(mins => o.duration_min) > r.original_start
+    ) then
+      update slots set starts_at = r.original_start, original_start = null, earlier_from = null where id = r.id;
+    end if;
+  end loop;
+  update slots s set earlier_from = null
+  where s.teacher_id = v_teacher and s.earlier_from is not null
+    and (s.starts_at at time zone 'Europe/Berlin')::date = (v_orig at time zone 'Europe/Berlin')::date;
+  return null;
+end $$;
+drop trigger if exists bookings_restore_slot on public.bookings;
+create trigger bookings_restore_slot after update of status or delete on public.bookings
+  for each row execute function public.restore_slot_time();
