@@ -94,6 +94,7 @@ details.nothere input:not([type]) { margin-top: 10px; }
 .dur-field { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 15px; }
 .dur-field input { width: 80px; text-align: center; font-weight: 600; }
 .chips { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.dur-chips .btn { min-width: 48px; font-weight: 600; }
 
 .weekbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .weekbar .title { font-weight: 600; }

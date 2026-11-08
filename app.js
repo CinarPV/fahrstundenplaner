@@ -659,6 +659,8 @@ function schaltTestTile(tile, lesson, exams) {
 // Minuten-Auswahl: Wert vorbelegt (Standard 90), mit −/+ im 5-Minuten-Takt änderbar.
 // Auf die Zahl tippen → beliebige Minuten selbst eingeben (auch „krumme“ Werte).
 // opts.fine = true: ohne Schnellwahl (für tatsächlich gefahrene Minuten)
+// Schnellwahl beim Abhaken (Minuten); alles andere per Hand
+const RESULT_MINUTES = [45, 60, 70, 75, 80, 90, 100, 105, 110];
 function durationControl(initial, opts = {}) {
   const clamp = (v) => Math.min(600, Math.max(5, Math.round(Number(v) || 0)));
   const input = el("input", { type: "number", inputmode: "numeric", min: 5, max: 600, step: 1, value: clamp(initial), "aria-label": "Minuten" });
@@ -672,7 +674,8 @@ function durationControl(initial, opts = {}) {
       b("+5", () => set(+input.value + 5)),
       b("+15", () => set(+input.value + 15)),
     ),
-    opts.fine ? null : el("div", { class: "chips" }, [45, 90, 135].map((m) => b(`${m} Min.`, () => set(m)))),
+    opts.result ? el("div", { class: "chips dur-chips" }, RESULT_MINUTES.map((m) => b(`${m}`, () => set(m))))
+      : opts.fine ? null : el("div", { class: "chips" }, [45, 90, 135].map((m) => b(`${m} Min.`, () => set(m)))),
   );
   input.addEventListener("focus", () => input.select());           // Antippen markiert die Zahl → direkt überschreiben
   input.addEventListener("change", () => (input.value = clamp(input.value)));
@@ -1630,13 +1633,13 @@ async function updateRequestCount(tabbar) {
   const [req, pend, canc] = await Promise.all([
     sb.from("bookings").select("id", { count: "exact", head: true }).eq("status", "requested"),
     sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending"),
-    sb.from("bookings").select("id", { count: "exact", head: true }).in("status", ["cancelled_student", "declined"]).gt("decided_at", getSeen("requests")),
+    sb.from("bookings").select("id", { count: "exact", head: true }).eq("answer_seen", false),
   ]);
   const badge = (tab, count) => {
     const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
     if (btn && count) btn.append(el("span", { class: "count" }, count));
   };
-  badge("requests", (req.count || 0) + (state.tab === "requests" ? 0 : canc.count || 0));
+  badge("requests", (req.count || 0) + (canc.error ? 0 : canc.count || 0));
   if (state.tab === "requests") markSeen("requests");
   badge("students", pend.count);
   // Erinnerung: Sicherung älter als 30 Tage
@@ -2185,19 +2188,25 @@ async function adminToday() {
   // je Termin: bestätigte Fahrstunde oder (falls ausgefallen) der zuletzt eingetragene Ausfall
   const lessons = (slots || []).map((s) => {
     const list = s.bookings || [];
-    const b = list.find((x) => x.status === "confirmed") || list.filter((x) => NOT_HELD_ICON[x.status]).pop();
+    // Abgesagt und noch in der Zukunft: Der Termin ist wieder frei (erscheint unten als „Frei“)
+    const b = list.find((x) => x.status === "confirmed") || (new Date(s.starts_at).getTime() > now || activeBooking(s) ? null : list.filter((x) => NOT_HELD_ICON[x.status]).pop());
     return b ? { s, b } : null;
   }).filter(Boolean);
+  const lastNotHeld = (s) => (s.bookings || []).filter((x) => NOT_HELD_ICON[x.status]).sort((x, y) => String(x.decided_at || "").localeCompare(String(y.decided_at || ""))).pop();
   // Freie Termine der laufenden Woche (bis Sonntag) – antippen öffnet den Termin (dort z. B. „Schüler hinweisen“)
   // die nächsten 7 Arbeitstage ab heute (Samstag je nach Einstellung)
   let weekEnd = dayStart(new Date());
   for (let n = 0; n < 7; weekEnd = addDays(weekEnd, 1)) if (isWorkday(weekEnd)) n++;
   weekEnd = weekEnd.getTime();
   const freeSlots = (slots || []).filter((s) => !activeBooking(s) && !lessons.some((x) => x.s.id === s.id)
-    && new Date(s.starts_at).getTime() > now && new Date(s.starts_at).getTime() < weekEnd);
-  const freeRow = (s) => el("button", { type: "button", class: "tr free", onclick: () => openAdminSlot(s.id) },
-    el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
-      el("span", { class: "tr-name" }, "🟢 Frei"), el("span", { class: "tr-pill" }, `${s.duration_min} Min.`), el("span", { class: "tr-icon" }, "›")));
+    && new Date(s.starts_at).getTime() > now && (new Date(s.starts_at).getTime() < weekEnd || lastNotHeld(s)));
+  const freeRow = (s) => {
+    const x = lastNotHeld(s);
+    return el("button", { type: "button", class: "tr free", onclick: () => openAdminSlot(s.id) },
+      el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
+        el("span", { class: "tr-name" }, "🟢 Frei"), el("span", { class: "tr-pill" }, `${s.duration_min} Min.`), el("span", { class: "tr-icon" }, "›")),
+      x ? el("div", { class: "tr-foot small muted" }, `${NOT_HELD_ICON[x.status]} ${fullName(x.profiles || {})} – ${STATUS_TEXT[x.status]}${x.late_cancel ? " · Fehlstunde" : ""} · wieder frei`) : null);
+  };
   const mapsLink = (p) => "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(p);
   const go = (n) => { state.todayDate = noSunday(addDays(first, n), n); render(); };
 
@@ -2210,7 +2219,7 @@ async function adminToday() {
   // Kleines Fenster beim Tippen auf die Minuten: Dauer anpassen und abhaken (ab 45 Min. vor Beginn) oder Ausfall wählen
   const openQuick = (s, b, canTick) => {
     const p = b.profiles || {};
-    const dur = durationControl(s.duration_min);
+    const dur = durationControl(s.duration_min, { result: canTick });
     const kind = askSchalt(b) ? schaltPicker(b.lesson_type, (t) => { if (t === "schaltpruefung") dur.set(15); }) : null;
     const ok = el("button", { class: "btn ok inst-big" }, "✓ Gefahren – abhaken");
     const syncOk = () => (ok.textContent = `✓ Gefahren – ${dur.value} Min. abhaken`);
@@ -3490,7 +3499,10 @@ async function openAdminSlot(slotId) {
       // App-Schüler/in: Zeit, Dauer UND Treffpunkt nur mit Zusage ändern (abgehakte/vergangene Fahrstunden: direkt, ohne Nachricht)
       const meetDiff = () => askable && (meet.value() || null) !== (slotMeet(b) || null);
       const timeDiff = () => askable && (Math.round(fromInputs(date.value, time.value).getTime() / 60000) !== Math.round(new Date(slot.starts_at).getTime() / 60000) || dur.value !== slot.duration_min || meetDiff());
-      const sync = () => { save.textContent = timeDiff() ? "📨 Änderung an Schüler/in senden" : "Änderungen speichern"; };
+      // Speichern = direkt ohne Nachricht; zusätzlicher Knopf schickt die Änderung als Angebot (Schüler/in muss zusagen)
+      const offerBtn = el("button", { class: "btn ok", hidden: true }, "📨 Als Angebot an Schüler/in senden");
+      offerBtn.onclick = () => busy(offerBtn, proposeChange);
+      const sync = () => { offerBtn.hidden = !timeDiff(); save.textContent = timeDiff() ? "Speichern (ohne Nachricht)" : "Änderungen speichern"; };
       [date, time].forEach((i) => i.addEventListener("input", sync));
       dur.input.addEventListener("input", sync);
       meet.node.addEventListener("change", sync); meet.node.addEventListener("input", sync);
@@ -3514,7 +3526,7 @@ async function openAdminSlot(slotId) {
         notifyStep("Änderung an den/die Schüler/in gesendet – er/sie muss zusagen", b.profiles && b.profiles.phone, waTextChange(b.profiles, slot.starts_at, chosen.toISOString(), dur.value, [newMeet ? `📍 Neuer Treffpunkt: ${newMeet}` : "", note].filter(Boolean).join("\n")));
       }
       save.onclick = () => busy(save, async () => {
-        if (timeDiff()) return proposeChange();
+        if (timeDiff() && !confirm("Direkt speichern? Der/die Schüler/in bekommt keine Nachricht und muss nicht zusagen.")) return;
         await saveTime();
         const { error } = await sb.from("bookings").update({ admin_reply: reply.value.trim() || null }).eq("id", b.id);
         if (error) throw error;
@@ -3530,11 +3542,11 @@ async function openAdminSlot(slotId) {
         parts.push(el("div", { class: "notice wish" }, el("b", {}, `⏳ Änderung vorgeschlagen: ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || slot.duration_min)} Uhr`), b.change_meeting ? el("div", {}, `📍 Neuer Treffpunkt: ${b.change_meeting}`) : null,
           el("div", { class: "small" }, "Der/die Schüler/in muss noch zusagen. Bis dahin bleibt die Fahrstunde zur bisherigen Zeit bestehen."), el("div", { class: "actions", style: "margin:6px 0 0" }, back)));
       } else if (askable) {
-        parts.push(el("div", { class: "small muted" }, "Zeit, Dauer oder Treffpunkt ändern? Der/die Schüler/in bekommt dann eine Anfrage und muss in der App zusagen."));
+        parts.push(el("div", { class: "small muted" }, "Zeit, Dauer oder Treffpunkt ändern: „Speichern“ übernimmt es sofort ohne Nachricht. „Als Angebot senden“ fragt den/die Schüler/in – er/sie muss in der App zusagen."));
       } else if (b.status === "confirmed") {
         parts.push(el("div", { class: "small muted" }, "Schon gefahren oder vorbei: Änderungen werden direkt gespeichert – der/die Schüler/in bekommt keine Nachricht."));
       }
-      parts.push(el("div", { class: "actions" }, save));
+      parts.push(el("div", { class: "actions" }, offerBtn, save));
     }
   }
 
@@ -3626,7 +3638,7 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
 // Ergebnis einer bestätigten Fahrstunde: gefahren (mit Minuten) – oder warum sie nicht zustande kam
 function doneControls(slot, b, after, opts = {}) {
   const isDone = b.actual_minutes !== null;
-  const mins = durationControl(isDone ? b.actual_minutes : slot.duration_min, { fine: true });
+  const mins = durationControl(isDone ? b.actual_minutes : slot.duration_min, { result: true });
   // Art der Fahrt (Sonderfahrten für den Ausbildungsnachweis)
   let type = b.lesson_type || "normal";
   const typeBtns = typesFor(b.profiles, type).map((t) => el("button", {
@@ -3854,11 +3866,16 @@ async function adminRequests() {
   const [req, open, cancels, offers] = await Promise.all([
     sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,wish_start,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,student_id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
-    sb.from("bookings").select("id,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
+    sb.from("bookings").select("id,status,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
     sb.from("bookings").select("id,admin_reply,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
       .eq("status", "offered"),
   ]);
+  // Antworten der Schüler/innen, die der Fahrlehrer noch nicht abgehakt hat (fehlt die Spalte noch: einfach leer)
+  const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
+    .eq("answer_seen", false).order("answer_at", { ascending: false });
+  const unseen = answers.error ? [] : (answers.data || []).filter((b) => b.slots && b.answer);
+  const unseenIds = new Set(unseen.map((b) => b.id));
   if (offers.error) throw offers.error;
   if (req.error) throw req.error;
   if (open.error) throw open.error;
@@ -3907,16 +3924,51 @@ async function adminRequests() {
     return el("div", { class: "actions", style: "margin-top:8px" }, ok, orig, counter, no);
   };
 
+  const seen = (b, patch = {}) => async () => {
+    const { error } = await sb.from("bookings").update({ answer_seen: true, ...patch }).eq("id", b.id);
+    if (error) throw error;
+    render();
+  };
+  const ANSWER = {
+    offer_accepted: ["confirmed", "✓ Dein Angebot wurde angenommen"],
+    offer_declined: ["declined", "✗ Dein Angebot wurde abgelehnt – Termin ist wieder frei"],
+    change_accepted: ["confirmed", "✓ Deine Änderung wurde angenommen"],
+    change_declined: ["declined", "✗ Deine Änderung wurde abgelehnt – es bleibt bei der alten Zeit"],
+  };
+  const answerItem = (b) => {
+    const btn = (cls, text, patch, msg) => { const x = el("button", { class: "btn small " + cls }, text); x.onclick = () => busy(x, async () => { await seen(b, patch)(); if (msg) toast(msg); }); return x; };
+    if (b.answer === "cancelled") {
+      const sick = /^krank/i.test(b.cancel_reason || "");
+      return item(b, [
+        el("div", { class: "done-row", style: "margin:6px 0 0" },
+          el("span", { class: "badge " + (b.late_cancel ? "late" : "rejected") }, b.late_cancel ? "🙋 Kurzfristig abgesagt" : "🙋 Rechtzeitig abgesagt"),
+          el("span", { class: "small muted" }, "Termin ist wieder frei")),
+        b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
+        b.late_cancel ? el("div", { class: "actions", style: "margin-top:8px" },
+          sick ? btn("ok", "📄 Attest liegt vor – keine Fehlstunde", { late_cancel: false }, "Gespeichert: keine Fehlstunde.") : btn("ok", "Keine Fehlstunde (Kulanz)", { late_cancel: false }, "Gespeichert: keine Fehlstunde."),
+          btn("danger", sick ? "⚠️ Kein Attest – Fehlstunde" : "⚠️ Fehlstunde bestätigen", {}, "Fehlstunde gespeichert."))
+          : el("div", { class: "actions", style: "margin-top:8px" }, btn("", "✓ Zur Kenntnis genommen", {})),
+      ]);
+    }
+    const [cls, text] = ANSWER[b.answer] || ["", "Antwort"];
+    return item(b, [
+      el("div", { style: "margin:6px 0 0" }, el("span", { class: "badge " + cls }, text)),
+      b.student_note ? el("div", { class: "note" }, "Nachricht: ", b.student_note) : null,
+      el("div", { class: "actions", style: "margin-top:8px" }, btn("", "✓ Gesehen", {})),
+    ]);
+  };
+
   return el("div", {},
+    unseen.length ? [el("h2", {}, "Antworten von Schüler/innen"), unseen.map(answerItem), el("div", { style: "height:14px" })] : null,
     el("h2", {}, "Offene Anfragen"),
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
       b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
       b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
       b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
-    cancels.data.length ? [
+    cancels.data.filter((b) => b.slots && !unseenIds.has(b.id)).length ? [
       el("h2", { style: "margin-top:24px" }, "Absagen & abgelehnte Angebote (letzte 7 Tage)"),
-      cancels.data.filter((b) => b.slots).map((b) => item(b, [
+      cancels.data.filter((b) => b.slots && !unseenIds.has(b.id)).map((b) => item(b, [
         b.status === "declined" ? el("span", { class: "badge declined" }, "Angebot abgelehnt") :
         b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : el("span", { class: "badge rejected" }, "rechtzeitig"),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,

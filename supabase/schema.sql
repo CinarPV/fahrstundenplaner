@@ -1314,3 +1314,67 @@ end $$;
 grant execute on function public.respond_change_v2(uuid, boolean, text) to authenticated;
 -- Ausbildung abgeschlossen: Zeitpunkt (Schüler/in kommt ins Archiv; deaktiviert = gesperrt ohne Datum)
 alter table public.profiles add column if not exists finished_at timestamptz;
+
+-- Antworten der Schüler/innen (Angebot/Änderung angenommen oder abgelehnt, Absage) – Fahrlehrer sieht sie unter „Anfragen“, bis er sie abhakt
+alter table public.bookings add column if not exists answer text;
+alter table public.bookings add column if not exists answer_at timestamptz;
+alter table public.bookings add column if not exists answer_seen boolean not null default true;
+
+create or replace function public.cancel_booking(p_booking uuid, p_reason text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_late boolean;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  if coalesce(trim(p_reason), '') = '' then raise exception 'Bitte kurz den Grund angeben'; end if;
+  select now() > cancel_deadline(s.starts_at) into v_late
+  from bookings b join slots s on s.id = b.slot_id
+  where b.id = p_booking and b.student_id = auth.uid() and b.status = 'confirmed'
+    and b.actual_minutes is null and s.starts_at > now();
+  if v_late is null then raise exception 'Diese Fahrstunde kann nicht mehr abgesagt werden'; end if;
+  update bookings set status = 'cancelled_student', cancel_reason = left(trim(p_reason), 300),
+         late_cancel = v_late, decided_at = now(), answer = 'cancelled', answer_at = now(), answer_seen = false
+  where id = p_booking;
+  return v_late;
+end $$;
+
+create or replace function public.respond_offer(p_booking uuid, p_accept boolean, p_note text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_slot uuid; v_from timestamptz;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  select b.slot_id, b.counter_from into v_slot, v_from
+  from bookings b join slots s on s.id = b.slot_id
+  where b.id = p_booking and b.student_id = auth.uid() and b.status = 'offered' and s.starts_at > now();
+  if v_slot is null then raise exception 'Dieses Angebot ist nicht mehr offen'; end if;
+  update bookings b set
+    status = case when p_accept then 'confirmed' else 'declined' end,
+    student_note = coalesce(nullif(left(trim(coalesce(p_note, '')), 300), ''), b.student_note),
+    counter_from = null,
+    decided_at = now(),
+    answer = case when p_accept then 'offer_accepted' else 'offer_declined' end, answer_at = now(), answer_seen = false
+  where b.id = p_booking;
+  if not p_accept and v_from is not null then
+    update slots set starts_at = v_from where id = v_slot;
+  end if;
+end $$;
+
+create or replace function public.respond_change_v2(p_booking uuid, p_accept boolean, p_note text)
+returns void language plpgsql security definer set search_path = public as $$
+declare b record;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  select x.id, x.slot_id, x.change_start, x.change_dur, x.change_meeting into b
+  from bookings x where x.id = p_booking and x.student_id = auth.uid() and x.status = 'confirmed'
+    and (x.change_start is not null or x.change_meeting is not null);
+  if b.id is null then raise exception 'Diese Änderung ist nicht mehr offen'; end if;
+  if p_accept then
+    update slots set starts_at = coalesce(b.change_start, starts_at), duration_min = coalesce(b.change_dur, duration_min) where id = b.slot_id;
+    if b.change_meeting is not null then
+      update bookings set meeting_point = nullif(b.change_meeting, '') where id = p_booking;
+    end if;
+  end if;
+  update bookings set change_start = null, change_dur = null, change_meeting = null, change_note = null,
+    student_note = coalesce(nullif(left(trim(coalesce(p_note, '')), 300), ''), student_note),
+    answer = case when p_accept then 'change_accepted' else 'change_declined' end, answer_at = now(), answer_seen = false
+  where id = p_booking;
+end $$;
