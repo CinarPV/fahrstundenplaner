@@ -44,7 +44,18 @@ function smartTime(inp) {
     if (n && n !== inp.value) { busyNorm = true; inp.value = n; inp.dispatchEvent(new Event("input", { bubbles: true })); inp.dispatchEvent(new Event("change", { bubbles: true })); busyNorm = false; }
     inp.classList.toggle("bad-time", final && !!inp.value && !n && !/^\d\d:\d\d$/.test(inp.value));
   };
-  inp.addEventListener("input", () => { if (/^\d{4}$/.test(inp.value) || /^\d{1,2}[:.,]\d{2}$/.test(inp.value)) apply(false); });
+  // Uhrzeit ist schon vollständig (z. B. 14:05) und es kommt noch eine Ziffer → von vorne neu beginnen
+  const restart = (digit) => { inp.value = digit; inp.setSelectionRange(1, 1); inp.dispatchEvent(new Event("input", { bubbles: true })); };
+  inp.addEventListener("beforeinput", (e) => {
+    if (e.inputType !== "insertText" || !/^\d$/.test(e.data || "")) return;
+    const full = /^\d{1,2}:\d{2}$/.test(inp.value) || /^\d{4}$/.test(inp.value);
+    const nothingSelected = inp.selectionStart === inp.selectionEnd;
+    if (full && nothingSelected) { e.preventDefault(); restart(e.data); }
+  });
+  inp.addEventListener("input", () => {
+    if (/^\d{1,2}:\d{2}\d$/.test(inp.value) || /^\d{5}$/.test(inp.value)) return restart(inp.value.slice(-1));   // falls „beforeinput“ fehlt
+    if (/^\d{4}$/.test(inp.value) || /^\d{1,2}[:.,]\d{2}$/.test(inp.value)) apply(false);
+  });
   inp.addEventListener("blur", () => apply(true));
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(true); });
   inp.addEventListener("focus", () => setTimeout(() => inp.select(), 0));
