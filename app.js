@@ -1929,17 +1929,16 @@ async function setOwnDone(x, on) {
 }
 // Blockierte Zeit: anzeigen und löschen
 function openBlock(x) {
-  const del = el("button", { class: "btn danger" }, "🗑 Blockierung aufheben");
+  const del = el("button", { class: "btn danger" }, "🗑 Termin löschen");
   del.onclick = () => busy(del, async () => {
-    if (!confirm("Blockierung aufheben?")) return;
+    if (!confirm("Diesen privaten Termin löschen?")) return;
     const { error } = await sb.from("time_blocks").delete().eq("id", x.id);
     if (error) throw error;
-    closeModal(); toast("Blockierung aufgehoben."); render();
+    closeModal(); toast("Privater Termin gelöscht."); render();
   });
-  openModal("🚫 Blockiert",
+  openModal("📌 " + (x.reason || "Privater Termin"),
     el("p", {}, el("b", {}, fmtDate(x.starts_at)), el("br"), `${fmtRange(x.starts_at, x.duration_min)} Uhr`),
-    el("div", { class: "note" }, "Grund: ", x.reason),
-    el("p", { class: "small muted" }, "Nur du siehst diesen Eintrag. Freie Termine in dieser Zeit sehen Schüler/innen nicht."),
+    el("p", { class: "small muted" }, "Nur du siehst diesen Eintrag. Er zählt nicht als Fahrstunde (keine Statistik, Kontrolle oder Lohn). Schüler/innen können in dieser Zeit nichts anfragen."),
     el("div", { class: "actions" }, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
 function openPlanned(kind, x) {
@@ -1989,7 +1988,7 @@ function openPlanned(kind, x) {
 // Einträge für die Kalender-Woche (eigene Einträge sehen aus wie normale Fahrstunden/Prüfungen, nur mit 📵 = ohne App)
 const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
   node: el("button", { class: "slot block", onclick: (ev) => { ev.stopPropagation(); openBlock(x); } },
-    slotHead(`🚫 ${fmtRange(x.starts_at, x.duration_min)}`, "blockiert"), x.reason) })).concat(p.theory.map((t) => ({ at: t.held_at,
+    slotHead(`📌 ${fmtRange(x.starts_at, x.duration_min)}`, "privat"), x.reason) })).concat(p.theory.map((t) => ({ at: t.held_at,
   node: el("button", { class: "slot theory", onclick: (ev) => { ev.stopPropagation(); openPlanned("theory", t); } },
     slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) })))
   .concat(p.own.map((x) => ({ at: x.starts_at,
@@ -2002,7 +2001,7 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
 // Einträge für „Heute“
 const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => ({ at: x.starts_at,
   node: el("div", { class: "tr block" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
-    el("span", { class: "tr-name" }, "🚫 " + x.reason), el("span", { class: "tr-pill" }, `bis ${fmtTime(addMin(x.starts_at, x.duration_min))}`),
+    el("span", { class: "tr-name" }, "📌 " + x.reason), el("span", { class: "tr-pill" }, `bis ${fmtTime(addMin(x.starts_at, x.duration_min))}`),
     el("button", { class: "tr-icon", title: "Details", onclick: () => openBlock(x) }, "⋯"))) })).concat(p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
   node: el("div", { class: "tr theory" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
     el("span", { class: "tr-name" }, "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
@@ -2417,9 +2416,9 @@ async function adminToday() {
 /* ---------------- Admin: Kalender ---------------- */
 
 // „Fahrstunden anlegen“ als Fenster – optional mit vorausgewähltem Tag
-function openSlotForm(day, exam, own) {
-  const form = newSlotForm({ inModal: true, exam, own });
-  openModal(exam ? "🎓 Prüfung eintragen" : "➕ Fahrstunde oder Prüfung anlegen", form.node);
+function openSlotForm(day, exam, own, mode) {
+  const form = newSlotForm({ inModal: true, exam, own, mode });
+  openModal(exam ? "🎓 Prüfung eintragen" : mode === "block" ? "📌 Privater Termin" : "➕ Fahrstunde oder Prüfung anlegen", form.node);
   if (day) form.setDate(day);
 }
 
@@ -2715,7 +2714,7 @@ function newSlotForm(opts = {}) {
     examNote.node,
     el("label", {}, "Hinweis (optional, sieht auch der/die Schüler/in)"), examHint);
   // Oben: Fahrstunde (Standard) oder Prüfung. Bei Fahrstunde darunter: freigeben oder einem Schüler zuordnen.
-  const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"], ["theory", "📚 Theorie"], ["own", "👤 Ohne App"], ["block", "🚫 Blockieren"], ["vacation", "🏖️ Urlaub"]];
+  const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"], ["theory", "📚 Theorie"], ["own", "👤 Ohne App"], ["block", "📌 Privat"], ["vacation", "🏖️ Urlaub"]];
   const kindBtns = KINDS.map(([k, text]) => el("button", { type: "button", class: "tab kind-tab" + (k === "exam" ? " exam-mode" : ""),
     onclick: () => setMode(k === "lesson" ? lessonMode : k) }, text));
   const SUBS = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Schüler/in zuordnen"]];
@@ -2840,10 +2839,11 @@ function newSlotForm(opts = {}) {
   // Zeit blockieren: Beginn, Dauer, Begründung (nur für den Fahrlehrer sichtbar)
   const blkTime = el("input", { type: "time", value: "12:00", step: 300 });
   const blkDur = durationControl(60);
-  const blkReason = el("input", { maxlength: 200, placeholder: "z. B. Arzttermin, Werkstatt" });
+  const blkReason = el("input", { maxlength: 200, placeholder: "z. B. Zahnarzt, Elternsprechtag, Werkstatt" });
   const blkBox = el("div", { hidden: true },
-    el("div", { class: "notice", style: "margin:0 0 8px" }, "Die Zeit ist dann belegt: Sie steht in deinem Kalender, Schüler können dort nichts anfragen."),
-    el("label", {}, "Beginn"), blkTime, el("label", {}, "Dauer"), blkDur.node, el("label", {}, "Begründung (freiwillig, nur du siehst sie)"), blkReason);
+    el("div", { class: "notice", style: "margin:0 0 8px" }, "📌 Privater Termin oder blockierte Zeit: steht nur bei dir in „Heute“ und im Kalender. Zählt nicht als Fahrstunde – nicht in Statistik, Kontrolle oder Lohn. Schüler/innen sehen nichts davon und können in dieser Zeit nichts anfragen."),
+    el("label", {}, "Was ist es? (nur du siehst es)"), blkReason,
+    el("label", {}, "Beginn"), blkTime, el("label", {}, "Dauer"), blkDur.node);
   [blkTime, blkReason].forEach((i) => i.addEventListener("input", () => refresh()));
   blkDur.input.addEventListener("input", () => refresh());
   // Urlaub/freie Tage: ganze Tage sperren (zählt bei „Urlaub“ in den Urlaubstagen)
@@ -2939,7 +2939,7 @@ function newSlotForm(opts = {}) {
     renderStudents();
     renderCal();
     const vacN = mode === "vacation" ? pickDays().length : 0;
-    btn.textContent = mode === "block" ? "🚫 Zeit blockieren" : mode === "vacation" ? (vacN ? `🏖️ ${vacN} Tag${vacN === 1 ? "" : "e"} sperren` : "🏖️ Tage sperren") : mode === "theory" ? "📚 Theorie anlegen" : mode === "own" ? "👤 Eintragen" : mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
+    btn.textContent = mode === "block" ? "📌 Privaten Termin speichern" : mode === "vacation" ? (vacN ? `🏖️ ${vacN} Tag${vacN === 1 ? "" : "e"} sperren` : "🏖️ Tage sperren") : mode === "theory" ? "📚 Theorie anlegen" : mode === "own" ? "👤 Eintragen" : mode === "exam" ? (student ? `${EXAM_ICON[examKind.value]} ${EXAM_KIND[examKind.value]} für ${fullName(student)} eintragen` : "Schüler wählen …")
       : mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : mode === "exam" ? " exam-btn" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
@@ -3053,7 +3053,7 @@ function newSlotForm(opts = {}) {
     if (mode === "block") {
       const items = build();
       if (!items.length) throw new Error("Bitte Datum und Beginn prüfen (bei „Mehrere Tage“ mindestens einen Tag antippen).");
-      const reason = blkReason.value.trim() || "Blockiert";
+      const reason = blkReason.value.trim() || "Privater Termin";
       // Begründung ist freiwillig
       const { error } = await sb.from("time_blocks").insert(items.map((x) => ({ teacher_id: state.profile.id, starts_at: x.starts_at, duration_min: x.duration_min, reason })));
       if (error) throw error;
@@ -3205,6 +3205,7 @@ function newSlotForm(opts = {}) {
     setExamKind(opts.exam.kind || "praxis");
     setMode("exam").then(() => { student = (students || []).find((x) => x.id === opts.exam.student.id) || opts.exam.student; refresh(); });
   } else if (opts.own) { setMode("own"); ownName.value = opts.own; }
+  else if (opts.mode) setMode(opts.mode);
   else setMode("free");
   if (!opts.exam) setExamKind("praxis");
   return { node, setDate: (d) => { date.value = dateInput(d); setDays([weekdayIndex(d)]); refresh(); } };
@@ -3304,7 +3305,7 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur,
   const pl = await loadPlanned(from, to);
   others.push(...pl.own.map((x) => ({ start: new Date(x.starts_at).getTime(), dur: x.duration_min, free: false, label: x.student_name })),
     ...pl.theory.map((t) => ({ start: new Date(t.held_at).getTime(), dur: t.duration_min, free: false, label: "Theorie" })),
-    ...pl.blocks.map((x) => ({ start: new Date(x.starts_at).getTime(), dur: x.duration_min, free: false, label: "Blockiert: " + x.reason })));
+    ...pl.blocks.map((x) => ({ start: new Date(x.starts_at).getTime(), dur: x.duration_min, free: false, label: "Privat: " + x.reason })));
   const { moves, stuck, clashes } = planShift({ oldStart: oldMs, oldDur, newStart: newMs, newDur }, others);
   const needAsk = moves.length || stuck.length || clashes.length;
 
@@ -3991,7 +3992,8 @@ function openAddMenu() {
     el("span", { class: "more-ic" }, icon), el("span", {}, el("b", {}, title), el("small", {}, sub)), el("span", { class: "more-go" }, "›"));
   openModal("Was möchtest du anlegen?",
     el("div", { class: "more-list" },
-      item("🚗", "Fahrstunde / Prüfung / Theorie", "auch Blockieren und Urlaub", () => openSlotForm(day)),
+      item("🚗", "Fahrstunde / Prüfung / Theorie", "auch Urlaub", () => openSlotForm(day)),
+      item("📌", "Privater Termin", "z. B. Zahnarzt, Elternsprechtag – nur für dich", () => openSlotForm(day, null, null, "block")),
       item("✍️", "Gefahrenes nachtragen", "schon gefahrene Fahrstunde", () => openBackfill()),
       item("🤒", "Krank / Urlaub", "Fahrstunden absagen, Schüler/innen benachrichtigen", () => openSick()),
       item("🏖️", "Tage sperren", "an diesen Tagen keine Anfragen", () => openTimeOff()),

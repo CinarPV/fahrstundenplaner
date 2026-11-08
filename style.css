@@ -852,8 +852,8 @@ html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 .tr.exam { border: 2px solid var(--exam-bd); border-left-width: 4px; background: var(--exam-bg); color: var(--exam-fg); font-weight: 600; }
 .slot.theory, .tr.theory { border: 1px solid var(--theory-bd); border-left: 5px solid #4c6fe0; background: linear-gradient(90deg, #dfe8ff, var(--theory-bg) 60%); color: var(--theory-fg); box-shadow: none; }
 .tr.theory { font-weight: 600; }
-.slot.block, .tr.block { border: 2px solid #8a8f98; background: repeating-linear-gradient(135deg, #8a8f981f 0 8px, #8a8f9838 8px 16px), var(--card); color: var(--text); }
-.tr.block { border-left-width: 4px; }
+.slot.block, .tr.block { border: 1px solid #c9b8e8; border-left: 5px solid #8b6bd1; background: #f5f0fc; color: #4a3a73; }
+.tr.block { font-weight: 600; }
 .kind-tabs { grid-template-columns: 1fr 1fr 1fr; }
 @media (max-width: 380px) { .kind-tabs { grid-template-columns: 1fr 1fr; } .kind-tabs .tab { font-size: 15px; } }
 /* Uhrzeit als Tippfeld */
