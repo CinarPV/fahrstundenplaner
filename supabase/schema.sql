@@ -1463,3 +1463,68 @@ create extension if not exists pg_cron;
 select cron.schedule('fsp-daily-backup', '30 1 * * *', 'select public.run_daily_backups()');
 -- gleich eine erste Sicherung anlegen
 select public.run_daily_backups();
+
+-- Zeitfenster mit eigener Höchstzahl (z. B. 14–18 Uhr höchstens 1), außerhalb gilt die normale Höchstzahl (0 = frei)
+alter table public.settings add column if not exists window_max int check (window_max between 0 and 50);
+-- Bisherige Einstellung beibehalten: Fenster-Grenze = alte Höchstzahl, außerhalb wie bisher frei
+update public.settings set window_max = max_open, max_open = 0
+where window_max is null and limit_from is not null and limit_to is not null;
+
+create or replace function public.book_slot(p_slot uuid, p_note text, p_exception boolean default false, p_wish timestamptz default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid; v_start timestamptz; v_max int; v_open int; v_over boolean := false;
+        v_from time; v_to time; v_window boolean; v_used boolean; v_in boolean; v_own int; v_wmax int;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  select starts_at into v_start from slots where id = p_slot and teacher_id = my_teacher_id();
+  if v_start is null then raise exception 'Termin nicht gefunden'; end if;
+  if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
+  if is_time_off(my_teacher_id(), v_start) then raise exception 'An diesem Tag ist dein Fahrlehrer nicht verfügbar (Urlaub/frei).'; end if;
+  if p_wish is not null and p_wish <> v_start then
+    if abs(extract(epoch from p_wish - v_start)) > 3600 then raise exception 'Die Wunschzeit darf höchstens 1 Stunde abweichen'; end if;
+    if p_wish < now() then raise exception 'Die Wunschzeit liegt in der Vergangenheit'; end if;
+  else
+    p_wish := null;
+  end if;
+  -- Höchstzahl PRO WOCHE (Mo–So). Mit Zeitfenster zwei getrennte Zähler:
+  --   im Fenster: settings.window_max · außerhalb: eigene Höchstzahl des Schülers, sonst settings.max_open (0 = frei)
+  --   Schüler/in mit eigener Höchstzahl 0 (= unbegrenzt) ist überall frei.
+  select p.max_open, st.max_open, st.window_max, st.limit_from, st.limit_to into v_own, v_max, v_wmax, v_from, v_to
+  from profiles p join settings st on st.teacher_id = p.teacher_id where p.id = auth.uid();
+  v_window := v_from is not null and v_to is not null and v_from < v_to;
+  v_in := v_window and (v_start at time zone 'Europe/Berlin')::time >= v_from and (v_start at time zone 'Europe/Berlin')::time < v_to;
+  if v_own = 0 then v_max := 0;
+  elsif v_in then v_max := coalesce(v_wmax, v_max);
+  else v_max := coalesce(v_own, v_max);
+  end if;
+  if coalesce(v_max, 0) > 0 then
+    select count(*) into v_open from bookings b join slots s on s.id = b.slot_id
+    where b.student_id = auth.uid()
+      and date_trunc('week', s.starts_at at time zone 'Europe/Berlin') = date_trunc('week', v_start at time zone 'Europe/Berlin')
+      and b.status in ('requested', 'offered', 'confirmed')
+      and (not v_window or (((s.starts_at at time zone 'Europe/Berlin')::time >= v_from and (s.starts_at at time zone 'Europe/Berlin')::time < v_to) = v_in));
+    if v_open >= v_max then
+      select exists (select 1 from bookings b join slots s on s.id = b.slot_id
+        where b.student_id = auth.uid() and b.over_limit
+          and date_trunc('week', s.starts_at at time zone 'Europe/Berlin') = date_trunc('week', v_start at time zone 'Europe/Berlin'))
+        into v_used;
+      if not coalesce(p_exception, false) or v_used then
+        -- „LIMIT:“ erkennt die App (Fenster „14:00-18:00“ = im Fenster, „!14:00-18:00“ = außerhalb)
+        raise exception 'LIMIT:%:%:%|%', v_open, v_max,
+          case when v_window then (case when v_in then '' else '!' end) || to_char(v_from, 'HH24:MI') || '-' || to_char(v_to, 'HH24:MI') else '' end,
+          case when v_used then 'U' else 'N' end;
+      end if;
+      if coalesce(trim(p_note), '') = '' then raise exception 'Bitte schreib deinem Fahrlehrer kurz, warum du eine weitere Fahrstunde möchtest'; end if;
+      v_over := true;
+    end if;
+  end if;
+  begin
+    insert into bookings (slot_id, student_id, student_note, over_limit, wish_start)
+    values (p_slot, auth.uid(), nullif(left(trim(coalesce(p_note,'')), 300), ''), v_over, p_wish)
+    returning id into v_id;
+  exception when unique_violation then
+    raise exception 'Dieser Termin ist leider schon vergeben';
+  end;
+  return v_id;
+end $$;
+grant execute on function public.book_slot(uuid, text, boolean, timestamptz) to authenticated;

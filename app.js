@@ -4867,9 +4867,15 @@ function adminSettings() {
   const winPart = el("input", { type: "radio", name: "limit-win", checked: hasWindow });
   const winFrom = el("input", { type: "time", step: 900, value: hhmm(state.settings.limit_from) || "14:00" });
   const winTo = el("input", { type: "time", step: 900, value: hhmm(state.settings.limit_to) || "18:00" });
-  const winBox = el("div", { class: "row", hidden: !hasWindow, style: "max-width:320px" },
-    el("div", {}, el("label", {}, "von"), winFrom), el("div", {}, el("label", {}, "bis"), winTo));
-  [winAll, winPart].forEach((r) => r.addEventListener("change", () => (winBox.hidden = !winPart.checked)));
+  const winMax = el("input", { type: "number", min: 0, max: 50, value: state.settings.window_max ?? state.settings.max_open ?? 1, style: "max-width:110px" });
+  const maxLabel = el("label", {}, "Höchstzahl pro Woche");
+  const winBox = el("div", { hidden: !hasWindow },
+    el("div", { class: "row", style: "max-width:320px" },
+      el("div", {}, el("label", {}, "von"), winFrom), el("div", {}, el("label", {}, "bis"), winTo)),
+    el("label", {}, "Höchstzahl pro Woche im Zeitfenster"), winMax,
+    el("p", { class: "muted small", style: "margin:4px 0 0" }, "Oben steht die Höchstzahl für alle anderen Uhrzeiten. 0 = dort frei buchbar (unbegrenzt)."));
+  const syncWin = () => { winBox.hidden = !winPart.checked; maxLabel.textContent = winPart.checked ? "Höchstzahl pro Woche außerhalb des Zeitfensters" : "Höchstzahl pro Woche"; };
+  [winAll, winPart].forEach((r) => r.addEventListener("change", syncWin)); syncWin();
   const phone = el("input", { type: "tel", value: state.settings.admin_phone || "", placeholder: "z. B. 0151 23456789" });
   const display = el("input", { value: state.settings.display_name || "", maxlength: 60 });
   const meetStd = el("input", { value: state.settings.meeting_point || "", maxlength: 200, placeholder: "z. B. Fahrschule, Hauptstraße 1" });
@@ -4879,6 +4885,7 @@ function adminSettings() {
     if (winPart.checked && !(winFrom.value && winTo.value && winFrom.value < winTo.value)) throw new Error("Bitte ein gültiges Zeitfenster wählen (von vor bis).");
     const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null,
       limit_from: winPart.checked ? winFrom.value : null, limit_to: winPart.checked ? winTo.value : null,
+      window_max: winPart.checked ? Math.max(0, Math.min(50, +winMax.value || 0)) : null,
       display_name: display.value.trim() || "Fahrlehrer",
       meeting_point: meetStd.value.trim() || null,
       meeting_points: meetMore.value.split("\n").map((x) => x.trim()).filter(Boolean).join("\n") || null };
@@ -4917,11 +4924,10 @@ function adminSettings() {
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
       dur.node,
       el("h3", { style: "margin-top:18px" }, "Höchstzahl Fahrstunden pro Woche"),
-      el("p", { class: "muted small" }, "So viele Termine darf ein Schüler pro Woche (Mo–So) anfragen bzw. haben, z. B. 1 oder 2. 0 = unbegrenzt. Will er mehr, kann er um eine Ausnahme bitten – die gewährst oder ablehnst du unter „Anfragen“. Einzelne Schüler (z. B. vor der Prüfung) kannst du in der Schülerliste dauerhaft freigeben."),
-      maxOpen,
-      el("label", {}, "Gilt für"),
-      el("label", { class: "check" }, winAll, el("span", {}, "den ganzen Tag")),
-      el("label", { class: "check" }, winPart, el("span", {}, "nur Termine in einem Zeitfenster – z. B. 14–18 Uhr. Termine davor oder danach sind frei buchbar.")),
+      el("p", { class: "muted small" }, "So viele Termine darf ein/e Schüler/in pro Woche (Mo–So) anfragen bzw. haben, z. B. 1 oder 2. 0 = unbegrenzt. Will er/sie mehr, kann er/sie um eine Ausnahme bitten – die gewährst oder ablehnst du unter „Anfragen“. Einzelne Schüler/innen (z. B. vor der Prüfung) kannst du in der Schülerliste dauerhaft freigeben."),
+      el("label", { class: "check" }, winAll, el("span", {}, "Eine Höchstzahl für den ganzen Tag")),
+      el("label", { class: "check" }, winPart, el("span", {}, "Eigene Höchstzahl für ein Zeitfenster (z. B. 14–18 Uhr) und eine für die übrige Zeit")),
+      maxLabel, maxOpen,
       winBox,
       el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler"),
       el("p", { class: "muted small" }, "So erscheinst du bei der Registrierung und in Nachrichten, z. B. „Kürsat“."),
@@ -5118,7 +5124,7 @@ function openBooking(s) {
   btn.onclick = () => busy(btn, async () => {
     const { data: newId, error } = await sb.rpc("book_slot", { p_slot: s.slot_id, p_note: note.value, p_wish: s._wish });
     // Höchstzahl erreicht → Pop-up mit der Möglichkeit, um eine Ausnahme zu bitten
-    const limit = error && /LIMIT:(\d+):(\d+):?([\d:]+-[\d:]+)?\|?([UN])?/.exec(error.message || "");
+    const limit = error && /LIMIT:(\d+):(\d+):?(!?[\d:]+-[\d:]+)?\|?([UN])?/.exec(error.message || "");
     if (limit) return openLimitRequest(s, note.value, +limit[1], +limit[2], limit[3], limit[4] === "U");
     if (error) throw error;
     pushNotify("booking", newId, "request");
@@ -5162,7 +5168,9 @@ function openBooking(s) {
 // Höchstzahl erreicht: Hinweis + kurze Nachricht an den Fahrlehrer → Anfrage als „Ausnahme gewünscht“
 // used = Ausnahme-Bitte in dieser Woche schon gestellt → nur noch Hinweis, keine weitere Bitte
 function openLimitRequest(s, prevNote, open, max, win, used) {
-  const span = win ? ` zwischen ${win.replace("-", " und ")} Uhr` : "";
+  const outside = !!win && win.startsWith("!");
+  const w = win ? win.replace("!", "").replace("-", " und ") : "";
+  const span = !win ? "" : outside ? ` außerhalb von ${w} Uhr` : ` zwischen ${w} Uhr`;
   const msg = el("textarea", { maxlength: 300, placeholder: "z. B. „Meine Prüfung ist bald – könnte ich diese Woche noch eine Stunde fahren?“" });
   msg.value = prevNote || "";
   const btn = el("button", { class: "btn" }, "📨 Trotzdem anfragen (Ausnahme)");
@@ -5177,7 +5185,7 @@ function openLimitRequest(s, prevNote, open, max, win, used) {
     render();
   });
   const info = el("div", { class: "notice" }, el("b", {}, `Du hast in dieser Woche schon ${open} Fahrstunde${open === 1 ? "" : "n"}${span}`),
-    ` – die Höchstzahl pro Woche${span ? " für diese Uhrzeit" : ""} ist ${max}.`, win ? " Termine zu anderen Uhrzeiten kannst du ganz normal anfragen." : "");
+    ` – die Höchstzahl pro Woche${span ? " für diese Uhrzeiten" : ""} ist ${max}.`, win ? (outside ? ` Für Termine zwischen ${w} Uhr gilt eine eigene Höchstzahl.` : " Für Termine zu anderen Uhrzeiten gilt eine eigene Höchstzahl.") : "");
   if (used) return openModal("Wochen-Höchstzahl erreicht", info,
     el("div", { class: "notice danger" }, el("b", {}, "Ausnahme schon genutzt: "),
       "Du hast in dieser Woche bereits um eine Ausnahme gebeten. Pro Woche ist nur eine Ausnahme-Bitte möglich – ab nächster Woche kannst du wieder normal anfragen."),
