@@ -2332,6 +2332,7 @@ async function adminToday() {
         try { await save(b, { actual_minutes: s.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${s.duration_min} Min. gefahren`); }
         catch (e) { btn.disabled = false; fail(e); }
       } }, "✓") : null,
+      phase === "next" && !b._own ? el("button", { class: "tr-move", title: "Verschiebung anfragen", "aria-label": "Verschiebung anfragen", onclick: () => openChangeRequest(s.id) }, "🔁") : null,
       el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
@@ -2450,9 +2451,10 @@ async function adminCalendar() {
     // Bestätigte/gefahrene Fahrstunde: Name antippen → Schüler-Infos; Rest des Termins → Termin-Details
     const nameTap = b && b.status === "confirmed" && label
       ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
+    const canMove = b && b.status === "confirmed" && b.actual_minutes === null && !past;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
-      null);
+      canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
 
   return el("div", {},
@@ -3370,6 +3372,60 @@ function openCounterOffer(b, slot, preset = null) {
     el("p", { class: "muted small" }, "Der/die Schüler/in muss in der App zusagen. Bis dahin ist der Termin für ihn reserviert. Lehnt er ab, wird der Termin wieder frei und steht wieder zur angelegten Zeit im Kalender."),
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
+// Schnell: Bestätigte Fahrstunde verschieben/ändern anfragen – der/die Schüler/in muss in der App zusagen
+async function openChangeRequest(slotId) {
+  const { data: slot, error } = await sb.from("slots")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,meeting_point,change_start,change_dur,change_meeting,student_id,profiles(first_name,last_name,phone))")
+    .eq("id", slotId).single();
+  if (error) return fail(error);
+  const b = (slot.bookings || []).find((x) => x.status === "confirmed" && x.actual_minutes === null);
+  if (!b || new Date(slot.starts_at).getTime() <= Date.now()) return toast("Diese Fahrstunde kann nicht mehr verschoben werden.", true);
+  const date = el("input", { type: "date", value: dateInput(slot.starts_at) });
+  const time = el("input", { type: "time", value: timeInput(slot.starts_at), step: 300 });
+  const dur = durationControl(slot.duration_min);
+  const curMeet = b.meeting_point || slot.meeting_point || null;
+  const meet = meetingPicker(curMeet);
+  const note = el("textarea", { maxlength: 1000, rows: 2, placeholder: "z. B. Ich schaffe es erst 30 Minuten später – passt das?" });
+  const send = el("button", { class: "btn ok" }, "📨 Verschiebung anfragen");
+  send.onclick = () => busy(send, async () => {
+    const chosen = fromInputs(date.value, time.value);
+    if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
+    if (chosen.getTime() <= Date.now()) throw new Error("Die neue Zeit liegt in der Vergangenheit");
+    const sameTime = Math.round(chosen.getTime() / 60000) === Math.round(new Date(slot.starts_at).getTime() / 60000) && dur.value === slot.duration_min;
+    const normMeet = (v) => (!v || v === state.settings.meeting_point ? null : v);   // „Standard“ = gleicher Treffpunkt
+    const meetChanged = normMeet(meet.value()) !== normMeet(curMeet);
+    if (sameTime && !meetChanged) throw new Error("Bitte eine neue Uhrzeit, Dauer oder einen anderen Treffpunkt wählen.");
+    const endMs = chosen.getTime() + dur.value * 60000;
+    const { data: near, error: en } = await sb.from("slots").select("id,starts_at,duration_min,bookings(status)")
+      .gte("starts_at", new Date(chosen.getTime() - 12 * 3600000).toISOString()).lt("starts_at", new Date(endMs).toISOString()).neq("id", slot.id);
+    if (en) throw en;
+    const clash = (near || []).some((q) => (q.bookings || []).some((x) => ["requested", "confirmed", "offered"].includes(x.status))
+      && new Date(q.starts_at).getTime() < endMs && new Date(q.starts_at).getTime() + q.duration_min * 60000 > chosen.getTime());
+    if (clash) throw new Error("Zu dieser Zeit ist schon eine andere Fahrstunde eingetragen.");
+    const newMeet = meetChanged ? (await meet.commit(), meet.value() || "") : null;
+    const text = note.value.trim();
+    const { error: e2 } = await sb.from("bookings").update({ change_start: chosen.toISOString(), change_dur: dur.value, change_meeting: newMeet, change_note: text || null, decided_at: new Date().toISOString() }).eq("id", b.id);
+    if (e2) throw e2;
+    pushNotify("booking", b.id, "change");
+    notifyStep("Verschiebung angefragt – der/die Schüler/in muss zusagen", b.profiles && b.profiles.phone,
+      waTextChange(b.profiles, slot.starts_at, chosen.toISOString(), dur.value, [newMeet ? `📍 Neuer Treffpunkt: ${newMeet}` : "", text].filter(Boolean).join("\n")));
+  });
+  // Schnellwahl: um x Minuten verschieben
+  const shift = (m) => el("button", { type: "button", class: "btn small ghost", onclick: () => {
+    const d = new Date(new Date(slot.starts_at).getTime() + m * 60000); date.value = dateInput(d); time.value = timeInput(d);
+    time.dispatchEvent(new Event("input", { bubbles: true }));
+  } }, (m > 0 ? "+" : "−") + Math.abs(m) + " Min.");
+  openModal(`🔁 Verschieben · ${fullName(b.profiles || {})}`,
+    el("p", { class: "small", style: "margin:0 0 8px" }, "Jetzt: ", el("b", {}, `${fmtDate(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)} Uhr`)),
+    b.change_start ? el("div", { class: "notice wish" }, `⏳ Es wartet schon eine Anfrage: ${fmtDate(b.change_start)}, ${fmtTime(b.change_start)} Uhr. Eine neue ersetzt sie.`) : null,
+    el("label", {}, "Schnell verschieben"),
+    el("div", { class: "done-row", style: "margin:0 0 6px" }, [-60, -30, -15, 15, 30, 60].map(shift)),
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
+    el("label", {}, "Dauer"), dur.node, meet.node,
+    el("label", {}, "Nachricht an den/die Schüler/in (optional)"), note,
+    el("p", { class: "muted small" }, "Der/die Schüler/in bekommt eine Mitteilung und muss in der App zusagen. Bis dahin bleibt die Fahrstunde zur bisherigen Zeit."),
+    el("div", { class: "actions" }, send, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
 const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Termine"} verschoben` : "");
 
 async function openAdminSlot(slotId) {
@@ -3447,6 +3503,13 @@ async function openAdminSlot(slotId) {
           el("button", { class: "btn small", onclick: pick(b.wish_start) }, `Wunschzeit ${fmtTime(b.wish_start)}`),
           el("button", { class: "btn small ghost", onclick: pick(slot.starts_at) }, `Wie angelegt ${fmtTime(slot.starts_at)}`)),
         el("div", { class: "small muted" }, "Die Wunschzeit ist unten schon eingetragen. „✓ Bestätigen“ übernimmt die Uhrzeit, die im Feld steht.")));
+    }
+    // Eigener Abschnitt: Verschiebung bei der/dem Schüler/in anfragen
+    if (b.status === "confirmed" && b.actual_minutes === null && new Date(slot.starts_at).getTime() > Date.now()) {
+      parts.push(el("div", { class: "move-sec" },
+        el("h3", {}, "🔁 Verschieben oder ändern"),
+        el("p", { class: "muted small", style: "margin:0 0 8px" }, "Neue Uhrzeit, Dauer oder Treffpunkt vorschlagen – der/die Schüler/in muss in der App zusagen."),
+        el("button", { class: "btn ok", onclick: () => openChangeRequest(slot.id) }, "📨 Verschiebung anfragen")));
     }
     if (b.status === "confirmed") parts.push(el("hr"), doneControls(slot, b, done), el("hr"), el("h3", {}, "Termin & Hinweis"));
     parts.push(
