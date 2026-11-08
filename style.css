@@ -855,3 +855,6 @@ html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 .tr.block { border-left-width: 4px; }
 .kind-tabs { grid-template-columns: 1fr 1fr 1fr; }
 @media (max-width: 380px) { .kind-tabs { grid-template-columns: 1fr 1fr; } .kind-tabs .tab { font-size: 15px; } }
+/* Uhrzeit als Tippfeld */
+input.time-text { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+input.time-text.bad-time { border-color: #e5484d; background: #e5484d14; }

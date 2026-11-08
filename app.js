@@ -20,6 +20,43 @@ let sb = null;
 /* ---------------- Hilfsfunktionen ---------------- */
 
 // Kleiner DOM-Baukasten: Text wird immer als Text eingefügt (kein HTML) → sicher gegen Einschleusen.
+// Uhrzeit-Felder als Tippfeld: Zahlen eintippen, die App setzt den Doppelpunkt (1405 → 14:05, 930 → 09:30, 9 → 09:00)
+function normTime(raw, final) {
+  const s = String(raw || "").trim().replace(/\s*uhr$/i, "").replace(/[.,h ]/g, ":");
+  let h, m, mm;
+  if ((mm = s.match(/^(\d{1,2}):(\d{1,2})$/))) { h = +mm[1]; m = +mm[2]; if (mm[2].length === 1 && !final) return null; }
+  else if (/^\d{3,4}$/.test(s)) { h = +s.slice(0, -2); m = +s.slice(-2); }
+  else if (final && /^\d{1,2}$/.test(s)) { h = +s; m = 0; }
+  else return null;
+  if (h > 23 || m > 59) return null;
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+}
+function smartTime(inp) {
+  if (inp.dataset.smart) return;
+  inp.dataset.smart = "1";
+  const v = inp.value;
+  inp.type = "text"; inp.inputMode = "numeric"; inp.autocomplete = "off"; inp.maxLength = 8;
+  inp.placeholder = "z. B. 1405"; inp.classList.add("time-text"); inp.value = v;
+  let busyNorm = false;
+  const apply = (final) => {
+    if (busyNorm) return;
+    const n = normTime(inp.value, final);
+    if (n && n !== inp.value) { busyNorm = true; inp.value = n; inp.dispatchEvent(new Event("input", { bubbles: true })); inp.dispatchEvent(new Event("change", { bubbles: true })); busyNorm = false; }
+    inp.classList.toggle("bad-time", final && !!inp.value && !n && !/^\d\d:\d\d$/.test(inp.value));
+  };
+  inp.addEventListener("input", () => { if (/^\d{4}$/.test(inp.value) || /^\d{1,2}[:.,]\d{2}$/.test(inp.value)) apply(false); });
+  inp.addEventListener("blur", () => apply(true));
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(true); });
+  inp.addEventListener("focus", () => setTimeout(() => inp.select(), 0));
+}
+new MutationObserver((list) => {
+  for (const m of list) m.addedNodes.forEach((n) => {
+    if (n.nodeType !== 1) return;
+    if (n.matches && n.matches('input[type="time"]')) smartTime(n);
+    n.querySelectorAll && n.querySelectorAll('input[type="time"]').forEach(smartTime);
+  });
+}).observe(document.documentElement, { childList: true, subtree: true });
+
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -1734,7 +1771,7 @@ async function openSick(kind = "krank") {
   btn.onclick = () => busy(btn, async () => {
     const K = AWAY[kind];
     const [a, b] = range();
-    if (!text.value.trim()) throw new Error("Bitte einen kurzen Text schreiben");
+    if (!text.value.trim()) text.value = K.text;   // Text ist freiwillig – sonst der vorbereitete
     const hitIds = new Set(hit.map((x) => x.student_id));
     const who = rAll.checked ? students : students.filter((x) => hitIds.has(x.id));
     const span = from.value === to.value ? fmtDayStr(from.value) : `${fmtDayStr(from.value)} – ${fmtDayStr(to.value)}`;
@@ -2705,7 +2742,7 @@ function newSlotForm(opts = {}) {
   const blkReason = el("input", { maxlength: 200, placeholder: "z. B. Arzttermin, Werkstatt" });
   const blkBox = el("div", { hidden: true },
     el("div", { class: "notice", style: "margin:0 0 8px" }, "Die Zeit ist dann belegt: Sie steht in deinem Kalender, Schüler können dort nichts anfragen."),
-    el("label", {}, "Beginn"), blkTime, el("label", {}, "Dauer"), blkDur.node, el("label", {}, "Begründung (nur du siehst sie)"), blkReason);
+    el("label", {}, "Beginn"), blkTime, el("label", {}, "Dauer"), blkDur.node, el("label", {}, "Begründung (freiwillig, nur du siehst sie)"), blkReason);
   [blkTime, blkReason].forEach((i) => i.addEventListener("input", () => refresh()));
   blkDur.input.addEventListener("input", () => refresh());
   // Urlaub/freie Tage: ganze Tage sperren (zählt bei „Urlaub“ in den Urlaubstagen)
@@ -2915,8 +2952,8 @@ function newSlotForm(opts = {}) {
     if (mode === "block") {
       const items = build();
       if (!items.length) throw new Error("Bitte Datum und Beginn prüfen (bei „Mehrere Tage“ mindestens einen Tag antippen).");
-      const reason = blkReason.value.trim();
-      if (!reason) throw new Error("Bitte eine Begründung eintragen.");
+      const reason = blkReason.value.trim() || "Blockiert";
+      // Begründung ist freiwillig
       const { error } = await sb.from("time_blocks").insert(items.map((x) => ({ teacher_id: state.profile.id, starts_at: x.starts_at, duration_min: x.duration_min, reason })));
       if (error) throw error;
       // Für Schüler nicht mehr buchbar: freie Termine in dieser Zeit entfernen
@@ -2927,7 +2964,7 @@ function newSlotForm(opts = {}) {
       const freeIds = (near || []).filter((q) => !(q.bookings || []).some((y) => ["requested", "confirmed", "offered"].includes(y.status)) && overlaps(q)).map((q) => q.id);
       if (freeIds.length) { const { error: e2 } = await sb.from("slots").delete().in("id", freeIds); if (e2) throw e2; }
       showDate(new Date(items[0].starts_at));
-      toast(`${items.length === 1 ? "Zeit" : items.length + " Zeiten"} blockiert: ${reason}`);
+      toast(`${items.length === 1 ? "Zeit" : items.length + " Zeiten"} blockiert${reason !== "Blockiert" ? ": " + reason : "."}`);
       closeModal(); render();
       return;
     }
@@ -4572,6 +4609,43 @@ function passwordCard() {
 
 /* ---------------- Admin: Einstellungen ---------------- */
 
+// Wann dürfen Schüler anfragen? immer / gesperrt / nur an bestimmten Tagen und Uhrzeiten
+function bookingWindowSettings() {
+  const st = state.settings;
+  let mode = st.booking_closed ? "closed" : st.booking_days ? "times" : "open";
+  const days = new Set(String(st.booking_days || "").split(",").filter((x) => x !== "").map(Number));
+  const from = el("input", { type: "time", value: (st.booking_from || "18:00").slice(0, 5) });
+  const to = el("input", { type: "time", value: (st.booking_to || "20:00").slice(0, 5) });
+  const timesBox = el("div", {});
+  const modeBtns = [["open", "✅ Immer"], ["closed", "⛔ Gesperrt"], ["times", "🕐 Nur zu bestimmten Zeiten"]].map(([m, t]) =>
+    el("button", { type: "button", class: "tab", onclick: () => { mode = m; paint(); } }, t));
+  const dayBtns = [1, 2, 3, 4, 5, 6, 0].map((d) => el("button", { type: "button", class: "tab", onclick: () => { days.has(d) ? days.delete(d) : days.add(d); paint(); } }, DOW[d]));
+  function paint() {
+    modeBtns.forEach((b, i) => b.classList.toggle("active", ["open", "closed", "times"][i] === mode));
+    dayBtns.forEach((b, i) => b.classList.toggle("active", days.has([1, 2, 3, 4, 5, 6, 0][i])));
+    timesBox.hidden = mode !== "times";
+  }
+  const save = el("button", { class: "btn small" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    if (mode === "times" && !days.size) throw new Error("Bitte mindestens einen Tag wählen");
+    if (mode === "times" && from.value >= to.value) throw new Error("„Bis“ muss nach „Von“ liegen");
+    const v = { booking_closed: mode === "closed", booking_days: mode === "times" ? [...days].sort().join(",") : null,
+      booking_from: mode === "times" ? from.value : null, booking_to: mode === "times" ? to.value : null };
+    const { error } = await sb.from("settings").update(v).eq("teacher_id", state.profile.id);
+    if (error) throw error;
+    Object.assign(state.settings, v);
+    toast(mode === "closed" ? "Anfragen sind jetzt gesperrt." : mode === "times" ? `Anfragen nur: ${bookingWindow().when || ""}` : "Anfragen sind jederzeit möglich.");
+  });
+  timesBox.append(el("label", {}, "An welchen Tagen?"), el("div", { class: "tabs", style: "flex-wrap:wrap" }, dayBtns),
+    el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis"), to)));
+  paint();
+  return el("div", {},
+    el("h3", {}, "Wann dürfen Schüler anfragen?"),
+    el("p", { class: "muted small" }, "Termine kannst du jederzeit anlegen. Hier bestimmst du, wann Schüler sie anfragen können – z. B. nur sonntags von 18 bis 20 Uhr."),
+    el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns), timesBox,
+    el("div", { class: "actions" }, save));
+}
+
 function adminSettings() {
   const dur = durationControl(state.settings.default_duration);
   const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3, style: "max-width:110px" });
@@ -4609,7 +4683,8 @@ function adminSettings() {
       (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
       "). ", legalLink("impressum", "Impressum ansehen")) : null,
     el("div", { class: "card" },
-      el("h3", {}, "Wie weit im Voraus dürfen Schüler anfragen?"),
+      bookingWindowSettings(),
+      el("h3", { style: "margin-top:18px" }, "Wie weit im Voraus dürfen Schüler anfragen?"),
       el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),
       (() => {
         const days = el("input", { type: "number", min: 1, max: 365, value: state.settings.book_ahead_days ?? "", placeholder: "z. B. 14", style: "max-width:110px" });
@@ -4729,6 +4804,7 @@ async function studentCalendar() {
   return el("div", {},
     quick,
     expiryNote,
+    !bookingWindow().open ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "), bookingWindow().text) : null,
     nextOff ? el("div", { class: "notice off-banner", style: "margin-bottom:12px" },
       el("b", {}, `🏖️ Dein Fahrlehrer ist nicht verfügbar (${nextOff.note || "frei"}): `), offRange(nextOff),
       ". An diesen Tagen kannst du nichts anfragen.") : null,
@@ -4781,7 +4857,24 @@ function earlyStartMs(s) {
   return ms < base && ms > Date.now() + 15 * 60000 ? ms : null;
 }
 
+// Dürfen Schüler gerade anfragen? (Einstellung des Fahrlehrers: immer / gesperrt / nur zu bestimmten Zeiten)
+const DOW = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+function bookingWindow() {
+  const st = state.settings || {};
+  if (st.booking_closed) return { open: false, text: "Dein Fahrlehrer hat Anfragen gerade gesperrt. Du kannst dir die Termine ansehen, aber noch nichts anfragen." };
+  const days = String(st.booking_days || "").split(",").filter((x) => x !== "").map(Number);
+  if (!days.length) return { open: true };
+  const from = (st.booking_from || "00:00").slice(0, 5), to = (st.booking_to || "24:00").slice(0, 5);
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Berlin" }));
+  const hm = timeInput(now);
+  const open = days.includes(now.getDay()) && hm >= from && hm < to;
+  const when = days.map((d) => DOW[d]).join(", ") + (st.booking_from || st.booking_to ? ` von ${from} bis ${to} Uhr` : "");
+  return { open, text: open ? "" : `Anfragen sind nur möglich: ${when}.`, when };
+}
+
 function openBooking(s) {
+  const win = bookingWindow();
+  if (!win.open) return openModal("Anfragen gerade nicht möglich", el("p", {}, win.text), el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "OK")));
   const note = el("textarea", { maxlength: 300, placeholder: "Optional, z. B. „Kann ich am Bahnhof abgeholt werden?“" });
   const counter = el("div", { class: "muted small", style: "text-align:right" }, "0 / 300");
   note.addEventListener("input", () => (counter.textContent = `${note.value.length} / 300`));

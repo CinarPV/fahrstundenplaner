@@ -1245,3 +1245,40 @@ end $$;
 drop trigger if exists bookings_request_rules on public.bookings;
 create trigger bookings_request_rules before insert on public.bookings
   for each row execute function public.check_request_rules();
+-- Wann dürfen Schüler anfragen? (gesperrt / nur an bestimmten Wochentagen und Uhrzeiten)
+alter table public.settings add column if not exists booking_closed boolean not null default false;
+alter table public.settings add column if not exists booking_days text check (booking_days ~ '^[0-6](,[0-6])*$');   -- 0 = Sonntag … 6 = Samstag
+alter table public.settings add column if not exists booking_from time;
+alter table public.settings add column if not exists booking_to time;
+
+create or replace function public.check_request_rules()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_start timestamptz; v_teacher uuid; v_day date; l record; v_n int; st record; v_now timestamp;
+begin
+  if new.status <> 'requested' or auth.uid() is null or new.student_id <> auth.uid() then return new; end if;
+  select starts_at, teacher_id into v_start, v_teacher from slots where id = new.slot_id;
+  if v_start is null then return new; end if;
+  select * into st from settings where teacher_id = v_teacher;
+  v_now := now() at time zone 'Europe/Berlin';
+  -- Anfragen gesperrt oder nur zu bestimmten Zeiten
+  if st.booking_closed then raise exception 'Dein Fahrlehrer hat Anfragen gerade gesperrt.'; end if;
+  if st.booking_days is not null and (
+       not (extract(dow from v_now)::int = any (string_to_array(st.booking_days, ',')::int[]))
+       or (st.booking_from is not null and v_now::time < st.booking_from)
+       or (st.booking_to is not null and v_now::time >= st.booking_to)) then
+    raise exception 'Anfragen sind gerade nicht möglich – nur zu den Zeiten, die dein Fahrlehrer festgelegt hat.';
+  end if;
+  v_day := (v_start at time zone 'Europe/Berlin')::date;
+  if st.book_ahead_days is not null and v_day > v_now::date + st.book_ahead_days then
+    raise exception 'Diese Fahrstunde kann erst % Tage vorher angefragt werden.', st.book_ahead_days;
+  end if;
+  for l in select * from student_limits where student_id = new.student_id and v_day between from_day and to_day loop
+    select count(*) into v_n from bookings b join slots s on s.id = b.slot_id
+      where b.student_id = new.student_id and b.status in ('requested','offered','confirmed')
+        and (s.starts_at at time zone 'Europe/Berlin')::date between l.from_day and l.to_day;
+    if v_n >= l.max_count then
+      raise exception 'Vom % bis % darfst du höchstens % Fahrstunde(n) anfragen.', to_char(l.from_day, 'DD.MM.'), to_char(l.to_day, 'DD.MM.'), l.max_count;
+    end if;
+  end loop;
+  return new;
+end $$;
