@@ -1429,6 +1429,28 @@ function pushCard() {
     box);
 }
 
+// Fahrlehrer: Hinweis oben auf „Heute“, solange auf diesem Gerät keine Mitteilungen ankommen
+function pushBanner() {
+  const box = el("div", {});
+  (async () => {
+    if (!pushSupported()) return;
+    const ios = isIOS(), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+    let on = false;
+    try { on = Notification.permission === "granted" && !!(await (await navigator.serviceWorker.ready).pushManager.getSubscription()); } catch { /* egal */ }
+    if (on) return;
+    const blocked = Notification.permission === "denied";
+    const btn = el("button", { class: "btn small ok" }, "🔔 Jetzt einschalten");
+    btn.onclick = () => busy(btn, async () => { await enablePush(); await pushTest(); box.replaceChildren(); });
+    box.replaceChildren(el("div", { class: "notice push-banner" },
+      el("b", {}, "🔔 Mitteilungen sind auf diesem Gerät aus"), el("br"),
+      "Du bekommst sonst keine Nachricht, wenn Schüler/innen anfragen, absagen, zusagen oder sich registrieren.",
+      ios && !installed ? el("div", { class: "small", style: "margin-top:6px" }, "iPhone/iPad: Erst die App installieren (Teilen → „Zum Home-Bildschirm“), dann dort einschalten.")
+        : blocked ? el("div", { class: "small", style: "margin-top:6px" }, "Mitteilungen sind blockiert – bitte in den Geräte-Einstellungen für diese App erlauben.")
+        : el("div", { class: "actions", style: "margin:8px 0 0" }, btn)));
+  })();
+  return box;
+}
+
 // Nach der Anmeldung EINMAL fragen, ob Mitteilungen erlaubt werden sollen – danach nie wieder (änderbar in Einstellungen/Profil)
 async function maybeAskPush() {
   if (!state.profile || (!isAdmin() && !state.active) || state.profile.must_change_password) return;
@@ -2369,6 +2391,7 @@ async function adminToday() {
   }
   const todoBox = await adminRequests({ compact: true }).catch(() => null);
   const view = el("div", { class: "today-view" },
+    pushBanner(),
     // Oben: alles, was zu tun ist (Anfragen, Antworten, Abhaken, Registrierungen)
     todoBox,
     el("div", { class: "remind-row" }, remindBtn()),
