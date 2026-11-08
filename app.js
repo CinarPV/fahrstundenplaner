@@ -2446,9 +2446,16 @@ async function openBackfill(preStudent) {
     .eq("role", "student").in("status", ["active", "blocked"]).order("last_name");
   if (error) return fail(error);
   students.splice(0, students.length, ...(await onlyActive(students)));
-  if (!students.length) return openModal("Nachtragen", el("p", { class: "muted" }, "Noch keine Schüler/innen vorhanden."));
-  const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
-    students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
+  // Schüler/innen ohne App (aus den eigenen Einträgen) mit anbieten – und einen neuen Namen erlauben
+  const { data: ownRows } = await sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id);
+  const ownNames = [...new Map((ownRows || []).map((x) => [(x.student_name || "").trim().toLowerCase(), (x.student_name || "").trim()])).values()]
+    .filter(Boolean).sort((a, b) => a.localeCompare(b, "de"));
+  const who = el("select", {}, el("option", { value: "" }, "Schüler/in wählen …"),
+    students.length ? el("optgroup", { label: "Mit App" }, students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : "")))) : null,
+    el("optgroup", { label: "Ohne App" }, ownNames.map((n) => el("option", { value: "own:" + n }, n)),
+      el("option", { value: "own:" }, "➕ Neue/r Schüler/in ohne App …")));
+  const newName = el("input", { maxlength: 80, placeholder: "Name des/der Schüler/in", hidden: true });
+  who.addEventListener("change", () => { newName.hidden = who.value !== "own:"; if (!newName.hidden) newName.focus(); });
   if (preStudent) who.value = preStudent.id;
   const now = new Date();
   const date = el("input", { type: "date", value: dateInput(now), max: dateInput(now) });
@@ -2476,12 +2483,26 @@ async function openBackfill(preStudent) {
   const log = el("div", { class: "retro-log" });
   btn.onclick = () => busy(btn, async () => {
     let okMsg = "";
+    const isOwn = who.value.startsWith("own:");
+    const ownName = isOwn ? (who.value.slice(4) || newName.value.trim()) : "";
     const st = students.find((x) => x.id === who.value);
-    if (!st) throw new Error("Bitte eine/n Schüler/in wählen");
+    if (!st && !ownName) throw new Error(isOwn ? "Bitte den Namen des/der Schüler/in eintragen" : "Bitte eine/n Schüler/in wählen");
     const start = fromInputs(date.value, time.value);
     if (isNaN(start)) throw new Error("Bitte Datum und Uhrzeit angeben");
     if (start.getTime() > Date.now()) throw new Error("Das liegt in der Zukunft – künftige Termine bitte über „➕ Anlegen“ eintragen.");
-    if (type === "exam" || type === "schaltpruefung") {
+    if (isOwn) {
+      // Schüler/in ohne App: eigener Eintrag, gleich als gefahren abgehakt
+      const isExam = type === "exam";
+      const { error } = await sb.from("own_entries").insert({ teacher_id: state.profile.id, kind: isExam ? "exam" : "lesson", lesson_type: isExam ? null : type,
+        student_name: ownName, starts_at: start.toISOString(), duration_min: dur.value, done: true });
+      if (error) throw error;
+      okMsg = `${isExam ? "Prüfung" : LESSON_TYPES[type]} · ${ownName} (ohne App) · ${fmtDay(start.toISOString())} ${fmtTime(start.toISOString())} Uhr · ${dur.value} Min.`;
+      if (who.value === "own:") {   // neuer Name: in die Liste aufnehmen und gleich auswählen
+        const opt = el("option", { value: "own:" + ownName }, ownName);
+        who.querySelector('optgroup[label="Ohne App"]').prepend(opt);
+        who.value = "own:" + ownName; newName.hidden = true; newName.value = "";
+      }
+    } else if (type === "exam" || type === "schaltpruefung") {
       // Prüfung bzw. Schaltkompetenz-Test → als Prüfung mit Ergebnis (bestanden / nicht bestanden / offen)
       const kind = type === "exam" ? "praxis" : "schalt";
       const res = result.querySelector("input:checked").value || null;
@@ -2505,7 +2526,7 @@ async function openBackfill(preStudent) {
   });
   openModal("✍️ Gefahrenes nachtragen",
     el("p", { class: "muted small" }, "Für Fahrten, die schon stattgefunden haben (z. B. vergessen einzutragen). Wird sofort als gefahren abgehakt – der/die Schüler/in bekommt keine Mitteilung."),
-    el("label", {}, "Schüler"), who,
+    el("label", {}, "Schüler/in"), who, newName,
     el("label", {}, "Was?"), typeRow, result,
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
     el("label", {}, "Dauer (gefahrene Minuten)"), dur.node,
