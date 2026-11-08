@@ -1286,3 +1286,5 @@ end $$;
 alter table public.settings add column if not exists notify_new_slots boolean not null default false;
 alter table public.settings add column if not exists notify_freed boolean not null default false;
 alter table public.settings add column if not exists notify_button boolean not null default false;
+-- Samstag als Arbeitstag (Standard: ja; aus = Samstage in Heute/Kalender ausblenden)
+alter table public.settings add column if not exists saturday_work boolean not null default true;

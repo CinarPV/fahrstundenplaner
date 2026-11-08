@@ -858,3 +858,12 @@ html.dark .cl-row.todo.over .cl-flag { color: #ffc266; }
 /* Uhrzeit als Tippfeld */
 input.time-text { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 input.time-text.bad-time { border-color: #e5484d; background: #e5484d14; }
+/* „Heute“: freie Termine der laufenden Woche */
+button.tr.free { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; background: var(--free-bg); border-color: var(--free-bd); border-left-color: var(--free-fg); color: var(--free-fg); }
+button.tr.free .tr-name { font-weight: 700; }
+/* Knopf „Schüler hinweisen“: groß und auffällig */
+.btn.nudge-btn { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 14px 16px; background: linear-gradient(135deg, #f59e0b, #ea580c); color: #fff; border: none; border-radius: 14px; box-shadow: 0 4px 14px #ea580c55; }
+.btn.nudge-btn .nudge-ic { font-size: 28px; line-height: 1; }
+.btn.nudge-btn b { display: block; font-size: 17px; }
+.btn.nudge-btn small { display: block; font-size: 12px; opacity: .92; font-weight: 500; }
+.btn.nudge-btn:active { transform: scale(.98); }
