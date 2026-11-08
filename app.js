@@ -544,6 +544,24 @@ function specialSummary(rows, p) {
 }
 
 // Großer farbiger Knopf (wie in „Heute“): Symbol, Titel, Unterzeile
+// Reiter innerhalb einer Seite (z. B. Schüler-Karte): alle Teile bleiben im Dokument, nur einer ist sichtbar
+function paneTabs(list, start = 0) {
+  const panes = list.map(([, nodes]) => el("div", { class: "pane" }, nodes));
+  const btns = list.map(([label], i) => el("button", { type: "button", class: "tab", onclick: () => show(i) }, label));
+  const show = (i) => { panes.forEach((p, j) => (p.hidden = j !== i)); btns.forEach((b, j) => b.classList.toggle("active", j === i)); };
+  show(start);
+  return { node: el("div", {}, el("div", { class: "tabs pane-tabs" }, btns), panes), show };
+}
+// Zu einem Element springen – liegt es in einem versteckten Reiter, wird der Reiter zuerst geöffnet
+function revealAndScroll(target, block = "center") {
+  if (!target) return;
+  const pane = target.closest(".pane");
+  if (pane && pane.hidden) {
+    const i = [...pane.parentElement.querySelectorAll(":scope > .pane")].indexOf(pane);
+    pane.parentElement.querySelectorAll(":scope > .pane-tabs .tab")[i]?.click();
+  }
+  target.scrollIntoView({ behavior: "smooth", block });
+}
 const quickBtn = (cls, icon, title, sub, onclick) => el("button", { class: "quick-btn " + cls, onclick },
   el("span", { class: "qi" }, icon), el("span", {}, el("b", {}, title), el("small", {}, sub)));
 
@@ -578,7 +596,7 @@ function studentProfileCard(st, rows) {
     state.renderOnClose = true;
     openStudent({ ...st, ...patch });
   };
-  const jump = (sel) => () => document.querySelector("dialog " + sel)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  const jump = (sel) => () => revealAndScroll(document.querySelector("dialog " + sel));
   // Kachel: antippen → Aktion (ändern, umschalten, springen); ✎ zeigt, dass sie änderbar ist
   const item = (k, v, onclick, editable) => el(onclick ? "button" : "div", { type: onclick ? "button" : undefined, class: "pf-item" + (onclick ? " pf-tap" : ""), onclick },
     el("small", {}, k, editable ? el("span", { class: "pf-pen" }, " ✎") : null), el("b", {}, v || "–"));
@@ -1580,22 +1598,29 @@ async function render() {
   if (state.profile.must_change_password) return renderForcePassword();
   if (!state.active) return renderWaiting();
   const tabs = isAdmin()
-    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "Kalender"], ["requests", "Anfragen"], ["students", "Schüler"], ["training", "Ausbildung"], ["control", "Kontrolle"], ["settings", "Einstellungen"]])
-      .concat(isOwner() || isSchoolAdmin() ? [["teachers", "👥", "Fahrlehrer"]] : [])
+    ? (showToday() ? [["today", "☀️ Heute"]] : []).concat([["calendar", "📅 Kalender"], ["students", "👥 Schüler/innen"], ["more", "☰ Mehr"]])
     : [["calendar", "Kalender"], ["mine", "Fahrstunden"], ["training", "Ausbildung"], ["profile", "👤", "Profil"]];
 
   // Kleine Symbol-Tabs (👥 Fahrlehrer, 👤 Profil) sparen eine Zeile; der Name steht als Hinweis dran
-  const tabbar = el("div", { class: "tabs" }, tabs.map(([id, label, title]) =>
-    el("button", { class: "tab" + (title ? " tab-icon" : "") + (state.tab === id ? " active" : ""), "data-tab": id, title, "aria-label": title, onclick: () => goTab(id) }, label)));
+  // Fahrlehrer: 4 Tabs, auf dem Handy Symbol über dem Wort (passt in eine Zeile)
+  const split = (label) => { const i = label.indexOf(" "); return isAdmin() && i > 0 ? [el("span", { class: "ti" }, label.slice(0, i)), el("span", { class: "tt" }, label.slice(i + 1))] : label; };
+  const tabbar = el("div", { class: "tabs" + (isAdmin() ? " main-tabs" : "") }, tabs.map(([id, label, title]) =>
+    el("button", { class: "tab" + (title ? " tab-icon" : "") + (state.tab === id || (id === "more" && MORE_TABS.includes(state.tab)) ? " active" : ""), "data-tab": id, title, "aria-label": title, onclick: () => goTab(id) }, split(label))));
   const content = el("div", {}, el("p", { class: "muted" }, "Lädt …"));
-  const back = state.tab !== homeTab()
+  // Unterseiten von „Mehr“: Überschrift mit Zurück zu „Mehr“
+  const back = MORE_TABS.includes(state.tab) && isAdmin()
+    ? el("button", { class: "btn small ghost backbtn", onclick: () => goTab("more") }, "‹ Mehr")
+    : state.tab !== homeTab()
     ? el("button", { class: "btn small ghost backbtn", onclick: goBack }, "‹ Zurück") : null;
   // Fahrlehrer: Zugang läuft bald ab → Hinweis oben
   const left = isAdmin() && !isOwner() ? daysLeft(state.profile.valid_until) : null;
   const expiryNote = left !== null && left <= 30 ? el("div", { class: "notice", style: "margin-bottom:12px" }, el("b", {}, "⏳ "),
     left === 0 ? "Dein Zugang läuft heute ab." : `Dein Zugang läuft am ${fmtUntil(state.profile.valid_until)} ab (noch ${left} Tag${left === 1 ? "" : "e"}).`,
     state.profile.school_id ? " Sprich deine Fahrschule an, um ihn zu verlängern." : " Melde dich beim Betreiber der App, um ihn zu verlängern.") : null;
-  app.replaceChildren(...[tabbar, back, expiryNote, content].filter(Boolean));
+  // Fahrlehrer: ein fester ➕-Knopf für alles Neue (statt vieler Kacheln)
+  const fab = isAdmin() && ["today", "calendar", "students"].includes(state.tab)
+    ? el("button", { class: "fab", "aria-label": "Neu anlegen", onclick: openAddMenu }, "＋") : null;
+  app.replaceChildren(...[tabbar, back, expiryNote, content, fab].filter(Boolean));
   if (!history.state || !history.state.tab) history.replaceState({ tab: state.tab }, "");
 
   if (isAdmin()) updateRequestCount(tabbar);
@@ -1613,6 +1638,7 @@ async function render() {
     else if (state.tab === "training") view = isAdmin() ? await adminTraining() : await studentTraining();
     else if (state.tab === "control") view = await adminControl();
     else if (state.tab === "today") view = await adminToday();
+    else if (state.tab === "more") view = adminMore();
     content.replaceChildren(view);
   } catch (e) {
     content.replaceChildren(el("p", { class: "muted" }, "Konnte nicht geladen werden."));
@@ -1639,11 +1665,12 @@ async function updateRequestCount(tabbar) {
     const btn = tabbar.querySelector(`[data-tab="${tab}"]`);
     if (btn && count) btn.append(el("span", { class: "count" }, count));
   };
-  badge("requests", (req.count || 0) + (canc.error ? 0 : canc.count || 0));
-  if (state.tab === "requests") markSeen("requests");
+  const todo = (req.count || 0) + (canc.error ? 0 : canc.count || 0);
+  state.todoCount = todo;
+  badge(showToday() ? "today" : "more", todo);
   badge("students", pend.count);
   // Erinnerung: Sicherung älter als 30 Tage
-  const st = tabbar.querySelector('[data-tab="settings"]');
+  const st = tabbar.querySelector('[data-tab="more"]');
   if (st && backupOverdue() && !(await cloudRecent())) st.append(el("span", { class: "count", title: "Datensicherung fällig" }, "!"));
 }
 
@@ -2339,17 +2366,10 @@ async function adminToday() {
       overview,
       items.length ? items.map((x) => x.node) : overview ? null : el("div", { class: "empty" }, noSlotsText(day))));
   }
+  const todoBox = await adminRequests({ compact: true }).catch(() => null);
   const view = el("div", { class: "today-view" },
-    // Schnellzugriff: neue Fahrstunden/Prüfung anlegen oder zum Kalender (Wochen planen)
-    el("div", { class: "quick-row" },
-      el("button", { class: "quick-btn add", onclick: () => openSlotForm(first) },
-        el("span", { class: "qi" }, "➕"), el("span", {}, el("b", {}, "Anlegen"), el("small", {}, "Fahrstunde / Prüfung"))),
-      el("button", { class: "quick-btn cal", onclick: () => goTab("calendar") },
-        el("span", { class: "qi" }, "📅"), el("span", {}, el("b", {}, "Kalender"), el("small", {}, "Wochen planen"))),
-      el("button", { class: "quick-btn", onclick: () => openBackfill() },
-        el("span", { class: "qi" }, "✍️"), el("span", {}, el("b", {}, "Nachtragen"), el("small", {}, "schon gefahren"))),
-      el("button", { class: "quick-btn sick", onclick: () => openSick() },
-        el("span", { class: "qi" }, "🤒"), el("span", {}, el("b", {}, "Krank / Urlaub"), el("small", {}, "Schüler benachrichtigen")))),
+    // Oben: alles, was zu tun ist (Anfragen, Antworten, Abhaken, Registrierungen)
+    todoBox,
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
@@ -2436,13 +2456,15 @@ async function adminCalendar() {
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
 
   return el("div", {},
-    el("div", { class: "actions", style: "margin:0 0 12px" },
-      el("button", { class: "btn add-btn", onclick: () => openSlotForm() }, "➕ Fahrstunde / Prüfung anlegen"),
-      el("button", { class: "btn ghost", onclick: () => openBackfill() }, "✍️ Gefahrenes nachtragen")),
-    weekBar([el("button", { class: "btn small ghost", onclick: openTimeOff }, "🏖️ Tage sperren"),
-      el("button", { class: "btn small ghost", onclick: () => openSick() }, "🤒 Krank / 🏖️ Urlaub"),
-      el("button", { class: "btn small ghost", onclick: () => openDeleteMany(slots) }, "🗑 Mehrere löschen"),
-      slots.length && !isPhone() ? el("button", { class: "btn small ghost", onclick: () => openCopyWeek(slots) }, "⧉ Woche kopieren") : null]),
+    weekBar([el("button", { class: "btn small ghost", onclick: () => {
+      const it = (t, fn) => el("button", { class: "btn ghost", style: "width:100%;justify-content:flex-start", onclick: () => { closeModal(); setTimeout(fn, 30); } }, t);
+      openModal("Weitere Aktionen",
+        el("div", { class: "actions", style: "flex-direction:column" },
+          it("🏖️ Tage sperren", openTimeOff),
+          it("🤒 Krank / 🏖️ Urlaub", () => openSick()),
+          it("🗑 Mehrere Termine löschen", () => openDeleteMany(slots)),
+          slots.length && !isPhone() ? it("⧉ Woche kopieren", () => openCopyWeek(slots)) : null));
+    } }, "⋯ Mehr")]),
     grid,
   );
 }
@@ -3859,9 +3881,35 @@ async function openTraining(st, lessons) {
   } catch (e) { fail(e); }
 }
 
+// Auswahl hinter dem ➕-Knopf
+function openAddMenu() {
+  const day = state.tab === "today" && state.todayDate ? state.todayDate : undefined;
+  const item = (icon, title, sub, fn) => el("button", { class: "more-tile", onclick: () => { closeModal(); setTimeout(fn, 30); } },
+    el("span", { class: "more-ic" }, icon), el("span", {}, el("b", {}, title), el("small", {}, sub)), el("span", { class: "more-go" }, "›"));
+  openModal("Was möchtest du anlegen?",
+    el("div", { class: "more-list" },
+      item("🚗", "Fahrstunde / Prüfung / Theorie", "auch Blockieren und Urlaub", () => openSlotForm(day)),
+      item("✍️", "Gefahrenes nachtragen", "schon gefahrene Fahrstunde", () => openBackfill()),
+      item("🤒", "Krank / Urlaub", "Fahrstunden absagen, Schüler/innen benachrichtigen", () => openSick()),
+      item("🏖️", "Tage sperren", "an diesen Tagen keine Anfragen", () => openTimeOff())));
+}
+
+/* ---------------- Fahrlehrer: „Mehr“ ---------------- */
+const MORE_TABS = ["requests", "training", "control", "settings", "teachers"];
+function adminMore() {
+  const tile = (id, icon, title, sub) => el("button", { class: "more-tile", onclick: () => goTab(id) },
+    el("span", { class: "more-ic" }, icon), el("span", {}, el("b", {}, title), el("small", {}, sub)), el("span", { class: "more-go" }, "›"));
+  return el("div", { class: "more-list" },
+    tile("requests", "📨", "Anfragen & Antworten", state.todoCount ? `${state.todoCount} offen` : "Alles erledigt"),
+    tile("training", "📈", "Ausbildung", "Ausbildungsstand der Schüler/innen"),
+    tile("control", "✅", "Kontrolle & Lohn", "Gefahrene Stunden prüfen, abrechnen"),
+    tile("settings", "⚙️", "Einstellungen", "Buchungsregeln, Mitteilungen, Sicherung"),
+    isOwner() || isSchoolAdmin() ? tile("teachers", "🧑‍🏫", "Fahrlehrer/innen", "Konten verwalten") : null);
+}
+
 /* ---------------- Admin: Anfragen ---------------- */
 
-async function adminRequests() {
+async function adminRequests(opts = {}) {
   const weekAgo = addDays(new Date(), -7).toISOString();
   const [req, open, cancels, offers] = await Promise.all([
     sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,wish_start,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
@@ -3957,6 +4005,27 @@ async function adminRequests() {
       el("div", { class: "actions", style: "margin-top:8px" }, btn("", "✓ Gesehen", {})),
     ]);
   };
+
+  // Kurzfassung für „Heute“: nur was jetzt zu tun ist, alles direkt erledigen
+  if (opts.compact) {
+    const pend = await sb.from("profiles").select("id", { count: "exact", head: true }).eq("status", "pending").eq("role", "student");
+    const nPend = pend.count || 0;
+    const reqs = req.data.filter((b) => b.slots);
+    const n = unseen.length + reqs.length + missing.length + nPend;
+    const small = (b, text) => el("button", { type: "button", class: "todo-row", onclick: () => openAdminSlot(b.slots.id) },
+      el("span", {}, el("b", {}, fullName(b.profiles)), " · ", `${fmtDay(b.slots.starts_at)} ${fmtTime(b.slots.starts_at)}`), el("span", { class: "todo-go" }, text + " ›"));
+    if (!n) return el("div", { class: "todo-box done" }, "✓ Alles erledigt – keine offenen Anfragen, nichts abzuhaken.");
+    return el("details", { class: "todo-box", open: true },
+      el("summary", {}, el("b", {}, `📋 Zu erledigen (${n})`)),
+      nPend ? el("button", { type: "button", class: "todo-row", onclick: () => goTab("students") },
+        el("span", {}, el("b", {}, `👤 ${nPend} neue Registrierung${nPend === 1 ? "" : "en"}`)), el("span", { class: "todo-go" }, "Freischalten ›")) : null,
+      unseen.length ? [el("div", { class: "todo-sec" }, "Antworten von Schüler/innen"), unseen.map(answerItem)] : null,
+      reqs.length ? [el("div", { class: "todo-sec" }, "Neue Anfragen"), reqs.map((b) => item(b, [
+        b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
+        b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
+        b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))] : null,
+      missing.length ? [el("div", { class: "todo-sec" }, "Noch abzuhaken"), missing.map((b) => small(b, "Abhaken"))] : null);
+  }
 
   return el("div", {},
     unseen.length ? [el("h2", {}, "Antworten von Schüler/innen"), unseen.map(answerItem), el("div", { style: "height:14px" })] : null,
@@ -4307,21 +4376,7 @@ async function openStudent(st) {
   // Große Knöpfe wie in „Heute“
   const qb = quickBtn;
   const wa = waNumber(st.phone);
-  openModal(fullName(st),
-    el("div", { class: "done-row" }, studentTags(st)),
-    el("div", { class: "quick-row" },
-      qb("add", "✍️", "Nachtragen", "schon gefahren", () => openBackfill(st)),
-      qb("exam", "🎓", "Prüfung", "Termin & Ergebnis", () => document.querySelector("dialog .exam-card")?.scrollIntoView({ behavior: "smooth", block: "start" })),
-      qb("cal", "📈", "Ausbildung", "Ausbildungsstand", () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); }),
-      wa ? qb("wa", "💬", "WhatsApp", "Nachricht schreiben", () => window.open(`https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${st.first_name || ""},\n`)}`, "_blank", "noopener"))
-         : qb("", "✏️", "Daten", "bearbeiten", () => openEditStudent(st))),
-    el("h3", { class: "sec-title" }, "🚗 Fahrstunden-Übersicht"),
-    lessonOverview(st, data, stExams || []),
-    studentProfileCard(st, rows),
-    el("div", { class: "done-row" }, exportButtons(st, data)),
-    examSummary(stExams || []),
-    await examCard(st, true),
-    rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
+  const lessonList = rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
         el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
         el("span", { class: "badge " + b.status }, b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
@@ -4329,22 +4384,38 @@ async function openStudent(st) {
       b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null,
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null,
       attestButton(b, () => openStudent(st))))
-      : el("p", { class: "muted" }, "Noch keine Fahrstunden."),
-    el("hr"),
-    el("h3", { class: "access-sec" }, "⏳ Zugang"),
-    el("p", { class: "muted small" }, st.passed
-      ? "🎉 Prüfung bestanden: Der Zugang läuft noch 6 Wochen ab der Prüfung und wird dann gesperrt (ohne Schonfrist). Verlängern geht nur um 4 Wochen."
-      : "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
-    accessCell(st),
-    el("hr"),
-    el("div", { class: "limit-sec" }, limitControl(st), periodLimits(st)),
-    el("hr"),
-    el("h3", {}, "Ausbildung"),
-    el("p", { class: "muted small" }, st.status === "blocked"
-      ? (st.finished_at ? `🎓 Ausbildung abgeschlossen am ${fmtDay(st.finished_at)} – im Archiv. Kann keine Fahrstunden mehr buchen, die Daten bleiben gespeichert.`
-        : "🔒 Deaktiviert – kann keine Fahrstunden mehr buchen, die Daten bleiben gespeichert.")
-      : "Ausbildung abgeschlossen → Archiv. Deaktivieren → z. B. bei Fahrlehrerwechsel (Ausbildung nicht abgeschlossen). Löschen entfernt alles endgültig."),
-    el("div", { class: "actions" }, st.status === "blocked" ? unblock : [block, deact], del));
+    : el("p", { class: "muted" }, "Noch keine Fahrstunden.");
+  const examNode = await examCard(st, true);
+  const tabs = paneTabs([
+    ["Übersicht", [el("h3", { class: "sec-title" }, "🚗 Fahrstunden-Übersicht"), lessonOverview(st, data, stExams || []), studentProfileCard(st, rows),
+      el("div", { class: "done-row" }, exportButtons(st, data))]],
+    [`Fahrstunden (${rows.length})`, [lessonList]],
+    ["Prüfungen", [examSummary(stExams || []), examNode]],
+    ["Zugang & Grenzen", [
+      el("h3", { class: "access-sec" }, "⏳ Zugang"),
+      el("p", { class: "muted small" }, st.passed
+        ? "🎉 Prüfung bestanden: Der Zugang läuft noch 6 Wochen ab der Prüfung und wird dann gesperrt (ohne Schonfrist). Verlängern geht nur um 4 Wochen."
+        : "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
+      accessCell(st),
+      el("hr"),
+      el("div", { class: "limit-sec" }, limitControl(st), periodLimits(st)),
+      el("hr"),
+      el("h3", {}, "Ausbildung"),
+      el("p", { class: "muted small" }, st.status === "blocked"
+        ? (st.finished_at ? `🎓 Ausbildung abgeschlossen am ${fmtDay(st.finished_at)} – im Archiv. Kann keine Fahrstunden mehr buchen, die Daten bleiben gespeichert.`
+          : "🔒 Deaktiviert – kann keine Fahrstunden mehr buchen, die Daten bleiben gespeichert.")
+        : "Ausbildung abgeschlossen → Archiv. Deaktivieren → z. B. bei Fahrlehrerwechsel (Ausbildung nicht abgeschlossen). Löschen entfernt alles endgültig."),
+      el("div", { class: "actions" }, st.status === "blocked" ? unblock : [block, deact], del)]],
+  ]);
+  openModal(fullName(st),
+    el("div", { class: "done-row" }, studentTags(st)),
+    el("div", { class: "quick-row" },
+      qb("add", "✍️", "Nachtragen", "schon gefahren", () => openBackfill(st)),
+      qb("exam", "🎓", "Prüfung", "Termin & Ergebnis", () => revealAndScroll(document.querySelector("dialog .exam-card"), "start")),
+      qb("cal", "📈", "Ausbildung", "Ausbildungsstand", () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); }),
+      wa ? qb("wa", "💬", "WhatsApp", "Nachricht schreiben", () => window.open(`https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${st.first_name || ""},\n`)}`, "_blank", "noopener"))
+         : qb("", "✏️", "Daten", "bearbeiten", () => openEditStudent(st))),
+    tabs.node);
   modal.classList.add("full-page");  // Schüler-Seite: ganze Seite statt kleines Fenster
   modal.scrollTop = 0;
 }
@@ -4881,7 +4952,7 @@ function adminSettings() {
   const meetStd = el("input", { value: state.settings.meeting_point || "", maxlength: 200, placeholder: "z. B. Fahrschule, Hauptstraße 1" });
   const meetMore = el("textarea", { maxlength: 2000, rows: 3, placeholder: "z. B.\nBahnhof, Haupteingang\nSchule am Markt" }, state.settings.meeting_points || "");
   const save = el("button", { class: "btn" }, "Speichern");
-  save.onclick = () => busy(save, async () => {
+  const doSave = async () => {
     if (winPart.checked && !(winFrom.value && winTo.value && winFrom.value < winTo.value)) throw new Error("Bitte ein gültiges Zeitfenster wählen (von vor bis).");
     const v = { default_duration: dur.value, max_open: Math.max(0, Math.min(50, +maxOpen.value || 0)), admin_phone: phone.value.trim() || null,
       limit_from: winPart.checked ? winFrom.value : null, limit_to: winPart.checked ? winTo.value : null,
@@ -4893,22 +4964,8 @@ function adminSettings() {
     if (error) throw error;
     Object.assign(state.settings, v);
     toast("Einstellungen gespeichert.");
-  });
-  return el("div", {},
-    genderCard(),
-    isOwner() && (window.FSP_LEGAL_MISSING || []).length ? el("div", { class: "notice danger", style: "margin-bottom:16px" },
-      "Impressum/Datenschutz unvollständig: Bitte in der Datei legal.js deine Anschrift und E-Mail eintragen (",
-      (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
-      "). ", legalLink("impressum", "Impressum ansehen")) : null,
-    el("div", { class: "card" },
-      saturdaySetting(),
-      el("hr"),
-      studentPushSettings(),
-      el("hr"),
-      bookingWindowSettings(),
-      el("h3", { style: "margin-top:18px" }, "Wie weit im Voraus dürfen Schüler/innen anfragen?"),
-      el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),
-      (() => {
+  };
+  const aheadBox = (() => {
         const days = el("input", { type: "number", min: 1, max: 365, value: state.settings.book_ahead_days ?? "", placeholder: "z. B. 14", style: "max-width:110px" });
         const b = el("button", { class: "btn small" }, "Speichern");
         b.onclick = () => busy(b, async () => {
@@ -4919,40 +4976,58 @@ function adminSettings() {
           toast(v ? `Schüler können jetzt bis ${v} Tage im Voraus anfragen.` : "Keine Grenze – Schüler sehen alle freien Termine.");
         });
         return el("div", { class: "done-row" }, days, el("span", {}, "Tage"), b);
-      })(),
-      el("h3", { style: "margin-top:18px" }, "Standarddauer für neue Termine"),
-      el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
-      dur.node,
+      })();
+  // Ein Speichern-Knopf je Gruppe (speichert alle Felder dieser Seite)
+  const saveBtn = () => { const x = el("button", { class: "btn" }, "Speichern"); x.onclick = () => busy(x, doSave); return x; };
+  const sum = {
+    rules: [state.settings.limit_from ? `${state.settings.window_max ?? "∞"}× ${String(state.settings.limit_from).slice(0, 5)}–${String(state.settings.limit_to).slice(0, 5)}, sonst ${state.settings.max_open || "frei"}` : `${state.settings.max_open || "∞"}× pro Woche`,
+      state.settings.book_ahead_days ? `${state.settings.book_ahead_days} Tage voraus` : ""].filter(Boolean).join(" · "),
+    profile: [state.settings.display_name, state.settings.meeting_point].filter(Boolean).join(" · "),
+  };
+  const group = (icon, title, summary, ...nodes) => el("details", { class: "set-group" },
+    el("summary", {}, el("span", { class: "set-ic" }, icon), el("span", {}, el("b", {}, title), summary ? el("small", {}, summary) : null)),
+    el("div", { class: "set-body" }, ...nodes));
+  return el("div", {},
+    isOwner() && (window.FSP_LEGAL_MISSING || []).length ? el("div", { class: "notice danger", style: "margin-bottom:16px" },
+      "Impressum/Datenschutz unvollständig: Bitte in der Datei legal.js deine Anschrift und E-Mail eintragen (",
+      (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
+      "). ", legalLink("impressum", "Impressum ansehen")) : null,
+    group("📅", "Buchungsregeln", sum.rules,
+      bookingWindowSettings(),
       el("h3", { style: "margin-top:18px" }, "Höchstzahl Fahrstunden pro Woche"),
-      el("p", { class: "muted small" }, "So viele Termine darf ein/e Schüler/in pro Woche (Mo–So) anfragen bzw. haben, z. B. 1 oder 2. 0 = unbegrenzt. Will er/sie mehr, kann er/sie um eine Ausnahme bitten – die gewährst oder ablehnst du unter „Anfragen“. Einzelne Schüler/innen (z. B. vor der Prüfung) kannst du in der Schülerliste dauerhaft freigeben."),
+      el("p", { class: "muted small" }, "So viele Termine darf ein/e Schüler/in pro Woche (Mo–So) anfragen bzw. haben, z. B. 1 oder 2. 0 = unbegrenzt. Will er/sie mehr, kann er/sie um eine Ausnahme bitten. Einzelne Schüler/innen (z. B. vor der Prüfung) kannst du auf ihrer Karte freigeben."),
       el("label", { class: "check" }, winAll, el("span", {}, "Eine Höchstzahl für den ganzen Tag")),
       el("label", { class: "check" }, winPart, el("span", {}, "Eigene Höchstzahl für ein Zeitfenster (z. B. 14–18 Uhr) und eine für die übrige Zeit")),
-      maxLabel, maxOpen,
-      winBox,
-      el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler"),
+      maxLabel, maxOpen, winBox,
+      el("div", { class: "actions" }, saveBtn()),
+      el("h3", { style: "margin-top:18px" }, "Wie weit im Voraus dürfen Schüler/innen anfragen?"),
+      el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler/innen sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),
+      aheadBox,
+      el("hr"), saturdaySetting()),
+    group("🔔", "Mitteilungen", "an Schüler/innen und an dich", studentPushSettings(), el("hr"), pushCard()),
+    group("👤", "Profil & Treffpunkte", sum.profile,
+      genderCard(),
+      el("h3", { style: "margin-top:18px" }, "Dein Name für Schüler/innen"),
       el("p", { class: "muted small" }, "So erscheinst du bei der Registrierung und in Nachrichten, z. B. „Kürsat“."),
       display,
       el("h3", { style: "margin-top:18px" }, "Deine Handynummer"),
-      el("p", { class: "muted small" }, "Damit Schüler dich per WhatsApp-Knopf erreichen (z. B. nach einer Absage). Wird nur freigeschalteten Schülern angezeigt."),
+      el("p", { class: "muted small" }, "Damit Schüler/innen dich per WhatsApp-Knopf erreichen. Wird nur freigeschalteten Schüler/innen angezeigt."),
       phone,
       el("h3", { style: "margin-top:18px" }, "📍 Standard-Treffpunkt"),
-      el("p", { class: "muted small" }, "Gilt für jede Fahrstunde, solange du beim Bestätigen keinen anderen auswählst. Schüler sehen ihn nach der Bestätigung."),
+      el("p", { class: "muted small" }, "Gilt für jede Fahrstunde, solange du keinen anderen auswählst."),
       meetStd,
       el("h3", { style: "margin-top:18px" }, "Weitere Treffpunkte (Ausweich)"),
-      el("p", { class: "muted small" }, "Einer pro Zeile. Diese kannst du beim Bestätigen oder Eintragen schnell auswählen."),
+      el("p", { class: "muted small" }, "Einer pro Zeile – beim Bestätigen schnell auswählbar."),
       meetMore,
-      el("div", { class: "actions" }, save)),
-    el("div", { class: "card" },
-      el("h3", {}, "🔗 Link für Schüler"),
-      el("p", { class: "muted small" }, "Ein Link für alle Fahrlehrer und Schüler. Bei der Registrierung wählen Schüler ihren Fahrlehrer aus – neue Fahrlehrer erscheinen dort automatisch. Den Link findest du auch jederzeit oben über 🔗."),
+      el("h3", { style: "margin-top:18px" }, "Standarddauer für neue Termine"),
+      dur.node,
+      el("div", { class: "actions" }, saveBtn())),
+    group("🔗", "Link für Schüler/innen", "zum Weitergeben",
+      el("p", { class: "muted small" }, "Ein Link für alle. Bei der Registrierung wählen Schüler/innen ihren Fahrlehrer aus. Den Link findest du auch oben über 🔗."),
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
-    cloudBackupCard(),
-    backupCard(),
-    installCard(),
-    pushCard(),
-    todayCard(),
-    backgroundCard(),
-    passwordCard(),
+    group("☁️", "Sicherung", "automatisch jede Nacht", cloudBackupCard(), backupCard()),
+    group("📱", "App & Darstellung", "Startseite, Hintergrund, Installieren", todayCard(), backgroundCard(), installCard()),
+    group("🔒", "Passwort", "", passwordCard()),
   );
 }
 
