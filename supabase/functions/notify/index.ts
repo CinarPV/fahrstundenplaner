@@ -106,6 +106,12 @@ Deno.serve(async (req) => {
         const { data: own } = await admin.from("profiles").select("id").in("id", ids).eq("teacher_id", user.id).eq("role", "student");
         for (const s of own ?? []) messages.push({ to: s.id, title: `📢 Nachricht von ${w.deinem}`, body: msg });
       }
+    } else if (kind === "registered") {
+      // Neue Registrierung: dem Fahrlehrer Bescheid geben (nur solange der Schüler noch auf Freischaltung wartet)
+      const { data: p } = await admin.from("profiles").select("*").eq("id", user.id).maybeSingle();
+      if (p && p.role === "student" && p.status === "pending" && p.teacher_id) {
+        messages.push({ to: p.teacher_id, title: "🆕 Neue Anmeldung", body: `${fullName(p)} hat sich registriert und wartet auf Freischaltung.` });
+      }
     } else if (kind === "exam" && Array.isArray(ids) && ids.length === 1) {
       const { data: e } = await admin.from("exams").select("id,kind,exam_at,meeting_point,student_id,profiles(teacher_id)").eq("id", ids[0]).maybeSingle();
       // deno-lint-ignore no-explicit-any

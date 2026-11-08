@@ -1196,3 +1196,52 @@ end $$;
 drop trigger if exists bookings_restore_slot on public.bookings;
 create trigger bookings_restore_slot after update of status or delete on public.bookings
   for each row execute function public.restore_slot_time();
+-- Wie weit im Voraus dürfen Schüler anfragen? (Tage, leer = ohne Grenze)
+alter table public.settings add column if not exists book_ahead_days int check (book_ahead_days between 1 and 365);
+
+-- Anfragen eines Schülers für einen Zeitraum begrenzen (außerhalb gilt weiter die normale Grenze)
+create table if not exists public.student_limits (
+  id          uuid primary key default gen_random_uuid(),
+  student_id  uuid not null references public.profiles(id) on delete cascade,
+  from_day    date not null,
+  to_day      date not null,
+  max_count   int not null check (max_count between 0 and 50),
+  created_at  timestamptz not null default now(),
+  check (to_day >= from_day)
+);
+create index if not exists student_limits_idx on public.student_limits (student_id, from_day);
+alter table public.student_limits enable row level security;
+drop policy if exists limits_teacher on public.student_limits;
+create policy limits_teacher on public.student_limits for all
+  using (public.is_teacher() and public.student_teacher(student_id) = auth.uid())
+  with check (public.is_teacher() and public.student_teacher(student_id) = auth.uid());
+drop policy if exists limits_own on public.student_limits;
+create policy limits_own on public.student_limits for select using (student_id = auth.uid());
+grant select, insert, update, delete on public.student_limits to authenticated;
+
+-- Beim Anfragen durch den Schüler: Buchungsfenster und Zeitraum-Grenzen prüfen
+create or replace function public.check_request_rules()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_start timestamptz; v_teacher uuid; v_days int; v_day date; l record; v_n int;
+begin
+  if new.status <> 'requested' or auth.uid() is null or new.student_id <> auth.uid() then return new; end if;
+  select starts_at, teacher_id into v_start, v_teacher from slots where id = new.slot_id;
+  if v_start is null then return new; end if;
+  v_day := (v_start at time zone 'Europe/Berlin')::date;
+  select book_ahead_days into v_days from settings where teacher_id = v_teacher;
+  if v_days is not null and v_day > (now() at time zone 'Europe/Berlin')::date + v_days then
+    raise exception 'Diese Fahrstunde kann erst % Tage vorher angefragt werden.', v_days;
+  end if;
+  for l in select * from student_limits where student_id = new.student_id and v_day between from_day and to_day loop
+    select count(*) into v_n from bookings b join slots s on s.id = b.slot_id
+      where b.student_id = new.student_id and b.status in ('requested','offered','confirmed')
+        and (s.starts_at at time zone 'Europe/Berlin')::date between l.from_day and l.to_day;
+    if v_n >= l.max_count then
+      raise exception 'Vom % bis % darfst du höchstens % Fahrstunde(n) anfragen.', to_char(l.from_day, 'DD.MM.'), to_char(l.to_day, 'DD.MM.'), l.max_count;
+    end if;
+  end loop;
+  return new;
+end $$;
+drop trigger if exists bookings_request_rules on public.bookings;
+create trigger bookings_request_rules before insert on public.bookings
+  for each row execute function public.check_request_rules();

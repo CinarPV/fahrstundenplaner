@@ -282,13 +282,20 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
   return body + (reply ? `\n${reply}` : "") + `\n\n${where}\n\n` + teacherSignature();
 }
 // „Nicht gefahren“: Termin gleich neu vergeben – optional einen anderen Schüler wählen (nichts gewählt = Termin bleibt frei)
+// Aktive Schüler = freigeschaltet, nicht bestanden (bestanden = archiviert), Zugang nicht abgelaufen
+async function onlyActive(list) {
+  const { data } = await sb.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed");
+  const passed = new Set((data || []).map((x) => x.student_id));
+  return (list || []).filter((st) => st.status === "active" && !passed.has(st.id) && !(st.valid_until && daysLeft(st.valid_until) < -GRACE_DAYS));
+}
+
 function replacePicker(excludeId) {
   const who = el("select", {}, el("option", { value: "" }, "— niemand, Termin bleibt frei —"));
   let students = [];
-  sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
+  sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion,status,valid_until")
     .eq("role", "student").eq("status", "active").order("last_name")
-    .then(({ data }) => {
-      students = (data || []).filter((x) => x.id !== excludeId);
+    .then(async ({ data }) => {
+      students = (await onlyActive(data)).filter((x) => x.id !== excludeId);
       who.append(...students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
     });
   const how = assignHow();
@@ -769,6 +776,12 @@ async function loadUserAndRender() {
     }
     // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
     state.active = !!(await sb.rpc(profile.role === "teacher" ? "is_teacher" : "is_active")).data;
+    // Neu registriert und wartet auf Freischaltung → Fahrlehrer einmal benachrichtigen
+    if (profile.role === "student" && profile.status === "pending") {
+      const k = "fsp_reg_notified_" + profile.id;
+      let sent = false; try { sent = !!localStorage.getItem(k); } catch { /* egal */ }
+      if (!sent) { sb.functions.invoke("notify", { body: { kind: "registered", ids: [profile.id], event: "registered" } }).catch(() => {}); try { localStorage.setItem(k, "1"); } catch { /* egal */ } }
+    }
     state.passed = profile.role === "student" && !!(await sb.rpc("student_passed", { p_id: profile.id })).data;
   } catch (e) { fail(e); }
   state.tab = homeTab();
@@ -1318,9 +1331,9 @@ async function disablePush() {
 }
 function pushCard() {
   const box = el("div", {});
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const ios = isIOS(), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;   // auch iPad (gibt sich als Mac aus)
   async function draw() {
-    if (ios && !installed) return box.replaceChildren(el("p", { class: "muted small" }, "Auf dem iPhone gehen Mitteilungen nur mit der installierten App (Teilen → „Zum Home-Bildschirm“). Danach hier einschalten."));
+    if (ios && !installed) return box.replaceChildren(el("p", { class: "muted small" }, "Auf iPhone und iPad gehen Mitteilungen nur mit der installierten App (Teilen → „Zum Home-Bildschirm“). Danach hier einschalten."));
     if (!pushSupported()) return box.replaceChildren(el("p", { class: "muted small" }, "Dieses Gerät unterstützt keine Mitteilungen."));
     let on = false;
     try { on = Notification.permission === "granted" && !!(await (await navigator.serviceWorker.ready).pushManager.getSubscription()); } catch { /* egal */ }
@@ -1338,7 +1351,8 @@ function pushCard() {
   }
   draw();
   return el("div", { class: "card" },
-    el("h3", {}, "🔔 Mitteilungen aufs Handy"),
+    el("h3", {}, "🔔 Mitteilungen auf dieses Gerät"),
+    el("p", { class: "muted small", style: "margin:0 0 6px" }, "Geht auf Handy, Tablet, Mac und Windows-PC – auf jedem Gerät einmal einschalten. Am Computer am besten mit Chrome, Edge, Firefox oder Safari."),
     el("p", { class: "muted small" }, isAdmin()
       ? "Sofort Bescheid bei neuen Anfragen, Ausnahme-Bitten, Absagen und Zusagen deiner Schüler."
       : "Sofort Bescheid, wenn dein Fahrlehrer bestätigt, ablehnt, etwas anbietet, absagt oder eine Prüfung einträgt."),
@@ -1349,7 +1363,7 @@ function pushCard() {
 async function maybeAskPush() {
   if (!state.profile || (!isAdmin() && !state.active) || state.profile.must_change_password) return;
   if (!pushSupported() || document.querySelector("dialog[open]")) return;
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const ios = isIOS(), installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;   // auch iPad (gibt sich als Mac aus)
   if (ios && !installed) return;  // iPhone: geht nur mit installierter App
   const uid = state.profile.id, key = "fsp_push_asked_" + uid, onKey = "fsp_push_on_" + uid, remKey = "fsp_push_rem_" + uid;
   const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -2368,9 +2382,10 @@ async function adminCalendar() {
 // Legt einen vergangenen Termin an und hakt ihn sofort ab – ohne Mitteilung an den Schüler.
 async function openBackfill(preStudent) {
   const { data: students, error } = await sb.from("profiles")
-    .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status")
+    .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status,valid_until")
     .eq("role", "student").in("status", ["active", "blocked"]).order("last_name");
   if (error) return fail(error);
+  students.splice(0, students.length, ...(await onlyActive(students)));
   if (!students.length) return openModal("Nachtragen", el("p", { class: "muted" }, "Noch keine Schüler vorhanden."));
   const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
     students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
@@ -2588,10 +2603,10 @@ function newSlotForm(opts = {}) {
     slotBox.hidden = !isLesson;
     if ((m === "assign" || m === "exam") && !students) {
       studentList.replaceChildren(el("p", { class: "muted small" }, "Lädt …"));
-      const { data, error } = await sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
+      const { data, error } = await sb.from("profiles").select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion,status,valid_until")
         .eq("role", "student").eq("status", "active").order("last_name");
       if (error) return fail(error);
-      students = data;
+      students = await onlyActive(data);
     }
     refresh();
   }
@@ -2818,6 +2833,32 @@ function newSlotForm(opts = {}) {
   }
   [date, until].forEach((i) => i.addEventListener("input", refresh));
   date.addEventListener("input", () => { if (!repeat.checked) { days.clear(); days.add(weekdayIndex(fromInputs(date.value, "00:00"))); } });
+  // Uhrzeit gleich auf die nächste freie Lücke stellen (änderbar); von Hand geänderte Felder bleiben
+  const touched = new Set();
+  [examTime, thTime, ownTime, blkTime].forEach((i) => i.addEventListener("input", () => touched.add(i)));
+  async function suggestTime() {
+    const key = date.value;
+    if (!key) return;
+    const dayS = fromInputs(key, "00:00"), dayE = addDays(dayS, 1);
+    const [sl, ow, bl, th] = await Promise.all([
+      sb.from("slots").select("starts_at,duration_min").eq("teacher_id", state.profile.id).gte("starts_at", dayS.toISOString()).lt("starts_at", dayE.toISOString()),
+      sb.from("own_entries").select("starts_at,duration_min").eq("teacher_id", state.profile.id).gte("starts_at", dayS.toISOString()).lt("starts_at", dayE.toISOString()),
+      sb.from("time_blocks").select("starts_at,duration_min").eq("teacher_id", state.profile.id).gte("starts_at", dayS.toISOString()).lt("starts_at", dayE.toISOString()),
+      sb.from("theory_lessons").select("held_at,duration_min").eq("teacher_id", state.profile.id).gte("held_at", dayS.toISOString()).lt("held_at", dayE.toISOString()),
+    ]);
+    if (date.value !== key) return;
+    const busyList = [...(sl.data || []), ...(ow.data || []), ...(bl.data || []), ...(th.data || []).map((t) => ({ starts_at: t.held_at, duration_min: t.duration_min }))]
+      .map((x) => ({ s: new Date(x.starts_at).getTime(), e: new Date(x.starts_at).getTime() + x.duration_min * 60000 })).sort((a, b) => a.s - b.s);
+    const need = (ownDur ? ownDur.value : dur.value) * 60000;
+    let t = Math.max(fromInputs(key, "08:00").getTime(), Math.ceil(Date.now() / 300000) * 300000);
+    for (const x of busyList) { if (t + need <= x.s) break; if (x.e > t) t = x.e; }
+    if (t + need > dayE.getTime()) return;   // kein Platz mehr an diesem Tag
+    const hhmm = timeInput(new Date(t));
+    [examTime, thTime, ownTime, blkTime].forEach((i) => { if (!touched.has(i)) i.value = hhmm; });
+    refresh();
+  }
+  date.addEventListener("input", () => suggestTime().catch(() => {}));
+  setTimeout(() => suggestTime().catch(() => {}), 0);
   repeat.addEventListener("change", () => {
     if (repeat.checked && multi.checked) { multi.checked = false; multiBox.hidden = true; }
     repeatBox.hidden = !repeat.checked;
@@ -3451,10 +3492,11 @@ function assignHow() {
 }
 
 async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
-  const { data: students, error } = await sb.from("profiles")
-    .select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion")
+  const { data: all, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,phone,license_class,needs_glasses,is_conversion,status,valid_until")
     .eq("role", "student").eq("status", "active").order("last_name");
   if (error) throw error;
+  const students = await onlyActive(all);
   if (!students.length) return el("p", { class: "muted small" }, "Noch keine freigeschalteten Schüler zum Eintragen.");
   const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
     students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : ""))));
@@ -3825,9 +3867,11 @@ async function adminStudents() {
   const students = p.data.filter((x) => x.role === "student");
   const pending = students.filter((x) => x.status === "pending");
   // Abgelaufen + Schonfrist vorbei = archiviert (gesperrt, Daten bleiben)
-  const archived = (x) => x.valid_until && daysLeft(x.valid_until) < (x.passed ? 0 : -GRACE_DAYS);
+  // Bestanden = archiviert (aus allen Auswahllisten raus); nicht bestanden bleibt aktiv
+  const archived = (x) => x.passed || (x.valid_until && daysLeft(x.valid_until) < -GRACE_DAYS);
   const active = students.filter((x) => x.status === "active" && !archived(x));
-  const expired = students.filter((x) => x.status === "active" && archived(x));
+  const passedList = students.filter((x) => x.status === "active" && x.passed);
+  const expired = students.filter((x) => x.status === "active" && !x.passed && archived(x));
   const blocked = students.filter((x) => x.status === "blocked");
   if (!students.length) return el("div", {}, el("p", { class: "muted" }, "Noch keine Schüler registriert. Schicke ihnen den Link aus den Einstellungen."), ownCard);
 
@@ -3836,7 +3880,7 @@ async function adminStudents() {
     el("tbody", {}, list.map((st) => {
       const s = stats[st.id] || { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} };
       return el("tr", { class: "clickable", onclick: () => openStudent(st) },
-        el("td", {}, fullName(st), st.needs_glasses ? " 👓" : "", st.is_conversion ? el("div", { class: "small muted" }, "Umschreiber") : null),
+        el("td", {}, fullName(st), st.needs_glasses ? " 👓" : "", " ", el("span", { class: "badge " + studentStatus(st)[0] }, studentStatus(st)[1]), st.is_conversion ? el("div", { class: "small muted" }, "Umschreiber") : null),
         el("td", {}, st.license_class || "–"), el("td", { class: "num" }, s.done), el("td", { class: "num" }, fmtMinutes(s.minutes)), el("td", { class: "num" }, fmtLessons(s.minutes).split(" ")[0]),
         el("td", { class: "num" }, s.upcoming + (s.open ? ` (+${s.open} angefragt)` : "")), el("td", { style: "white-space:nowrap" }, SPECIAL_TYPES.map((t) => `${LESSON_ICON[t]}${s.special[t] || 0}`).join(" ")),
         el("td", { class: "num" }, s.notHeld), el("td", { class: "num" }, s.late),
@@ -3857,8 +3901,9 @@ async function adminStudents() {
             el("div", {}, el("b", {}, fullName(st)), " ", studentTags(st), el("div", { class: "small muted" }, st.email || "", " · registriert am ", fmtDay(st.created_at))),
             el("div", { class: "actions", style: "margin:0" }, ok, del)));
       })) : null,
+    studentSearchCard(students, own.data || [], stats),
     el("div", { class: "card" },
-      el("h2", {}, "Aktive Schüler"),
+      el("h2", {}, `Aktive Schüler (${active.length})`),
       active.length ? table(active) : el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler."),
       el("p", { class: "muted small" }, "Namen antippen für Fahrstunden, Ausbildungsstand und Daten.")),
     expired.length ? el("div", { class: "card" },
@@ -3866,10 +3911,41 @@ async function adminStudents() {
       el("p", { class: "muted small" }, "Zugang abgelaufen und 4 Wochen Schonfrist vorbei – der Schüler ist gesperrt, die Daten bleiben gespeichert. Mit „+6 Monate“ wieder freischalten."),
       table(expired)) : null,
     ownCard,
-    blocked.length ? el("div", { class: "card" },
-      el("h2", {}, "Fertige Schüler"),
+    passedList.length ? el("details", { class: "card fold" },
+      el("summary", {}, el("b", {}, `🎉 Bestanden – archiviert (${passedList.length})`)),
+      el("p", { class: "muted small" }, "Erscheinen nicht mehr in den Auswahllisten. Alte Daten werden nach 15 Monaten ohne Fahrstunde automatisch gelöscht."),
+      table(passedList)) : null,
+    blocked.length ? el("details", { class: "card fold" },
+      el("summary", {}, el("b", {}, `🔒 Deaktiviert (${blocked.length})`)),
       table(blocked)) : null,
   );
+}
+// Suchfeld über ALLE Schüler (aktiv, bestanden, abgelaufen, deaktiviert, ohne App) – nur hier auf der Schülerseite
+function studentStatus(st) {
+  if (st.status === "pending") return ["requested", "neu"];
+  if (st.status === "blocked") return ["rejected", "deaktiviert"];
+  if (st.passed) return ["confirmed", "🎉 bestanden"];
+  if (st.valid_until && daysLeft(st.valid_until) < -GRACE_DAYS) return ["rejected", "abgelaufen"];
+  return ["offered", "aktiv"];
+}
+function studentSearchCard(students, ownEntries, stats) {
+  const q = el("input", { type: "search", placeholder: "🔍 Alle Schüler suchen (auch archivierte, deaktivierte, ohne App) …" });
+  const out = el("div", {});
+  const ownNames = [...new Map(ownEntries.map((x) => [(x.student_name || "").trim().toLowerCase(), (x.student_name || "").trim()])).values()].filter(Boolean);
+  q.addEventListener("input", () => {
+    const t = q.value.trim().toLowerCase();
+    if (!t) return out.replaceChildren();
+    const hits = students.filter((st) => fullName(st).toLowerCase().includes(t)).slice(0, 30);
+    const ownHits = ownNames.filter((n) => n.toLowerCase().includes(t)).slice(0, 15);
+    out.replaceChildren(...hits.map((st) => {
+      const [cls, label] = studentStatus(st), s = stats[st.id] || { done: 0, minutes: 0 };
+      return el("div", { class: "list-item clickable", onclick: () => openStudent(st) },
+        el("div", { class: "head" }, el("span", {}, el("b", {}, fullName(st)), ` · ${s.done} Fahrstunden`), el("span", { class: "badge " + cls }, label)));
+    }), ...ownHits.map((n) => el("div", { class: "list-item" },
+      el("div", { class: "head" }, el("b", {}, n), el("span", { class: "badge" }, "ohne App")))),
+      hits.length || ownHits.length ? null : el("p", { class: "muted small" }, "Kein Treffer."));
+  });
+  return el("div", { class: "card" }, q, out);
 }
 // Schüler ohne App: aus den eigenen Einträgen, nach Namen zusammengefasst
 function ownStudentsCard(entries) {
@@ -3957,6 +4033,37 @@ function moreToggle(st) {
 
 // Höchstzahl Termine PRO WOCHE: null = Standard, 0 = unbegrenzt, sonst Zahl
 const limitLabel = (v) => (v === null || v === undefined ? `Standard (${state.settings.max_open || "∞"})` : v === 0 ? "∞ unbegrenzt" : String(v));
+// Für einen Zeitraum höchstens so viele Fahrstunden anfragen (außerhalb gilt weiter die normale Grenze)
+function periodLimits(st) {
+  const box = el("div", { style: "margin-top:12px" });
+  async function draw() {
+    const { data, error } = await sb.from("student_limits").select("id,from_day,to_day,max_count").eq("student_id", st.id).order("from_day");
+    if (error) return box.replaceChildren(el("p", { class: "muted small" }, "Zeitraum-Grenzen noch nicht verfügbar (Datenbank-Update fehlt)."));
+    const from = el("input", { type: "date", value: dateInput(new Date()) });
+    const to = el("input", { type: "date", value: dateInput(addDays(new Date(), 13)) });
+    const max = el("input", { type: "number", min: 0, max: 50, value: 2, style: "max-width:90px" });
+    const add = el("button", { class: "btn small" }, "Hinzufügen");
+    add.onclick = () => busy(add, async () => {
+      if (!from.value || !to.value || to.value < from.value) throw new Error("Bitte gültigen Zeitraum wählen (bis ≥ von)");
+      const { error: e } = await sb.from("student_limits").insert({ student_id: st.id, from_day: from.value, to_day: to.value, max_count: Math.max(0, +max.value || 0) });
+      if (e) throw e;
+      toast("Grenze gespeichert."); draw();
+    });
+    box.replaceChildren(
+      el("b", {}, "Für einen Zeitraum begrenzen"),
+      el("p", { class: "muted small", style: "margin:2px 0 6px" }, "Im Zeitraum darf der Schüler höchstens so viele Fahrstunden anfragen bzw. haben. Außerhalb gilt weiter die normale Grenze."),
+      (data || []).map((x) => {
+        const del = el("button", { class: "btn small ghost danger-text" }, "Entfernen");
+        del.onclick = () => busy(del, async () => { const { error: e } = await sb.from("student_limits").delete().eq("id", x.id); if (e) throw e; draw(); });
+        return el("div", { class: "done-row", style: "justify-content:space-between" },
+          el("span", {}, `${fmtDayStr(x.from_day)} – ${fmtDayStr(x.to_day)}: höchstens ${x.max_count}`), del);
+      }),
+      el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis"), to), el("div", {}, el("label", {}, "Höchstens"), max)),
+      el("div", { class: "actions" }, add));
+  }
+  draw();
+  return box;
+}
 function limitControl(st) {
   const name = "limit-" + st.id;
   const mk = (value, text) => { const r = el("input", { type: "radio", name, value }); return { r, node: el("label", { class: "check" }, r, text) }; };
@@ -4007,6 +4114,16 @@ async function openStudentById(id) {
   openStudent(data);
 }
 
+// Kurzübersicht: wie viele Prüfungen, wann, bestanden oder nicht
+function examSummary(exams) {
+  const done = exams.filter((e) => e.result);
+  if (!exams.length) return null;
+  return el("div", { class: "card", style: "padding:10px 14px" },
+    el("b", {}, `🎓 Prüfungen: ${exams.length}`),
+    ` · ${done.filter((e) => e.result === "passed").length}× bestanden · ${done.filter((e) => e.result === "failed").length}× nicht bestanden`,
+    el("div", { class: "small", style: "margin-top:4px" }, exams.map((e) => `${EXAM_ICON[e.kind] || "🎓"} ${fmtDay(e.exam_at)}: ${e.result === "passed" ? "bestanden" : e.result === "failed" ? "nicht bestanden" : "offen"}`).join(" · ")));
+}
+
 async function openStudent(st) {
   const [{ data, error }, { data: stExams }] = await Promise.all([
     sb.from("bookings").select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,slots(id,starts_at,duration_min)").eq("student_id", st.id),
@@ -4042,6 +4159,7 @@ async function openStudent(st) {
     lessonOverview(st, data, stExams || []),
     studentProfileCard(st, rows),
     el("div", { class: "done-row" }, exportButtons(st, data)),
+    examSummary(stExams || []),
     await examCard(st, true),
     rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
@@ -4059,7 +4177,7 @@ async function openStudent(st) {
       : "Nach der Freischaltung gilt der Zugang 1 Jahr. Danach 4 Wochen Schonfrist, dann wird er gesperrt (Daten bleiben). Verlängern geht jederzeit."),
     accessCell(st),
     el("hr"),
-    el("div", { class: "limit-sec" }, limitControl(st)),
+    el("div", { class: "limit-sec" }, limitControl(st), periodLimits(st)),
     el("hr"),
     el("h3", {}, "Ausbildung"),
     el("p", { class: "muted small" }, st.status === "blocked"
@@ -4491,7 +4609,21 @@ function adminSettings() {
       (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
       "). ", legalLink("impressum", "Impressum ansehen")) : null,
     el("div", { class: "card" },
-      el("h3", {}, "Standarddauer für neue Termine"),
+      el("h3", {}, "Wie weit im Voraus dürfen Schüler anfragen?"),
+      el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),
+      (() => {
+        const days = el("input", { type: "number", min: 1, max: 365, value: state.settings.book_ahead_days ?? "", placeholder: "z. B. 14", style: "max-width:110px" });
+        const b = el("button", { class: "btn small" }, "Speichern");
+        b.onclick = () => busy(b, async () => {
+          const v = days.value === "" ? null : Math.max(1, Math.min(365, Math.round(+days.value)));
+          const { error } = await sb.from("settings").update({ book_ahead_days: v }).eq("teacher_id", state.profile.id);
+          if (error) throw error;
+          state.settings.book_ahead_days = v;
+          toast(v ? `Schüler können jetzt bis ${v} Tage im Voraus anfragen.` : "Keine Grenze – Schüler sehen alle freien Termine.");
+        });
+        return el("div", { class: "done-row" }, days, el("span", {}, "Tage"), b);
+      })(),
+      el("h3", { style: "margin-top:18px" }, "Standarddauer für neue Termine"),
       el("p", { class: "muted small" }, "Wird bei jedem neuen Termin vorausgefüllt. Du kannst sie dort pro Termin trotzdem ändern."),
       dur.node,
       el("h3", { style: "margin-top:18px" }, "Höchstzahl Fahrstunden pro Woche"),
@@ -4553,7 +4685,9 @@ async function studentCalendar() {
   const now = Date.now();
   // Freie und fremd angefragte (unbestätigte) Termine in der Zukunft + die eigenen.
   // Fremde bestätigte Fahrstunden liefert die Datenbank gar nicht erst.
-  const slots = data.filter((s) => s.mine || new Date(s.starts_at).getTime() > now);
+  const ahead = state.settings.book_ahead_days;
+  const horizon = ahead ? addDays(dayStart(new Date()), ahead + 1).getTime() : Infinity;
+  const slots = data.filter((s) => s.mine || (new Date(s.starts_at).getTime() > now && (s.status !== "free" || new Date(s.starts_at).getTime() < horizon)));
 
   const grid = weekGrid(slots, (s) => {
     const past = new Date(s.starts_at).getTime() < now;
@@ -5172,10 +5306,11 @@ async function openExamModal(student) {
 /* ---------------- Fahrlehrer: Ausbildungsstand (Schüler wählen → abhaken) ---------------- */
 
 async function adminTraining() {
-  const { data: students, error } = await sb.from("profiles")
-    .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status")
+  const { data: all, error } = await sb.from("profiles")
+    .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status,valid_until")
     .eq("role", "student").eq("status", "active").order("last_name");
   if (error) throw error;
+  const students = await onlyActive(all);
   if (!students.length) return el("div", { class: "card" }, el("h2", {}, "📈 Ausbildungsstand"), el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler."));
   const chosen = students.find((x) => x.id === state.trainingStudent) || students[0];
   state.trainingStudent = chosen.id;
@@ -5359,6 +5494,10 @@ function openStudentCancel(b) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Doch nicht")));
 }
 
+// Kurzfristig krank abgesagt, Attest noch nicht bestätigt → deutlicher Vermerk (verschwindet, sobald der Fahrlehrer bestätigt)
+const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || "")
+  ? el("div", { class: "notice danger", style: "margin:6px 0 0;padding:8px 10px" }, el("b", {}, "⚠️ Attest noch nicht bestätigt: "), "Zählt als Fehlstunde und ist kostenpflichtig.") : null;
+
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
     .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_note,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
@@ -5455,7 +5594,8 @@ async function studentMine() {
     cancelledRows.map((b) => el("div", { class: "list-item small" },
       el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
       el("div", {}, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstunde" : ""}`),
-      b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null)),
+      b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
+      sickPending(b))),
     doneCount ? el("details", { class: "fold" },
       el("summary", {}, `✓ Gefahrene Fahrstunden (${doneCount})`),
       doneList(rows, total),
@@ -5465,7 +5605,7 @@ async function studentMine() {
       el("summary", {}, `⚠️ Fehlstunden (${lateRows.length})`),
       lateRows.map((b) => el("div", { class: "small", style: "padding:6px 0;border-bottom:1px solid var(--border)" },
         el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
-        b.status === "no_show" ? " – nicht erschienen, kostenpflichtig" : " – kurzfristig abgesagt, kostenpflichtig", b.cancel_reason ? ` (${b.cancel_reason})` : ""))) : null,
+        b.status === "no_show" ? " – nicht erschienen, kostenpflichtig" : " – kurzfristig abgesagt, kostenpflichtig", b.cancel_reason ? ` (${b.cancel_reason})` : "", sickPending(b)))) : null,
     wa ? el("div", { class: "actions", style: "margin-top:16px" }, wa) : null,
   );
 }
