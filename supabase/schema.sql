@@ -1288,3 +1288,27 @@ alter table public.settings add column if not exists notify_freed boolean not nu
 alter table public.settings add column if not exists notify_button boolean not null default false;
 -- Samstag als Arbeitstag (Standard: ja; aus = Samstage in Heute/Kalender ausblenden)
 alter table public.settings add column if not exists saturday_work boolean not null default true;
+-- Änderungsanfrage an App-Schüler/innen: auch der Treffpunkt gilt erst nach Zusage
+alter table public.bookings add column if not exists change_meeting text check (char_length(change_meeting) <= 200);
+
+-- Schüler/in sagt zu oder ab: neue Zeit, Dauer und Treffpunkt übernehmen bzw. alles verwerfen
+create or replace function public.respond_change_v2(p_booking uuid, p_accept boolean, p_note text)
+returns void language plpgsql security definer set search_path = public as $$
+declare b record;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  select x.id, x.slot_id, x.change_start, x.change_dur, x.change_meeting into b
+  from bookings x where x.id = p_booking and x.student_id = auth.uid() and x.status = 'confirmed'
+    and (x.change_start is not null or x.change_meeting is not null);
+  if b.id is null then raise exception 'Diese Änderung ist nicht mehr offen'; end if;
+  if p_accept then
+    update slots set starts_at = coalesce(b.change_start, starts_at), duration_min = coalesce(b.change_dur, duration_min) where id = b.slot_id;
+    if b.change_meeting is not null then
+      update bookings set meeting_point = nullif(b.change_meeting, '') where id = p_booking;
+    end if;
+  end if;
+  update bookings set change_start = null, change_dur = null, change_meeting = null, change_note = null,
+    student_note = coalesce(nullif(left(trim(coalesce(p_note, '')), 300), ''), student_note)
+  where id = p_booking;
+end $$;
+grant execute on function public.respond_change_v2(uuid, boolean, text) to authenticated;

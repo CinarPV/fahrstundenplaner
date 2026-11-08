@@ -37,7 +37,7 @@ const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
 const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   confirmed: (c) => ["✅ Fahrstunde bestätigt", `${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
   rejected: (c) => ["Anfrage abgelehnt", `Deine Anfrage für ${c.when} wurde leider abgelehnt.`],
-  change: (c) => ["🔄 Terminänderung", `${c.t.Dein} möchte die Fahrstunde am ${c.when} verschieben – bitte zusagen oder ablehnen.`],
+  change: (c) => ["🔄 Terminänderung", `${c.t.Dein} möchte die Fahrstunde am ${c.when} ändern (Zeit oder Treffpunkt) – bitte zusagen oder ablehnen.`],
   offered: (c) => ["📨 Neues Angebot", `${c.t.Dein} bietet dir ${c.when} an – bitte zusagen oder absagen.`],
   assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
   cancelled_teacher: (c) => ["❌ Fahrstunde abgesagt", `${c.t.Dein} hat die Fahrstunde am ${c.when} abgesagt.${reasonText(c)}`],

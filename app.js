@@ -294,7 +294,11 @@ function meetingBox(point) {
 // Nachrichtentext vom Fahrlehrer an den Schüler
 function waTextChange(profile, oldStart, newStart, dur, reply) {
   const f = (iso) => `${fmtDate(iso)} um ${fmtTime(iso)} Uhr`;
-  return `Hallo ${(profile && profile.first_name) || ""}, ich würde deine Fahrstunde am ${f(oldStart)} gern verschieben auf ${f(newStart)} (${dur} Min.). Passt dir das?`
+  // Gleiche Zeit = nur Treffpunkt/Hinweis ändert sich
+  const same = Math.round(new Date(oldStart).getTime() / 60000) === Math.round(new Date(newStart).getTime() / 60000);
+  return `Hallo ${(profile && profile.first_name) || ""}, ` + (same
+    ? `bei deiner Fahrstunde am ${f(oldStart)} (${dur} Min.) möchte ich etwas ändern. Passt dir das?`
+    : `ich würde deine Fahrstunde am ${f(oldStart)} gern verschieben auf ${f(newStart)} (${dur} Min.). Passt dir das?`)
     + (reply ? `\n${reply}` : "") + `\n\n👉 Bitte öffne die App „Easy Fahrstundenplaner“ und sag unter „Meine Fahrstunden“ zu oder ab.\n\n` + teacherSignature();
 }
 function waTextForStudent(kind, profile, slot, reply, meeting) {
@@ -3318,7 +3322,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,counter_from,change_start,change_dur,change_note,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,counter_from,change_start,change_dur,change_note,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -3462,10 +3466,13 @@ async function openAdminSlot(slotId) {
       const save = el("button", { class: "btn" }, "Änderungen speichern");
       // Bestätigte, noch nicht gefahrene Fahrstunde: Zeit/Dauer ändern = Anfrage an den Schüler (er muss zusagen)
       const askable = b.status === "confirmed" && b.actual_minutes === null && new Date(slot.starts_at).getTime() > Date.now();
-      const timeDiff = () => askable && (fromInputs(date.value, time.value).getTime() !== new Date(slot.starts_at).getTime() || dur.value !== slot.duration_min);
-      const sync = () => { save.textContent = timeDiff() ? "📨 Änderung an Schüler senden" : "Änderungen speichern"; };
+      // App-Schüler/in: Zeit, Dauer UND Treffpunkt nur mit Zusage ändern (abgehakte/vergangene Fahrstunden: direkt, ohne Nachricht)
+      const meetDiff = () => askable && (meet.value() || null) !== (slotMeet(b) || null);
+      const timeDiff = () => askable && (Math.round(fromInputs(date.value, time.value).getTime() / 60000) !== Math.round(new Date(slot.starts_at).getTime() / 60000) || dur.value !== slot.duration_min || meetDiff());
+      const sync = () => { save.textContent = timeDiff() ? "📨 Änderung an Schüler/in senden" : "Änderungen speichern"; };
       [date, time].forEach((i) => i.addEventListener("input", sync));
       dur.input.addEventListener("input", sync);
+      meet.node.addEventListener("change", sync); meet.node.addEventListener("input", sync);
       async function proposeChange() {
         const chosen = fromInputs(date.value, time.value);
         if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
@@ -3477,16 +3484,13 @@ async function openAdminSlot(slotId) {
         const clash = (near || []).some((q) => (q.bookings || []).some((x) => ["requested", "confirmed", "offered"].includes(x.status))
           && new Date(q.starts_at).getTime() < endMs && new Date(q.starts_at).getTime() + q.duration_min * 60000 > chosen.getTime());
         if (clash) throw new Error("Zu dieser Zeit ist schon eine andere Fahrstunde eingetragen.");
-        if (meet.value() !== slotMeet(b)) {   // Treffpunkt ändert sich sofort, nur die Zeit braucht die Zusage
-          await meet.commit();
-          const { error: em } = await sb.from("slots").update({ meeting_point: meet.value() }).eq("id", slot.id);
-          if (em) throw em;
-        }
+        // Neuer Treffpunkt gilt erst, wenn der/die Schüler/in zusagt
+        const newMeet = meetDiff() ? (await meet.commit(), meet.value() || "") : null;
         const note = reply.value.trim();
-        const { error } = await sb.from("bookings").update({ change_start: chosen.toISOString(), change_dur: dur.value, change_note: note || null, decided_at: new Date().toISOString() }).eq("id", b.id);
+        const { error } = await sb.from("bookings").update({ change_start: chosen.toISOString(), change_dur: dur.value, change_meeting: newMeet, change_note: note || null, decided_at: new Date().toISOString() }).eq("id", b.id);
         if (error) throw error;
         pushNotify("booking", b.id, "change");
-        notifyStep("Änderung an den/die Schüler/in gesendet – er/sie muss zusagen", b.profiles && b.profiles.phone, waTextChange(b.profiles, slot.starts_at, chosen.toISOString(), dur.value, note));
+        notifyStep("Änderung an den/die Schüler/in gesendet – er/sie muss zusagen", b.profiles && b.profiles.phone, waTextChange(b.profiles, slot.starts_at, chosen.toISOString(), dur.value, [newMeet ? `📍 Neuer Treffpunkt: ${newMeet}` : "", note].filter(Boolean).join("\n")));
       }
       save.onclick = () => busy(save, async () => {
         if (timeDiff()) return proposeChange();
@@ -3498,14 +3502,16 @@ async function openAdminSlot(slotId) {
       if (askable && b.change_start) {
         const back = el("button", { class: "btn small ghost" }, "Änderung zurückziehen");
         back.onclick = () => busy(back, async () => {
-          const { error } = await sb.from("bookings").update({ change_start: null, change_dur: null, change_note: null }).eq("id", b.id);
+          const { error } = await sb.from("bookings").update({ change_start: null, change_dur: null, change_meeting: null, change_note: null }).eq("id", b.id);
           if (error) throw error;
           done("Änderungsanfrage zurückgezogen.");
         });
-        parts.push(el("div", { class: "notice wish" }, el("b", {}, `⏳ Änderung vorgeschlagen: ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || slot.duration_min)} Uhr`),
+        parts.push(el("div", { class: "notice wish" }, el("b", {}, `⏳ Änderung vorgeschlagen: ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || slot.duration_min)} Uhr`), b.change_meeting ? el("div", {}, `📍 Neuer Treffpunkt: ${b.change_meeting}`) : null,
           el("div", { class: "small" }, "Der/die Schüler/in muss noch zusagen. Bis dahin bleibt die Fahrstunde zur bisherigen Zeit bestehen."), el("div", { class: "actions", style: "margin:6px 0 0" }, back)));
       } else if (askable) {
-        parts.push(el("div", { class: "small muted" }, "Zeit oder Dauer ändern? Der/die Schüler/in bekommt dann eine Anfrage und muss in der App zusagen."));
+        parts.push(el("div", { class: "small muted" }, "Zeit, Dauer oder Treffpunkt ändern? Der/die Schüler/in bekommt dann eine Anfrage und muss in der App zusagen."));
+      } else if (b.status === "confirmed") {
+        parts.push(el("div", { class: "small muted" }, "Schon gefahren oder vorbei: Änderungen werden direkt gespeichert – der/die Schüler/in bekommt keine Nachricht."));
       }
       parts.push(el("div", { class: "actions" }, save));
     }
@@ -5586,9 +5592,9 @@ function answerOffer(b, accept) {
 
 function answerChange(b, accept) {
   const note = el("input", { maxlength: 300, placeholder: accept ? "Nachricht (optional)" : "Kurzer Grund (optional), z. B. „Da habe ich Schule.“" });
-  const btn = el("button", { class: "btn " + (accept ? "ok" : "danger") }, accept ? "✓ Neue Zeit bestätigen" : "✗ Bisherige Zeit behalten");
+  const btn = el("button", { class: "btn " + (accept ? "ok" : "danger") }, accept ? "✓ Änderung bestätigen" : "✗ Bisherige Zeit behalten");
   btn.onclick = () => busy(btn, async () => {
-    const { error } = await sb.rpc("respond_change", { p_booking: b.id, p_accept: accept, p_note: note.value.trim() });
+    const { error } = await sb.rpc("respond_change_v2", { p_booking: b.id, p_accept: accept, p_note: note.value.trim() });
     if (error) throw error;
     pushNotify("booking", b.id, accept ? "change_ok" : "change_no");
     const f = (iso) => `${fmtDate(iso)} um ${fmtTime(iso)} Uhr`;
@@ -5596,9 +5602,10 @@ function answerChange(b, accept) {
       (note.value.trim() ? `\n${note.value.trim()}` : "");
     notifyStep(accept ? "Zugesagt – die Fahrstunde ist verschoben" : "Abgesagt – die Fahrstunde bleibt zur bisherigen Zeit", state.settings.admin_phone, text, "deinen Fahrlehrer");
   });
-  openModal(accept ? "Neue Zeit bestätigen" : "Änderung ablehnen",
+  openModal(accept ? "Änderung bestätigen" : "Änderung ablehnen",
     el("p", {}, "Bisher: ", el("b", {}, `${fmtDate(b.slots.starts_at)}, ${fmtRange(b.slots.starts_at, b.slots.duration_min)} Uhr`), el("br"),
-      "Neu: ", el("b", {}, `${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || b.slots.duration_min)} Uhr`)),
+      "Neu: ", el("b", {}, `${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || b.slots.duration_min)} Uhr`),
+      b.change_meeting ? [el("br"), "📍 Neuer Treffpunkt: ", el("b", {}, b.change_meeting)] : null),
     accept ? null : el("div", { class: "notice" }, "Wenn du ablehnst, bleibt deine Fahrstunde zur bisherigen Zeit bestehen. Bitte sprich ggf. kurz mit deinem Fahrlehrer."),
     note, el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Zurück")));
 }
@@ -5669,7 +5676,7 @@ const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || ""
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_note,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -5726,9 +5733,9 @@ async function studentMine() {
         isOffer ? el("div", { class: "actions" },
           el("button", { class: "btn small ok", onclick: () => answerOffer(b, true) }, "✓ Zusagen"),
           el("button", { class: "btn small danger", onclick: () => answerOffer(b, false) }, "✗ Absagen")) : null,
-        hasChange ? el("div", { class: "lesson-hint" }, `🔄 Dein Fahrlehrer möchte die Fahrstunde verschieben auf ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || b.slots.duration_min)} Uhr.` + (b.change_note ? `  💬 ${b.change_note}` : "")) : null,
+        hasChange ? el("div", { class: "lesson-hint" }, `🔄 Dein Fahrlehrer möchte die Fahrstunde ändern: ${fmtDate(b.change_start)}, ${fmtRange(b.change_start, b.change_dur || b.slots.duration_min)} Uhr.` + (b.change_meeting ? ` 📍 Treffpunkt: ${b.change_meeting}.` : "") + (b.change_note ? `  💬 ${b.change_note}` : "")) : null,
         hasChange ? el("div", { class: "actions" },
-          el("button", { class: "btn small ok", onclick: () => answerChange(b, true) }, "✓ Neue Zeit passt"),
+          el("button", { class: "btn small ok", onclick: () => answerChange(b, true) }, "✓ Passt, zusagen"),
           el("button", { class: "btn small danger", onclick: () => answerChange(b, false) }, "✗ Passt nicht")) : null,
         withdraw || canCancel ? el("div", { class: "actions" }, withdraw,
           canCancel ? el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(b) }, "✗ Fahrstunde absagen") : null) : null));
