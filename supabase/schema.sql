@@ -1378,3 +1378,88 @@ begin
     answer = case when p_accept then 'change_accepted' else 'change_declined' end, answer_at = now(), answer_seen = false
   where id = p_booking;
 end $$;
+
+-- Automatische tägliche Sicherung in der Cloud (je Fahrlehrer, die letzten 14 Tage; jede/r sieht nur die eigenen)
+create table if not exists public.cloud_backups (
+  id          uuid primary key default gen_random_uuid(),
+  teacher_id  uuid not null references public.profiles(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  auto        boolean not null default true,
+  counts      jsonb,
+  data        jsonb not null
+);
+create index if not exists cloud_backups_idx on public.cloud_backups (teacher_id, created_at desc);
+alter table public.cloud_backups enable row level security;
+drop policy if exists cloud_backups_own on public.cloud_backups;
+create policy cloud_backups_own on public.cloud_backups for select
+  using (teacher_id = auth.uid() and public.is_teacher());
+grant select on public.cloud_backups to authenticated;
+
+-- Sicherung eines Fahrlehrers bauen (gleiches Format wie die Datei aus der App)
+create or replace function public.build_backup(p_teacher uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare d jsonb; t record;
+begin
+  select id, email, first_name, last_name, slug into t from profiles where id = p_teacher;
+  d := jsonb_build_object(
+    'app', 'Fahrstundenplaner', 'format', 1, 'name', 'Easy Fahrstundenplaner', 'created_at', now(), 'auto', true,
+    'teacher', jsonb_build_object('id', t.id, 'email', t.email, 'first_name', t.first_name, 'last_name', t.last_name, 'slug', t.slug),
+    'settings', (select to_jsonb(x) from settings x where x.teacher_id = p_teacher),
+    'students', coalesce((select jsonb_agg(to_jsonb(x) order by x.last_name) from profiles x where x.teacher_id = p_teacher), '[]'),
+    'slots', coalesce((select jsonb_agg(to_jsonb(x) order by x.starts_at) from slots x where x.teacher_id = p_teacher), '[]'),
+    'bookings', coalesce((select jsonb_agg(to_jsonb(b) order by b.created_at) from bookings b join slots s on s.id = b.slot_id where s.teacher_id = p_teacher), '[]'),
+    'progress', coalesce((select jsonb_agg(to_jsonb(x)) from training_progress x join profiles p on p.id = x.student_id where p.teacher_id = p_teacher), '[]'),
+    'exams', coalesce((select jsonb_agg(to_jsonb(x) order by x.exam_at) from exams x join profiles p on p.id = x.student_id where p.teacher_id = p_teacher), '[]'),
+    'time_off', coalesce((select jsonb_agg(to_jsonb(x)) from time_off x where x.teacher_id = p_teacher), '[]'),
+    'topics', coalesce((select jsonb_agg(to_jsonb(x)) from training_topics x where x.teacher_id = p_teacher), '[]'),
+    'own_entries', coalesce((select jsonb_agg(to_jsonb(x)) from own_entries x where x.teacher_id = p_teacher), '[]'),
+    'theory_lessons', coalesce((select jsonb_agg(to_jsonb(x)) from theory_lessons x where x.teacher_id = p_teacher), '[]'),
+    'time_blocks', coalesce((select jsonb_agg(to_jsonb(x)) from time_blocks x where x.teacher_id = p_teacher), '[]'),
+    'teacher_pay', coalesce((select jsonb_agg(to_jsonb(x)) from teacher_pay x where x.teacher_id = p_teacher), '[]'));
+  return d || jsonb_build_object('counts', jsonb_build_object(
+    'students', jsonb_array_length(d->'students'), 'slots', jsonb_array_length(d->'slots'),
+    'bookings', jsonb_array_length(d->'bookings'), 'progress', jsonb_array_length(d->'progress'), 'exams', jsonb_array_length(d->'exams')));
+end $$;
+revoke all on function public.build_backup(uuid) from public, anon, authenticated;
+
+-- Speichern + Aufräumen (älter als 14 Tage weg, höchstens 30 je Fahrlehrer)
+create or replace function public.store_backup(p_teacher uuid, p_auto boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare d jsonb;
+begin
+  d := build_backup(p_teacher);
+  insert into cloud_backups (teacher_id, auto, counts, data) values (p_teacher, p_auto, d->'counts', d);
+  delete from cloud_backups where teacher_id = p_teacher and created_at < now() - interval '14 days';
+  delete from cloud_backups where id in (select id from cloud_backups where teacher_id = p_teacher order by created_at desc offset 30);
+end $$;
+revoke all on function public.store_backup(uuid, boolean) from public, anon, authenticated;
+
+-- Nachts für alle aktiven Fahrlehrer
+create or replace function public.run_daily_backups()
+returns int language plpgsql security definer set search_path = public as $$
+declare r record; n int := 0;
+begin
+  for r in select id from profiles where role = 'teacher' and status = 'active' loop
+    begin
+      perform store_backup(r.id, true); n := n + 1;
+    exception when others then raise warning 'Sicherung % fehlgeschlagen: %', r.id, sqlerrm;
+    end;
+  end loop;
+  return n;
+end $$;
+revoke all on function public.run_daily_backups() from public, anon, authenticated;
+
+-- „Jetzt sichern“ aus der App (nur für sich selbst)
+create or replace function public.backup_now()
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_teacher() then raise exception 'Nur für Fahrlehrer'; end if;
+  perform store_backup(auth.uid(), false);
+end $$;
+grant execute on function public.backup_now() to authenticated;
+
+-- Zeitplan: jede Nacht um 02:30 Uhr (UTC 01:30)
+create extension if not exists pg_cron;
+select cron.schedule('fsp-daily-backup', '30 1 * * *', 'select public.run_daily_backups()');
+-- gleich eine erste Sicherung anlegen
+select public.run_daily_backups();

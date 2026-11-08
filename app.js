@@ -1644,7 +1644,7 @@ async function updateRequestCount(tabbar) {
   badge("students", pend.count);
   // Erinnerung: Sicherung älter als 30 Tage
   const st = tabbar.querySelector('[data-tab="settings"]');
-  if (st && backupOverdue()) st.append(el("span", { class: "count", title: "Datensicherung fällig" }, "!"));
+  if (st && backupOverdue() && !(await cloudRecent())) st.append(el("span", { class: "count", title: "Datensicherung fällig" }, "!"));
 }
 
 function openCopyWeek(slots) {
@@ -4608,6 +4608,11 @@ async function loadOwnData() {
 const today = () => dateInput(new Date());
 const backupKey = () => `fsp_backup_${state.profile && state.profile.id}`;
 function lastBackup() { try { return localStorage.getItem(backupKey()); } catch { return null; } }
+// Gab es in den letzten 3 Tagen eine Cloud-Sicherung? Dann ist keine Erinnerung nötig
+async function cloudRecent() {
+  const { data, error } = await sb.from("cloud_backups").select("created_at").order("created_at", { ascending: false }).limit(1);
+  return !error && data && data[0] && Date.now() - new Date(data[0].created_at).getTime() < 3 * 86400000;
+}
 const backupOverdue = () => { const l = lastBackup(); return !l || Date.now() - new Date(l).getTime() > 30 * 86400000; };
 
 // Komplette Sicherung als JSON-Datei (alle eigenen Daten, maschinenlesbar und wiederherstellbar)
@@ -4648,6 +4653,9 @@ async function exportAllLessons() {
 async function openRestore(f) {
   let data;
   try { data = JSON.parse(await f.text()); } catch { return toast("Diese Datei ist keine gültige Sicherung (.json).", true); }
+  return openRestoreData(data, f.name);
+}
+function openRestoreData(data, label) {
   if (!data || data.app !== "Fahrstundenplaner" || !Array.isArray(data.slots) || !Array.isArray(data.bookings)) {
     return toast("Diese Datei ist keine Sicherung vom Easy Fahrstundenplaner.", true);
   }
@@ -4677,7 +4685,7 @@ async function openRestore(f) {
   });
   const c = data.counts || { students: (data.students || []).length, slots: data.slots.length, bookings: data.bookings.length };
   openModal("📂 Sicherung wiederherstellen",
-    el("p", {}, "Datei: ", el("b", {}, f.name)),
+    el("p", {}, "Sicherung: ", el("b", {}, label)),
     el("p", {}, `Stand: ${new Date(data.created_at).toLocaleString("de-DE")} · ${c.students} Schüler · ${c.slots} Termine · ${c.bookings} Buchungen`),
     el("div", { class: "notice" },
       "Was passiert: Gelöschte Termine und Buchungen kommen zurück, geänderte werden auf den Stand der Sicherung zurückgesetzt. ",
@@ -4685,6 +4693,46 @@ async function openRestore(f) {
     el("p", { class: "small" }, "Tipp: Mach vorher noch schnell eine aktuelle Sicherung – dann kannst du jederzeit zurück."),
     el("label", { class: "check" }, agree, "Ich möchte die Daten auf den Stand dieser Sicherung zurücksetzen."),
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+// Automatische Sicherungen in der Cloud (jede Nacht, 14 Tage aufgehoben)
+const cloudLabel = (x) => `${new Date(x.created_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}, ${fmtTime(x.created_at)} Uhr${x.auto ? "" : " (von Hand)"}`;
+async function loadCloudBackup(x) {
+  const { data, error } = await sb.from("cloud_backups").select("data").eq("id", x.id).single();
+  if (error) throw error;
+  return data.data;
+}
+function cloudBackupCard() {
+  const list = el("div", {}, el("p", { class: "muted small" }, "Lade …"));
+  const now = el("button", { class: "btn small" }, "☁️ Jetzt sichern");
+  const fill = async () => {
+    const { data, error } = await sb.from("cloud_backups").select("id,created_at,auto,counts").order("created_at", { ascending: false });
+    if (error) { list.replaceChildren(el("p", { class: "muted small" }, "Noch nicht eingerichtet.")); now.hidden = true; return; }
+    list.replaceChildren(...(data.length ? data.map((x) => {
+      const c = x.counts || {};
+      const dl = el("button", { class: "btn small ghost" }, "⬇️ Datei");
+      dl.onclick = () => busy(dl, async () => {
+        const d = await loadCloudBackup(x);
+        downloadFile(new Blob([JSON.stringify(d, null, 2)], { type: "application/json" }), `Sicherung_Easy_Fahrstundenplaner_${dateInput(x.created_at)}.json`);
+      });
+      const back = el("button", { class: "btn small ghost" }, "↩️ Wiederherstellen");
+      back.onclick = () => busy(back, async () => openRestoreData(await loadCloudBackup(x), "Cloud – " + cloudLabel(x)));
+      return el("div", { class: "list-item small" },
+        el("div", { class: "head" }, el("span", {}, el("b", {}, cloudLabel(x)), el("div", { class: "muted" }, `${c.students ?? "?"} Schüler · ${c.slots ?? "?"} Termine · ${c.bookings ?? "?"} Buchungen`)),
+          el("span", { class: "done-row", style: "margin:0" }, dl, back)));
+    }) : [el("p", { class: "muted small" }, "Noch keine Sicherung – die erste kommt heute Nacht.")]));
+  };
+  now.onclick = () => busy(now, async () => {
+    const { error } = await sb.rpc("backup_now");
+    if (error) throw error;
+    toast("Sicherung in der Cloud gespeichert.");
+    await fill();
+  });
+  fill();
+  return el("div", { class: "card" },
+    el("h3", {}, "☁️ Automatische Sicherung"),
+    el("p", { class: "muted small" }, "Jede Nacht um 2:30 Uhr werden alle deine Daten automatisch gesichert – ohne dass du etwas tun musst. Die letzten 14 Tage bleiben aufgehoben. Nur du siehst deine Sicherungen."),
+    el("div", { class: "actions", style: "margin:0 0 8px" }, now), list);
 }
 
 function backupCard() {
@@ -4701,7 +4749,7 @@ function backupCard() {
   const restore = el("button", { class: "btn ghost", onclick: () => file.click() }, "📂 Sicherung wiederherstellen …");
   csv.onclick = () => busy(csv, async () => { const n = await exportAllLessons(); toast(`${n} Einträge exportiert.`); });
   return el("div", { class: "card" },
-    el("h3", {}, "💾 Datensicherung"),
+    el("h3", {}, "💾 Sicherung als Datei"),
     el("p", { class: "notice small", style: "margin:0 0 10px" }, "🧹 Automatisch aufgeräumt: Termine, Fahrstunden, Prüfungen und Urlaubstage, die älter als 15 Monate sind, werden gelöscht – ebenso Schülerkonten ohne Fahrstunde in den letzten 15 Monaten. Wer etwas länger aufheben möchte: vorher eine Sicherung herunterladen."),
     backupOverdue() ? el("div", { class: "notice danger" }, last
       ? `Deine letzte Sicherung auf diesem Gerät ist vom ${new Date(last).toLocaleDateString("de-DE")} – mehr als 30 Tage her. Bitte neu sichern.`
@@ -4892,6 +4940,7 @@ function adminSettings() {
       el("h3", {}, "🔗 Link für Schüler"),
       el("p", { class: "muted small" }, "Ein Link für alle Fahrlehrer und Schüler. Bei der Registrierung wählen Schüler ihren Fahrlehrer aus – neue Fahrlehrer erscheinen dort automatisch. Den Link findest du auch jederzeit oben über 🔗."),
       linkBox(studentLink(), `Hallo! Hier kannst du dich für Fahrstunden anmelden. Wähle bei der Registrierung „${state.settings.display_name || "deinen Fahrlehrer"}“ als Fahrlehrer aus:`)),
+    cloudBackupCard(),
     backupCard(),
     installCard(),
     pushCard(),
