@@ -1282,3 +1282,7 @@ begin
   end loop;
   return new;
 end $$;
+-- Mitteilungen an alle Schüler (jeder Fahrlehrer schaltet selbst ein)
+alter table public.settings add column if not exists notify_new_slots boolean not null default false;
+alter table public.settings add column if not exists notify_freed boolean not null default false;
+alter table public.settings add column if not exists notify_button boolean not null default false;

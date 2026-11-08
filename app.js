@@ -1323,10 +1323,15 @@ function setDesign(key) {
 /* ---------------- Push-Mitteilungen ---------------- */
 
 // Nach einer Aktion den Empfänger benachrichtigen (Server-Funktion „notify“ baut den Text selbst). Fehler stören nie.
+const FREEING = ["rejected", "decline", "cancel", "withdraw", "cancelled_teacher", "not_held"];
 function pushNotify(kind, ids, event) {
   ids = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
   if (!ids.length && kind !== "test") return;
   sb.functions.invoke("notify", { body: { kind, ids, event } }).catch(() => {});
+  // Termin wieder frei → (wenn eingeschaltet) alle Schüler benachrichtigen; die Funktion prüft alles Weitere
+  if (kind === "booking" && FREEING.includes(event)) {
+    setTimeout(() => sb.functions.invoke("notify", { body: { kind: "slot_freed", ids, event } }).catch(() => {}), 1500);
+  }
 }
 // Test-Mitteilung an die eigenen Geräte – mit sichtbarem Ergebnis (zur Fehlersuche)
 async function pushTest() {
@@ -3014,7 +3019,11 @@ function newSlotForm(opts = {}) {
     await meetSlot.commit();
     const res = await insertSlots(list);
     showDate(new Date(list[0].starts_at));
-    if (mode === "free") { toast(insertedMsg(res)); closeModal(); render(); return; }
+    if (mode === "free") {
+      // Neue Termine → (wenn eingeschaltet) alle Schüler benachrichtigen
+      if (state.settings.notify_new_slots && res.rows.length) sb.functions.invoke("notify", { body: { kind: "slots_new", ids: res.rows.map((r) => r.id).slice(0, 300) } }).catch(() => {});
+      toast(insertedMsg(res) + (state.settings.notify_new_slots && res.rows.length ? " Schüler werden benachrichtigt." : "")); closeModal(); render(); return;
+    }
     // Zuordnen: dem Schüler anbieten (er sagt zu/ab) oder gleich fest eintragen
     if (!res.rows.length) throw new Error("Alle diese Termine gibt es schon – nichts eingetragen.");
     const note = reply.value.trim() || null;
@@ -3339,6 +3348,16 @@ async function openAdminSlot(slotId) {
       const last = (slot.bookings || []).slice().sort((x, y) => x.created_at.localeCompare(y.created_at)).pop();
       if (await deleteLessonSlot(slot, last)) { closeModal(); render(); }
     });
+    // Schüler auf diesen freien Termin aufmerksam machen (nur wenn in den Einstellungen eingeschaltet)
+    if (state.settings.notify_button && new Date(slot.starts_at).getTime() > Date.now()) {
+      const nudge = el("button", { class: "btn ok" }, "📣 Schüler auf diesen Termin hinweisen");
+      nudge.onclick = () => busy(nudge, async () => {
+        const { data, error } = await sb.functions.invoke("notify", { body: { kind: "slots_remind", ids: [slot.id] } });
+        if (error) throw error;
+        toast(data && data.sent ? `Mitteilung an ${data.sent} Gerät${data.sent === 1 ? "" : "e"} gesendet.` : "Gesendet – aber kein Schüler hat Mitteilungen eingeschaltet.");
+      });
+      parts.push(el("div", { class: "actions", style: "margin:0 0 10px" }, nudge));
+    }
     parts.push(el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
       timeFields, el("div", { class: "actions" }, save, del), el("hr"), await bookForStudentForm(slot, saveTime, () => meet.value()));
   } else {
@@ -4610,6 +4629,29 @@ function passwordCard() {
 /* ---------------- Admin: Einstellungen ---------------- */
 
 // Wann dürfen Schüler anfragen? immer / gesperrt / nur an bestimmten Tagen und Uhrzeiten
+// Mitteilungen an alle Schüler: neue Termine, wieder frei gewordene Termine, Knopf „Schüler hinweisen“
+function studentPushSettings() {
+  const st = state.settings;
+  const box = (key, label, hint) => {
+    const c = el("input", { type: "checkbox", checked: !!st[key] });
+    c.addEventListener("change", async () => {
+      c.disabled = true;
+      const { error } = await sb.from("settings").update({ [key]: c.checked }).eq("teacher_id", state.profile.id);
+      c.disabled = false;
+      if (error) { c.checked = !c.checked; return fail(error); }
+      st[key] = c.checked;
+      toast(c.checked ? "Eingeschaltet." : "Ausgeschaltet.");
+    });
+    return el("label", { class: "check" }, c, el("span", {}, el("b", {}, label), el("br"), el("span", { class: "muted small" }, hint)));
+  };
+  return el("div", {},
+    el("h3", {}, "📣 Mitteilungen an deine Schüler"),
+    el("p", { class: "muted small" }, "Geht an alle aktiven Schüler, die Mitteilungen eingeschaltet haben."),
+    box("notify_new_slots", "Neue Termine freigegeben", "Beim Freigeben neuer Termine bekommen die Schüler eine Mitteilung."),
+    box("notify_freed", "Termin wieder frei", "Wird eine Anfrage abgelehnt oder eine Fahrstunde abgesagt (von dir oder dem Schüler), erfahren die anderen Schüler, dass der Termin wieder frei ist."),
+    box("notify_button", "Knopf „Schüler hinweisen“", "Beim Antippen eines freien Termins (Heute/Kalender) erscheint ein Knopf, mit dem du alle Schüler auf diesen Termin aufmerksam machst."));
+}
+
 function bookingWindowSettings() {
   const st = state.settings;
   let mode = st.booking_closed ? "closed" : st.booking_days ? "times" : "open";
@@ -4683,6 +4725,8 @@ function adminSettings() {
       (window.FSP_LEGAL_MISSING || []).map((k) => ({ street: "Straße", city: "PLZ/Ort", email: "E-Mail" })[k]).join(", "),
       "). ", legalLink("impressum", "Impressum ansehen")) : null,
     el("div", { class: "card" },
+      studentPushSettings(),
+      el("hr"),
       bookingWindowSettings(),
       el("h3", { style: "margin-top:18px" }, "Wie weit im Voraus dürfen Schüler anfragen?"),
       el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),

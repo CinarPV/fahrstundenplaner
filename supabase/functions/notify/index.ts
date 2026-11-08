@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
     const { kind, ids, event, text } = await req.json();
     const messages: { to: string; title: string; body: string }[] = [];
     // Einstellungen je Fahrlehrer nur einmal laden (Treffpunkt, Anrede)
-    const settingsCache = new Map<string, { meeting_point?: string; teacher_gender?: string } | null>();
+    const settingsCache = new Map<string, { meeting_point?: string; teacher_gender?: string; [k: string]: unknown } | null>();
     const teacherSettings = async (id: string) => {
       if (!settingsCache.has(id)) {
         const { data } = await admin.from("settings").select("*").eq("teacher_id", id).maybeSingle();
@@ -105,6 +105,51 @@ Deno.serve(async (req) => {
         const w = teacherWords((await teacherSettings(user.id))?.teacher_gender);
         const { data: own } = await admin.from("profiles").select("id").in("id", ids).eq("teacher_id", user.id).eq("role", "student");
         for (const s of own ?? []) messages.push({ to: s.id, title: `📢 Nachricht von ${w.deinem}`, body: msg });
+      }
+    } else if ((kind === "slots_new" || kind === "slots_remind" || kind === "slot_freed") && Array.isArray(ids) && ids.length && ids.length <= 300) {
+      // Freie Termine an alle aktiven Schüler des Fahrlehrers melden (nur wenn der Fahrlehrer das eingeschaltet hat)
+      const nowIso = new Date().toISOString();
+      let slotRows: { id: string; starts_at: string; teacher_id: string }[] = [];
+      let skipStudent = "";
+      if (kind === "slot_freed") {
+        const { data: bk } = await admin.from("bookings").select("id,student_id,status,slot_id,slots(id,starts_at,teacher_id)").in("id", ids);
+        for (const b of bk ?? []) {
+          // deno-lint-ignore no-explicit-any
+          const sl: any = b.slots;
+          if (!sl || ["requested", "offered", "confirmed"].includes(b.status)) continue;
+          if (user.id !== b.student_id && user.id !== sl.teacher_id) continue;   // nur Beteiligte dürfen auslösen
+          slotRows.push(sl); skipStudent = b.student_id;
+        }
+      } else {
+        const { data: sl } = await admin.from("slots").select("id,starts_at,teacher_id").in("id", ids).eq("teacher_id", user.id);
+        slotRows = sl ?? [];
+      }
+      slotRows = slotRows.filter((x) => x.starts_at > nowIso);
+      const teacherId = slotRows[0]?.teacher_id;
+      const st = teacherId ? await teacherSettings(teacherId) as Record<string, unknown> | null : null;
+      const flag = kind === "slots_new" ? "notify_new_slots" : kind === "slot_freed" ? "notify_freed" : "notify_button";
+      if (teacherId && st && st[flag] && !st.booking_closed) {
+        // wirklich noch frei? (keine offene Anfrage/Buchung) und kein gesperrter Tag
+        const { data: act } = await admin.from("bookings").select("slot_id").in("slot_id", slotRows.map((x) => x.id)).in("status", ["requested", "offered", "confirmed"]);
+        const taken = new Set((act ?? []).map((x) => x.slot_id));
+        const { data: off } = await admin.from("time_off").select("from_day,to_day").eq("teacher_id", teacherId);
+        const day = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
+        const free = slotRows.filter((x) => !taken.has(x.id) && !(off ?? []).some((o) => day(x.starts_at) >= o.from_day && day(x.starts_at) <= o.to_day))
+          .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+        if (free.length) {
+          // aktive Schüler: freigeschaltet, nicht bestanden, Zugang nicht abgelaufen
+          const { data: studs } = await admin.from("profiles").select("id,valid_until").eq("teacher_id", teacherId).eq("role", "student").eq("status", "active");
+          const { data: passed } = await admin.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed");
+          const passedIds = new Set((passed ?? []).map((x) => x.student_id));
+          const cut = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
+          const to = (studs ?? []).filter((x) => !passedIds.has(x.id) && x.id !== skipStudent && !(x.valid_until && x.valid_until < cut)).map((x) => x.id);
+          const [title, body] = kind === "slots_new"
+            ? (free.length === 1 ? ["🆕 Neuer Termin frei", `${fmtWhen(free[0].starts_at)} – jetzt in der App anfragen.`]
+              : ["🆕 Neue Termine frei", `${free.length} neue Termine (${fmtWhen(free[0].starts_at)} bis ${fmtWhen(free[free.length - 1].starts_at)}) – jetzt in der App anfragen.`])
+            : kind === "slot_freed" ? ["🟢 Termin wieder frei", `${fmtWhen(free[0].starts_at)} ist wieder frei – jetzt in der App anfragen.`]
+            : ["📣 Noch frei", `${fmtWhen(free[0].starts_at)} ist noch frei – jetzt in der App anfragen.`];
+          for (const id of to) messages.push({ to: id, title, body });
+        }
       }
     } else if (kind === "registered") {
       // Neue Registrierung: dem Fahrlehrer Bescheid geben (nur solange der Schüler noch auf Freischaltung wartet)
