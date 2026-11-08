@@ -2371,6 +2371,7 @@ async function adminToday() {
   const view = el("div", { class: "today-view" },
     // Oben: alles, was zu tun ist (Anfragen, Antworten, Abhaken, Registrierungen)
     todoBox,
+    el("div", { class: "remind-row" }, remindBtn()),
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
@@ -2466,7 +2467,7 @@ async function adminCalendar() {
           it("🤒 Krank / 🏖️ Urlaub", () => openSick()),
           it("🗑 Mehrere Termine löschen", () => openDeleteMany(slots)),
           slots.length && !isPhone() ? it("⧉ Woche kopieren", () => openCopyWeek(slots)) : null));
-    } }, "⋯ Mehr")]),
+    } }, "⋯ Mehr"), remindBtn()]),
     grid,
   );
 }
@@ -3944,6 +3945,22 @@ async function openTraining(st, lessons) {
   } catch (e) { fail(e); }
 }
 
+// Alle aktiven Schüler/innen an die noch freien Fahrstunden erinnern (Mitteilung aufs Handy)
+async function remindAllFree() {
+  const ahead = state.settings.book_ahead_days;
+  const until = addDays(dayStart(new Date()), (ahead || 60) + 1);
+  const { data, error } = await sb.from("slots").select("id,starts_at,bookings(status)")
+    .eq("teacher_id", state.profile.id).gte("starts_at", new Date().toISOString()).lt("starts_at", until.toISOString()).order("starts_at");
+  if (error) throw error;
+  const free = (data || []).filter((x) => !(x.bookings || []).some((b) => ["requested", "offered", "confirmed"].includes(b.status))).slice(0, 300);
+  if (!free.length) return toast("Gerade ist keine Fahrstunde frei – es gibt nichts zu melden.", true);
+  if (!confirm(`${free.length} freie Fahrstunde${free.length === 1 ? "" : "n"} (ab ${fmtDay(free[0].starts_at)}). Jetzt alle Schüler/innen daran erinnern?`)) return;
+  const { data: res, error: e2 } = await sb.functions.invoke("notify", { body: { kind: "slots_remind", ids: free.map((x) => x.id) } });
+  if (e2) throw e2;
+  toast(res && res.sent ? `📣 Erinnerung an ${res.sent} Gerät${res.sent === 1 ? "" : "e"} gesendet.` : "Gesendet – aber kein/e Schüler/in hat Mitteilungen eingeschaltet.");
+}
+const remindBtn = (cls = "btn small remind-btn") => { const b = el("button", { class: cls, title: "Alle Schüler/innen an freie Fahrstunden erinnern" }, "📣 Freie Stunden melden"); b.onclick = () => busy(b, remindAllFree); return b; };
+
 // Auswahl hinter dem ➕-Knopf
 function openAddMenu() {
   const day = state.tab === "today" && state.todayDate ? state.todayDate : undefined;
@@ -3954,7 +3971,8 @@ function openAddMenu() {
       item("🚗", "Fahrstunde / Prüfung / Theorie", "auch Blockieren und Urlaub", () => openSlotForm(day)),
       item("✍️", "Gefahrenes nachtragen", "schon gefahrene Fahrstunde", () => openBackfill()),
       item("🤒", "Krank / Urlaub", "Fahrstunden absagen, Schüler/innen benachrichtigen", () => openSick()),
-      item("🏖️", "Tage sperren", "an diesen Tagen keine Anfragen", () => openTimeOff())));
+      item("🏖️", "Tage sperren", "an diesen Tagen keine Anfragen", () => openTimeOff()),
+      item("📣", "Freie Stunden melden", "alle Schüler/innen per Mitteilung erinnern", () => busy(el("button"), remindAllFree))));
 }
 
 /* ---------------- Fahrlehrer: „Mehr“ ---------------- */

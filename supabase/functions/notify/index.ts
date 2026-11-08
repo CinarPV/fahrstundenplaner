@@ -128,7 +128,8 @@ Deno.serve(async (req) => {
       const teacherId = slotRows[0]?.teacher_id;
       const st = teacherId ? await teacherSettings(teacherId) as Record<string, unknown> | null : null;
       const flag = kind === "slots_new" ? "notify_new_slots" : kind === "slot_freed" ? "notify_freed" : "notify_button";
-      if (teacherId && st && st[flag] && !st.booking_closed) {
+      // „Alle erinnern“ (slots_remind) drückt der Fahrlehrer selbst – dafür keine Einstellung nötig
+      if (teacherId && st && (kind === "slots_remind" || st[flag]) && !st.booking_closed) {
         // wirklich noch frei? (keine offene Anfrage/Buchung) und kein gesperrter Tag
         const { data: act } = await admin.from("bookings").select("slot_id").in("slot_id", slotRows.map((x) => x.id)).in("status", ["requested", "offered", "confirmed"]);
         const taken = new Set((act ?? []).map((x) => x.slot_id));
@@ -147,7 +148,8 @@ Deno.serve(async (req) => {
             ? (free.length === 1 ? ["🆕 Neuer Termin frei", `${fmtWhen(free[0].starts_at)} – jetzt in der App anfragen.`]
               : ["🆕 Neue Termine frei", `${free.length} neue Termine (${fmtWhen(free[0].starts_at)} bis ${fmtWhen(free[free.length - 1].starts_at)}) – jetzt in der App anfragen.`])
             : kind === "slot_freed" ? ["🟢 Termin wieder frei", `${fmtWhen(free[0].starts_at)} ist wieder frei – jetzt in der App anfragen.`]
-            : ["📣 Noch frei", `${fmtWhen(free[0].starts_at)} ist noch frei – jetzt in der App anfragen.`];
+            : free.length === 1 ? ["📣 Noch frei", `${fmtWhen(free[0].starts_at)} ist noch frei – jetzt in der App anfragen.`]
+            : ["📣 Noch Fahrstunden frei", `${free.length} freie Termine (${fmtWhen(free[0].starts_at)} bis ${fmtWhen(free[free.length - 1].starts_at)}) – jetzt in der App anfragen.`];
           for (const id of to) messages.push({ to: id, title, body });
         }
       }
