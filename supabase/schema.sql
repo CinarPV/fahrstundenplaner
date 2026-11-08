@@ -1312,3 +1312,5 @@ begin
   where id = p_booking;
 end $$;
 grant execute on function public.respond_change_v2(uuid, boolean, text) to authenticated;
+-- Ausbildung abgeschlossen: Zeitpunkt (Schüler/in kommt ins Archiv; deaktiviert = gesperrt ohne Datum)
+alter table public.profiles add column if not exists finished_at timestamptz;

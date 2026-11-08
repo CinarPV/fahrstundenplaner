@@ -3948,7 +3948,9 @@ async function adminStudents() {
   const active = students.filter((x) => x.status === "active" && !archived(x));
   const passedList = students.filter((x) => x.status === "active" && x.passed);
   const expired = students.filter((x) => x.status === "active" && !x.passed && archived(x));
-  const blocked = students.filter((x) => x.status === "blocked");
+  const finished = students.filter((x) => x.status === "blocked" && x.finished_at);
+  const blocked = students.filter((x) => x.status === "blocked" && !x.finished_at);
+  const archiveList = passedList.concat(finished);
   if (!students.length) return el("div", {}, el("p", { class: "muted" }, "Noch keine Schüler/innen registriert. Schicke ihnen den Link aus den Einstellungen."), ownCard);
 
   const table = (list) => el("div", { style: "overflow-x:auto" }, el("table", {},
@@ -3987,19 +3989,20 @@ async function adminStudents() {
       el("p", { class: "muted small" }, "Zugang abgelaufen und 4 Wochen Schonfrist vorbei – der/die Schüler/in ist gesperrt, die Daten bleiben gespeichert. Mit „+6 Monate“ wieder freischalten."),
       table(expired)) : null,
     ownCard,
-    passedList.length ? el("details", { class: "card fold" },
-      el("summary", {}, el("b", {}, `🎉 Bestanden – archiviert (${passedList.length})`)),
-      el("p", { class: "muted small" }, "Erscheinen nicht mehr in den Auswahllisten. Alte Daten werden nach 15 Monaten ohne Fahrstunde automatisch gelöscht."),
-      table(passedList)) : null,
+    archiveList.length ? el("details", { class: "card fold" },
+      el("summary", {}, el("b", {}, `🎓 Archiv – Ausbildung abgeschlossen (${archiveList.length})`)),
+      el("p", { class: "muted small" }, "Bestanden oder als abgeschlossen markiert. Erscheinen nicht mehr in den Auswahllisten. Alte Daten werden nach 15 Monaten ohne Fahrstunde automatisch gelöscht."),
+      table(archiveList)) : null,
     blocked.length ? el("details", { class: "card fold" },
       el("summary", {}, el("b", {}, `🔒 Deaktiviert (${blocked.length})`)),
+      el("p", { class: "muted small" }, "Ausbildung nicht abgeschlossen, z. B. Fahrlehrerwechsel. Antippen → „Wieder aktivieren“ oder „Endgültig löschen“."),
       table(blocked)) : null,
   );
 }
 // Suchfeld über ALLE Schüler (aktiv, bestanden, abgelaufen, deaktiviert, ohne App) – nur hier auf der Schülerseite
 function studentStatus(st) {
   if (st.status === "pending") return ["requested", "neu"];
-  if (st.status === "blocked") return ["rejected", "deaktiviert"];
+  if (st.status === "blocked") return st.finished_at ? ["confirmed", "🎓 abgeschlossen"] : ["rejected", "🔒 deaktiviert"];
   if (st.passed) return ["confirmed", "🎉 bestanden"];
   if (st.valid_until && daysLeft(st.valid_until) < -GRACE_DAYS) return ["rejected", "abgelaufen"];
   return ["offered", "aktiv"];
@@ -4072,10 +4075,12 @@ function accessCell(st) {
   return el("span", { class: "access" }, el("span", { class: "access-badge " + info.cls }, info.text), " ", btn);
 }
 
-async function setStudentStatus(st, status) {
-  const { error } = await sb.from("profiles").update({ status }).eq("id", st.id);
+async function setStudentStatus(st, status, finishedAt) {
+  const patch = { status };
+  if (finishedAt !== undefined) patch.finished_at = finishedAt;   // nur beim Abschließen/Deaktivieren/Reaktivieren
+  const { error } = await sb.from("profiles").update(patch).eq("id", st.id);
   if (error) throw error;
-  const msg = { active: "freigeschaltet", blocked: "als fertig markiert" }[status];
+  const msg = status === "active" ? "aktiviert" : finishedAt ? "ins Archiv verschoben (Ausbildung abgeschlossen)" : "deaktiviert";
   toast(`${fullName(st)} wurde ${msg}.`);
   closeModal();
   render();
@@ -4182,7 +4187,7 @@ function openEditStudent(st) {
 }
 
 // Schüler-Infos per ID öffnen (aus Heute, Kalender, Termin-Details)
-const STUDENT_FIELDS = "id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,valid_until,created_at";
+const STUDENT_FIELDS = "id,first_name,last_name,email,phone,license_class,needs_glasses,is_conversion,max_open,role,status,valid_until,created_at,finished_at";
 async function openStudentById(id) {
   if (!id) return;
   const { data, error } = await sb.from("profiles").select(STUDENT_FIELDS).eq("id", id).single();
@@ -4209,14 +4214,20 @@ async function openStudent(st) {
   st.passed = (stExams || []).some((e) => e.kind === "praxis" && e.result === "passed");
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
 
+  // Ausbildung abgeschlossen → Archiv; Deaktivieren (z. B. Fahrlehrerwechsel) → eigene Liste; beides wieder rückgängig zu machen
   const block = el("button", { class: "btn ok" }, "🎓 Ausbildung abgeschlossen");
   block.onclick = () => busy(block, async () => {
-    if (!confirm(`${fullName(st)} als fertig markieren? Er/sie kann danach keine Fahrstunden mehr buchen. Fahrstunden und Ausbildungsstand bleiben bei dir gespeichert.`)) return;
-    await setStudentStatus(st, "blocked");
+    if (!confirm(`Ausbildung von ${fullName(st)} abschließen? Er/sie kommt ins Archiv, erscheint nicht mehr in den Auswahllisten und kann keine Fahrstunden mehr buchen. Alle Daten bleiben gespeichert.`)) return;
+    await setStudentStatus(st, "blocked", new Date().toISOString());
   });
-  const unblock = el("button", { class: "btn ghost" }, "Wieder aktiv setzen");
-  unblock.onclick = () => busy(unblock, () => setStudentStatus(st, "active"));
-  const del = el("button", { class: "btn danger" }, "Endgültig löschen");
+  const deact = el("button", { class: "btn" }, "🔒 Deaktivieren");
+  deact.onclick = () => busy(deact, async () => {
+    if (!confirm(`${fullName(st)} deaktivieren (Ausbildung NICHT abgeschlossen, z. B. Fahrlehrerwechsel)? Er/sie kann keine Fahrstunden mehr buchen und erscheint nicht mehr in den Auswahllisten. Alle Daten bleiben gespeichert, du kannst ihn/sie jederzeit wieder aktivieren.`)) return;
+    await setStudentStatus(st, "blocked", null);
+  });
+  const unblock = el("button", { class: "btn ok" }, "↩️ Wieder aktivieren");
+  unblock.onclick = () => busy(unblock, () => setStudentStatus(st, "active", null));
+  const del = el("button", { class: "btn danger" }, "🗑 Endgültig löschen");
   del.onclick = () => busy(del, () => deleteStudent(st));
   const edit = el("button", { class: "btn small ghost", onclick: () => openEditStudent(st) }, "✏️ Daten bearbeiten");
 
@@ -4257,9 +4268,10 @@ async function openStudent(st) {
     el("hr"),
     el("h3", {}, "Ausbildung"),
     el("p", { class: "muted small" }, st.status === "blocked"
-      ? "Fertig: kann keine Fahrstunden mehr buchen. Die Daten bleiben bei dir, bis du den/die Schüler/in löschst."
-      : "Nach der Prüfung als fertig markieren – oder den/die Schüler/in mit allen Daten löschen."),
-    el("div", { class: "actions" }, st.status === "blocked" ? unblock : block, del));
+      ? (st.finished_at ? `🎓 Ausbildung abgeschlossen am ${fmtDay(st.finished_at)} – im Archiv. Kann keine Fahrstunden mehr buchen, die Daten bleiben gespeichert.`
+        : "🔒 Deaktiviert – kann keine Fahrstunden mehr buchen, die Daten bleiben gespeichert.")
+      : "Ausbildung abgeschlossen → Archiv. Deaktivieren → z. B. bei Fahrlehrerwechsel (Ausbildung nicht abgeschlossen). Löschen entfernt alles endgültig."),
+    el("div", { class: "actions" }, st.status === "blocked" ? unblock : [block, deact], del));
   modal.classList.add("full-page");  // Schüler-Seite: ganze Seite statt kleines Fenster
   modal.scrollTop = 0;
 }
