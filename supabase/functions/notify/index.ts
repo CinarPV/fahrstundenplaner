@@ -59,13 +59,20 @@ Deno.serve(async (req) => {
     const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },
     });
-    const { data: { user } } = await userClient.auth.getUser();
-    if (!user) return json({ error: "Nicht angemeldet" }, 401);
-
     const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { kind, ids, event, text } = await req.json();
+    // „evening“ kommt vom nächtlichen Zeitplan (pg_cron) mit geheimem Schlüssel aus der Datenbank – sonst muss jemand angemeldet sein
+    let user: { id: string } = { id: "" };
+    if (kind === "evening") {
+      const { data: sec } = await admin.from("app_secrets").select("value").eq("name", "cron").maybeSingle();
+      if (!sec || !sec.value || req.headers.get("x-cron-secret") !== sec.value) return json({ error: "Nicht erlaubt" }, 403);
+    } else {
+      const { data: { user: u } } = await userClient.auth.getUser();
+      if (!u) return json({ error: "Nicht angemeldet" }, 401);
+      user = u;
+    }
     webpush.setVapidDetails(Deno.env.get("VAPID_SUBJECT")!, Deno.env.get("VAPID_PUBLIC_KEY")!, Deno.env.get("VAPID_PRIVATE_KEY")!);
 
-    const { kind, ids, event, text } = await req.json();
     const messages: { to: string; title: string; body: string }[] = [];
     // Einstellungen je Fahrlehrer nur einmal laden (Treffpunkt, Anrede)
     const settingsCache = new Map<string, { meeting_point?: string; teacher_gender?: string; [k: string]: unknown } | null>();
@@ -77,7 +84,29 @@ Deno.serve(async (req) => {
       return settingsCache.get(id);
     };
 
-    if (kind === "test") {
+    if (kind === "evening") {
+      // Vorabend-Erinnerung: nur Fahrlehrer, die sie unter Einstellungen → Funktionen eingeschaltet haben
+      const { data: sts } = await admin.from("settings").select("teacher_id,features,meeting_point,teacher_gender");
+      const on = (sts ?? []).filter((x) => (x.features as Record<string, unknown> | null)?.evening_reminder === true);
+      if (on.length) {
+        const day = (d: string | number) => new Date(d).toLocaleDateString("sv-SE", { timeZone: "Europe/Berlin" });
+        const tomorrow = day(Date.now() + 86400000);
+        const { data: bk } = await admin.from("bookings")
+          .select("student_id,meeting_point,slots!inner(starts_at,teacher_id,meeting_point)")
+          .eq("status", "confirmed").is("actual_minutes", null)
+          .in("slots.teacher_id", on.map((x) => x.teacher_id))
+          .gte("slots.starts_at", new Date().toISOString()).lt("slots.starts_at", new Date(Date.now() + 2 * 86400000).toISOString());
+        for (const b of bk ?? []) {
+          // deno-lint-ignore no-explicit-any
+          const sl: any = b.slots;
+          if (!sl || day(sl.starts_at) !== tomorrow) continue;
+          const st = on.find((x) => x.teacher_id === sl.teacher_id);
+          const meet = b.meeting_point || sl.meeting_point || st?.meeting_point || "";
+          const t = teacherWords(st?.teacher_gender as string | undefined);
+          messages.push({ to: b.student_id, title: "🚗 Morgen Fahrstunde", body: `${fmtWhen(sl.starts_at)}${meet ? ` · 📍 ${meet}` : ""} – ${t.Dein} freut sich auf dich.` });
+        }
+      }
+    } else if (kind === "test") {
       messages.push({ to: user.id, title: "🔔 Mitteilungen sind an", body: "So sehen Mitteilungen vom Easy Fahrstundenplaner aus." });
     } else if (kind === "booking" && Array.isArray(ids) && ids.length && ids.length <= 60) {
       const { data: rows } = await admin.from("bookings")

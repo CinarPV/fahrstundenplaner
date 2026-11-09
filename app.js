@@ -252,6 +252,11 @@ function waButton(phone, text, label = "💬 Per WhatsApp schreiben") {
   const n = waNumber(phone);
   return n ? el("a", { class: "btn ok", href: `https://wa.me/${n}?text=${encodeURIComponent(typeof genderText === "function" ? genderText(text) : text)}`, target: "_blank", rel: "noopener" }, label) : null;
 }
+// 📞 Direkt anrufen (Handy: öffnet die Telefon-App, Mac: FaceTime/iPhone)
+function callButton(phone, label = "📞 Anrufen", cls = "btn small ghost") {
+  const n = waNumber(phone);
+  return n ? el("a", { class: cls, href: "tel:+" + n, onclick: (e) => e.stopPropagation() }, label) : null;
+}
 // Angeheftete Uhrzeiten des Fahrlehrers (Einstellungen), z. B. "08:00,09:45,11:30"
 const timePresets = () => (state.settings.time_presets ?? "08:00").split(",").map((x) => x.trim()).filter((x) => /^\d\d:\d\d$/.test(x)).sort();
 async function saveTimePresets(list) {
@@ -357,6 +362,7 @@ const FEATURES = [
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
   ]],
   ["Schüler/innen", [
+    ["evening_reminder", "🌙 Erinnerung am Vorabend", "Schüler/innen bekommen um 18 Uhr eine Mitteilung: „Morgen 14:00 Uhr Fahrstunde · 📍 Treffpunkt“", false],
     ["wish_time", "🕐 Wunschzeit vorschlagen", "bis zu 1 Stunde früher oder später"],
     ["wish_meeting", "📍 Eigenen Treffpunkt vorschlagen", "bei der Anfrage"],
   ]],
@@ -364,26 +370,28 @@ const FEATURES = [
     ["pay_estimate", "💶 Lohnschätzung anzeigen", "unverbindliche Brutto-Schätzung im Monat"],
   ]],
 ];
-const feat = (key) => !(state.settings && state.settings.features && state.settings.features[key] === false);
+// Standard je Funktion (4. Wert false = erst einschalten)
+const featDefault = (key) => { for (const [, list] of FEATURES) for (const f of list) if (f[0] === key) return f[3] !== false; return true; };
+const feat = (key) => { const v = state.settings && state.settings.features ? state.settings.features[key] : undefined; return v === undefined ? featDefault(key) : v !== false; };
 function featuresCard() {
   const cur = { ...((state.settings && state.settings.features) || {}) };
   const boxes = [];
   const groups = FEATURES.map(([title, list]) => el("div", { class: "feat-group" }, el("div", { class: "feat-title" }, title),
-    list.map(([key, label, hint]) => {
-      const box = el("input", { type: "checkbox", checked: cur[key] !== false });
-      boxes.push([key, box]);
+    list.map(([key, label, hint, def]) => {
+      const box = el("input", { type: "checkbox", checked: cur[key] === undefined ? def !== false : cur[key] !== false });
+      boxes.push([key, box, def !== false]);
       return el("label", { class: "check feat-row" }, box, el("span", {}, el("b", {}, label), hint ? el("small", { class: "muted" }, hint) : null));
     })));
   const save = el("button", { class: "btn" }, "Speichern");
   save.onclick = () => busy(save, async () => {
     const f = {};
-    boxes.forEach(([k, b]) => { if (!b.checked) f[k] = false; });
+    boxes.forEach(([k, b, def]) => { if (b.checked !== def) f[k] = b.checked; });
     const { error } = await sb.from("settings").update({ features: f }).eq("teacher_id", state.profile.id);
     if (error) throw new Error(/features/.test(error.message || "") ? "Dafür muss erst das neue SQL in Supabase laufen." : error.message);
     state.settings.features = f;
-    toast(Object.keys(f).length ? `Gespeichert – ${Object.keys(f).length} Funktion${Object.keys(f).length === 1 ? "" : "en"} ausgeschaltet.` : "Gespeichert – alle Funktionen an.");
+    toast("Funktionen gespeichert.");
   });
-  const all = el("button", { class: "btn ghost small", onclick: () => boxes.forEach(([, b]) => (b.checked = true)) }, "Alle einschalten");
+  const all = el("button", { class: "btn ghost small", onclick: () => boxes.forEach(([, b, def]) => (b.checked = def)) }, "Standard wiederherstellen");
   return el("div", {}, el("p", { class: "muted small" }, "Schalte aus, was du nicht brauchst – die App wird dadurch übersichtlicher. Alles lässt sich jederzeit wieder einschalten."),
     groups, el("div", { class: "actions" }, save, all));
 }
@@ -3807,7 +3815,8 @@ async function openAdminSlot(slotId) {
     parts.push(
       el("p", {}, el("button", { type: "button", class: "name-link", onclick: () => openStudentById(b.student_id) }, el("b", {}, fullName(b.profiles))), " ",
         el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status]), " ", studentTags(b.profiles), " ",
-        el("button", { class: "btn small ghost", onclick: () => openStudentById(b.student_id) }, "👤 Schüler-Infos")),
+        el("button", { class: "btn small ghost", onclick: () => openStudentById(b.student_id) }, "👤 Schüler-Infos"), " ",
+        callButton(b.profiles && b.profiles.phone)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
     );
     // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
@@ -4889,7 +4898,8 @@ async function openStudent(st) {
       qb("exam", "🎓", "Prüfung", "Termin & Ergebnis", () => revealAndScroll(document.querySelector("dialog .exam-card"), "start")),
       qb("cal", "📈", "Ausbildung", "Ausbildungsstand", () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); }),
       wa ? qb("wa", "💬", "WhatsApp", "Nachricht schreiben", () => window.open(`https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${st.first_name || ""},\n`)}`, "_blank", "noopener"))
-         : qb("", "✏️", "Daten", "bearbeiten", () => openEditStudent(st))),
+         : qb("", "✏️", "Daten", "bearbeiten", () => openEditStudent(st)),
+      wa ? qb("call", "📞", "Anrufen", st.phone || "", () => (location.href = "tel:+" + wa)) : null),
     tabs.node);
   modal.classList.add("full-page");  // Schüler-Seite: ganze Seite statt kleines Fenster
   modal.scrollTop = 0;
@@ -5479,7 +5489,7 @@ function adminSettings() {
       el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler/innen sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),
       aheadBox,
       el("hr"), saturdaySetting()),
-    group("🧩", "Funktionen ein-/ausschalten", (() => { const n = Object.values(state.settings.features || {}).filter((v) => v === false).length; return n ? `${n} ausgeschaltet` : "alles an"; })(), featuresCard()),
+    group("🧩", "Funktionen ein-/ausschalten", (() => { const n = Object.entries(state.settings.features || {}).filter(([k, v]) => v === false && featDefault(k)).length; return n ? `${n} ausgeschaltet` : "Standard"; })(), featuresCard()),
     group("🔔", "Mitteilungen", "an Schüler/innen und an dich", studentPushSettings(), el("hr"), pushCard()),
     group("👤", "Profil & Treffpunkte", sum.profile,
       genderCard(),
@@ -5873,7 +5883,7 @@ async function adminControl() {
   const dayMin = (list) => list.reduce((n, b) => n + paidMin(b), 0);
   // Weitere relevante Einträge des Tages: Prüfungen (auch Schaltkompetenz, auch ohne App) und Theorie – nichts Privates
   const nowMs0 = Date.now();
-  const extras = openOnly ? [] : [
+  const allExtras = [
     ...(examRes.data || []).map((e) => ({ at: e.exam_at, min: new Date(e.exam_at).getTime() <= nowMs0 ? (e.duration_min || 55) : 0,
       icon: EXAM_ICON[e.kind] || "🎓", text: `${e.kind === "schalt" ? "Schaltkompetenz" : "Prüfung"} · ${fullName(e.profiles || {})}`, dur: e.duration_min || 55,
       res: e.result === "passed" ? "bestanden" : e.result === "failed" ? "nicht bestanden" : "" })),
@@ -5882,6 +5892,7 @@ async function adminControl() {
     ...(theoryRes.data || []).map((t) => ({ at: t.held_at, min: new Date(t.held_at).getTime() <= nowMs0 ? t.duration_min : 0,
       icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : "" })),
   ];
+  const extras = openOnly ? [] : allExtras;
   const extraLine = (x) => el("div", { class: "cl-row extra" },
     el("span", { class: "cl-time" }, fmtTime(x.at)), el("span", { class: "cl-name" }, `${x.icon} ${x.text}`),
     el("b", { class: "cl-min" }, `${x.dur} Min.${x.res ? ` · ${x.res}` : ""}`), el("span", {}));
@@ -5914,6 +5925,55 @@ async function adminControl() {
   const sickMonth = countVacation(state.timeOff, dateInput(from), dateInput(addDays(to, -1)), /krank/i);   // eigene Krankheitstage (Lohnfortzahlung)
   const monthCard = monthOverview({ vacMonth, vacYear, year: m.getFullYear(), examCount: examsDone.length, theory, theoryAll, theoryMin, allMin, drivenMin: payMin, lateMin: payLateMin, sickMonth, nightMin, pay: payRes.data || null, schemaOk: !theoryRes.error });
 
+  // 📄 Monatsabschluss: alle Tage mit Fahrstunden (Uhrzeit, Dauer), Fehlstunden, Prüfungen, Theorie, Urlaub und Krankheitstage mit Datum
+  function monthClosePrint() {
+    const w = window.open("", "_blank");
+    if (!w) return toast("Bitte Pop-ups für diese Seite erlauben.", true);
+    const d = w.document;
+    d.title = "Monatsabschluss " + monthName(m);
+    const css = d.createElement("style");
+    css.textContent = "body{font:13px system-ui,sans-serif;margin:24px;color:#111}h1{font-size:20px;margin:0 0 2px}h2{font-size:15px;margin:18px 0 6px}" +
+      "table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:4px 7px;text-align:left}th{background:#eee}td.r,th.r{text-align:right}" +
+      "tr.day td{background:#e6f2f8;font-weight:700}tr.sum td{font-weight:700;background:#f6f6f6}.muted{color:#666}.box{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.box div{border:1px solid #ccc;border-radius:8px;padding:6px 10px}.box b{display:block;font-size:16px}";
+    d.head.append(css);
+    const tag = (t, txt, cls) => { const e = d.createElement(t); if (txt !== undefined && txt !== null) e.textContent = txt; if (cls) e.className = cls; return e; };
+    const tr = (cells, cls) => { const r = tag("tr", undefined, cls); cells.forEach(([v, c]) => r.append(tag("td", v, c))); return r; };
+    // Einträge je Tag: Fahrstunden (bezahlt), Fehlstunden, Prüfungen, gehaltene Theorie
+    const items = rows.filter((b) => !b.no_pay && paidMin(b) > 0).map((b) => ({ at: b.slots.starts_at, name: fullName(b.profiles),
+      kind: b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : `Fehlstunde (${STATUS_TEXT[b.status] || "ausgefallen"})`, min: paidMin(b) }))
+      .concat(allExtras.filter((x) => x.min > 0).map((x) => ({ at: x.at, name: x.text.replace(/^(Prüfung|Schaltkompetenz|Theorie) · /, ""), kind: x.text.split(" · ")[0], min: x.min })))
+      .sort((a, b) => a.at.localeCompare(b.at));
+    const table = tag("table");
+    const head = tag("tr"); ["Uhrzeit", "Schüler/in", "Art", "Dauer"].forEach((h, i) => head.append(tag("th", h, i === 3 ? "r" : ""))); table.append(head);
+    let monthMin = 0;
+    const byDay = new Map();
+    items.forEach((x) => { const k = dateInput(x.at); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(x); });
+    for (const [k, list] of byDay) {
+      const dayMinutes = list.reduce((n, x) => n + x.min, 0); monthMin += dayMinutes;
+      table.append(tr([[new Date(k + "T12:00:00").toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" })], [""], [""], [`${dayMinutes} Min.`, "r"]], "day"));
+      list.forEach((x) => table.append(tr([[`${fmtTime(x.at)} Uhr`], [x.name], [x.kind], [`${x.min} Min.`, "r"]])));
+    }
+    table.append(tr([["Monat gesamt"], [""], [`${items.length} Einträge`], [`${monthMin} Min.`, "r"]], "sum"));
+    // Urlaub und Krankheitstage mit Datum
+    const offList = (re) => (state.timeOff || []).filter((t) => re.test(t.note || "") && t.to_day >= dateInput(from) && t.from_day <= dateInput(addDays(to, -1)))
+      .map((t) => `${fmtDayStr(t.from_day < dateInput(from) ? dateInput(from) : t.from_day)}${t.from_day === t.to_day ? "" : " – " + fmtDayStr(t.to_day > dateInput(addDays(to, -1)) ? dateInput(addDays(to, -1)) : t.to_day)}`);
+    const vac = offList(/urlaub/i), sick = offList(/krank/i);
+    const sickMonth = countVacation(state.timeOff, dateInput(from), dateInput(addDays(to, -1)), /krank/i);
+    const box = tag("div", undefined, "box");
+    [[`${driven.length}`, "Fahrstunden"], [`${totalMin} Min.`, "Fahr- und Fehlstunden"], [String(late), "Fehlstunden"], [String(examsDone.length), "Prüfungen"],
+      [`${theoryMin} Min.`, "Theorie"], [String(vacMonth), "Urlaubstage"], [String(sickMonth), "Krankheitstage"], [`${monthMin} Min.`, "Gesamt"]]
+      .forEach(([v, l]) => { const x = tag("div"); x.append(tag("b", v), tag("span", l)); box.append(x); });
+    const offTable = tag("table");
+    const oh = tag("tr"); ["", "Datum"].forEach((h) => oh.append(tag("th", h))); offTable.append(oh);
+    vac.forEach((x) => offTable.append(tr([["🏖️ Urlaub"], [x]])));
+    sick.forEach((x) => offTable.append(tr([["🤒 Krank"], [x]])));
+    if (!vac.length && !sick.length) offTable.append(tr([["–"], ["Keine Urlaubs- oder Krankheitstage"]]));
+    d.body.append(tag("h1", `Monatsabschluss – ${monthName(m)}`),
+      tag("div", `${state.settings.display_name || fullName(state.profile)} · erstellt am ${new Date().toLocaleDateString("de-DE")}`, "muted"),
+      box, tag("h2", "Urlaub und Krankheitstage"), offTable, tag("h2", "Fahrstunden, Fehlstunden, Prüfungen und Theorie nach Tagen"), table,
+      tag("p", "Unbezahlte Fahrstunden sind nicht enthalten. Fehlstunden zählen mit ihrer geplanten Dauer.", "muted"));
+    setTimeout(() => w.print(), 300);
+  }
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
   const next = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); render(); } }, "›");
   const onlyOpen = el("input", { type: "checkbox", checked: openOnly });
@@ -5934,7 +5994,8 @@ async function adminControl() {
         el("label", { class: "check", style: "margin:0" }, onlyOpen, el("span", { class: "small" }, "Nur nicht übertragene"))),
       el("div", { class: "actions" },
         el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows.filter((b) => !b.no_pay)) }, "📊 Excel"),
-        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows.filter((b) => !b.no_pay)) }, "🖨️ Drucken / PDF"))),
+        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows.filter((b) => !b.no_pay)) }, "🖨️ Drucken / PDF"),
+        el("button", { class: "btn small", onclick: () => monthClosePrint() }, "📄 Monatsabschluss"))),
     monthCard,
     days.length ? el("div", { class: "card cl-list" },
       days.map((d) => el("div", { class: "cl-day" },

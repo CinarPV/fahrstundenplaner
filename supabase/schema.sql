@@ -1653,3 +1653,22 @@ grant execute on function public.ack_transfer() to authenticated;
 
 -- Funktionen ein-/ausschalten je Fahrlehrer (Einstellungen → Funktionen). Leer = alles an; ausgeschaltet = { "schluessel": false }
 alter table public.settings add column if not exists features jsonb not null default '{}'::jsonb;
+
+-- Vorabend-Erinnerung an Schüler/innen (je Fahrlehrer unter Einstellungen → Funktionen einschaltbar, Standard: aus)
+-- Geheimer Schlüssel für den Zeitplan – nur die Datenbank und die notify-Funktion kennen ihn (keine Lese-Rechte für App-Nutzer)
+create table if not exists public.app_secrets (name text primary key, value text not null);
+alter table public.app_secrets enable row level security;
+revoke all on public.app_secrets from anon, authenticated;
+insert into public.app_secrets (name, value) values ('cron', replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')) on conflict (name) do nothing;
+
+create extension if not exists pg_net;
+create extension if not exists pg_cron;
+-- Jeden Abend um 18:00 Uhr (Winterzeit; Sommerzeit 19:00): notify-Funktion schickt die Erinnerungen für morgen
+select cron.schedule('fsp-evening-reminder', '0 17 * * *', $cron$
+  select net.http_post(
+    url := 'https://bxyxickwkfzefuixijmt.supabase.co/functions/v1/notify',
+    headers := jsonb_build_object('Content-Type', 'application/json',
+      'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4eXhpY2t3a2Z6ZWZ1aXhpam10Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MDI0NjksImV4cCI6MjEwODk3ODQ2OX0.h78Sm2TqP8zsVt9D61ksN1UbWTXXKfcvtBt3ctxisT4',
+      'x-cron-secret', (select value from public.app_secrets where name = 'cron')),
+    body := '{"kind":"evening"}'::jsonb)
+$cron$);
