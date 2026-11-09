@@ -1650,3 +1650,6 @@ returns void language sql security definer set search_path = public as $$
   update profiles set transfer_ack = true where id = auth.uid();
 $$;
 grant execute on function public.ack_transfer() to authenticated;
+
+-- Funktionen ein-/ausschalten je Fahrlehrer (Einstellungen → Funktionen). Leer = alles an; ausgeschaltet = { "schluessel": false }
+alter table public.settings add column if not exists features jsonb not null default '{}'::jsonb;

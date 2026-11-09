@@ -338,6 +338,55 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
 }
 // „Nicht gefahren“: Termin gleich neu vergeben – optional einen anderen Schüler wählen (nichts gewählt = Termin bleibt frei)
 // Aktive Schüler = freigeschaltet, nicht bestanden (bestanden = archiviert), Zugang nicht abgelaufen
+// ---- Funktionen ein-/ausschalten (je Fahrlehrer, Einstellungen → Funktionen). Standard: alles an. ----
+const FEATURES = [
+  ["Heute", [
+    ["todo", "📋 „Zu erledigen“ oben auf Heute", "Anfragen, Antworten, Abhaken und Registrierungen an einer Stelle"],
+    ["free_today", "🟢 Freie Termine in Heute anzeigen", "die nächsten 7 Arbeitstage"],
+    ["day_overview", "📊 Tagesübersicht (freigegeben · frei · bestätigt)", "kleine Zahlen über jedem Tag"],
+    ["quick_tick", "✓ Schnell abhaken in der Zeile", "Haken direkt in Heute und Kontrolle"],
+    ["move", "🔁 Verschieben-Symbol an bestätigten Fahrstunden", "in Heute und im Kalender"],
+    ["remind", "📣 Knopf „Freie Stunden melden“", "alle Schüler/innen per Mitteilung erinnern"],
+    ["push_banner", "🔔 Hinweis, wenn Mitteilungen aus sind", "oben auf Heute"],
+    ["ask_finished", "🚗 Abfrage „Fahrstunde vorbei“", "nach jeder Fahrstunde: gefahren oder nicht?"],
+  ]],
+  ["Eintragen", [
+    ["notes", "📝 Notizen zu Fahrstunden", "Notizfeld und 📝-Symbol"],
+    ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
+    ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
+    ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
+  ]],
+  ["Schüler/innen", [
+    ["wish_time", "🕐 Wunschzeit vorschlagen", "bis zu 1 Stunde früher oder später"],
+    ["wish_meeting", "📍 Eigenen Treffpunkt vorschlagen", "bei der Anfrage"],
+  ]],
+  ["Kontrolle", [
+    ["pay_estimate", "💶 Lohnschätzung anzeigen", "unverbindliche Brutto-Schätzung im Monat"],
+  ]],
+];
+const feat = (key) => !(state.settings && state.settings.features && state.settings.features[key] === false);
+function featuresCard() {
+  const cur = { ...((state.settings && state.settings.features) || {}) };
+  const boxes = [];
+  const groups = FEATURES.map(([title, list]) => el("div", { class: "feat-group" }, el("div", { class: "feat-title" }, title),
+    list.map(([key, label, hint]) => {
+      const box = el("input", { type: "checkbox", checked: cur[key] !== false });
+      boxes.push([key, box]);
+      return el("label", { class: "check feat-row" }, box, el("span", {}, el("b", {}, label), hint ? el("small", { class: "muted" }, hint) : null));
+    })));
+  const save = el("button", { class: "btn" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    const f = {};
+    boxes.forEach(([k, b]) => { if (!b.checked) f[k] = false; });
+    const { error } = await sb.from("settings").update({ features: f }).eq("teacher_id", state.profile.id);
+    if (error) throw new Error(/features/.test(error.message || "") ? "Dafür muss erst das neue SQL in Supabase laufen." : error.message);
+    state.settings.features = f;
+    toast(Object.keys(f).length ? `Gespeichert – ${Object.keys(f).length} Funktion${Object.keys(f).length === 1 ? "" : "en"} ausgeschaltet.` : "Gespeichert – alle Funktionen an.");
+  });
+  const all = el("button", { class: "btn ghost small", onclick: () => boxes.forEach(([, b]) => (b.checked = true)) }, "Alle einschalten");
+  return el("div", {}, el("p", { class: "muted small" }, "Schalte aus, was du nicht brauchst – die App wird dadurch übersichtlicher. Alles lässt sich jederzeit wieder einschalten."),
+    groups, el("div", { class: "actions" }, save, all));
+}
 // Ganze Zeile antippen öffnet die Fahrstunde – außer man tippt auf einen Knopf, Link oder Haken in der Zeile
 const rowTap = (fn) => (e) => { if (e.target.closest("button, a, input, label.check, .note-ic, [role=button]")) return; fn(); };
 // 📝 antippen → Notiz sofort lesen (ohne den Termin zu öffnen)
@@ -360,9 +409,9 @@ function payNoteFields(pay = true, note = "", noNote = false) {
   box.addEventListener("change", syncPay); syncPay();
   const text = el("textarea", { maxlength: 1000, rows: 2, placeholder: "Notiz zur Fahrstunde (nur für dich), z. B. Probefahrt, Kollege vertreten …" }, note || "");
   return {
-    node: el("div", { class: "pay-note" },
-      el("label", { class: "check pay-check" }, box, payLbl),
-      noNote ? null : [el("label", {}, "Notiz (optional, nur für dich)"), text]),
+    node: !feat("pay_toggle") && (noNote || !feat("notes")) ? el("span", {}) : el("div", { class: "pay-note" },
+      feat("pay_toggle") ? el("label", { class: "check pay-check" }, box, payLbl) : null,
+      noNote || !feat("notes") ? null : [el("label", {}, "Notiz (optional, nur für dich)"), text]),
     noPay: () => !box.checked,
     note: () => text.value.trim() || null,
     reset: () => { box.checked = true; text.value = ""; syncPay(); },
@@ -767,7 +816,7 @@ function durationControl(initial, opts = {}) {
       b("+5", () => set(+input.value + 5)),
       b("+15", () => set(+input.value + 15)),
     ),
-    opts.result ? el("div", { class: "chips dur-chips" }, RESULT_MINUTES.map((m) => b(`${m}`, () => set(m))))
+    opts.result && feat("length_chips") ? el("div", { class: "chips dur-chips" }, RESULT_MINUTES.map((m) => b(`${m}`, () => set(m))))
       : opts.fine ? null : el("div", { class: "chips" }, [45, 90, 135].map((m) => b(`${m} Min.`, () => set(m)))),
   );
   input.addEventListener("focus", () => input.select());           // Antippen markiert die Zahl → direkt überschreiben
@@ -1256,7 +1305,7 @@ async function askSlotReview() {
   return true;
 }
 async function askFinishedLessons() {
-  if (askingDone || !state.profile || !isAdmin() || !state.active || document.hidden || modal.open || state.dirty) return;
+  if (askingDone || !state.profile || !isAdmin() || !state.active || document.hidden || modal.open || state.dirty || !feat("ask_finished")) return;
   askingDone = true;
   try {
     if (maybeAskGender()) return;   // Anrede zuerst (falls noch nicht gespeichert)
@@ -2116,10 +2165,10 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
   .concat(p.own.map((x) => ({ at: x.starts_at,
     node: x.kind === "exam"
       ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
-          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)))
+          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null)
       : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
-          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x))) })));
+          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => ({ at: x.starts_at,
   node: el("div", { class: "tr tap-row block", onclick: rowTap(() => openBlock(x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
@@ -2130,14 +2179,14 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
     el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
-    const name = el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)));
+    const name = [el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null];
     if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr tap-row exam", onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
     return { at: x.starts_at, node: el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
       x.done ? el("span", { class: "tr-pill ok" }, `✓ ${x.duration_min} Min.`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), onclick: () => openPlanned("own", x) }, `${x.duration_min} Min. ✎`),
-      canTick ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
+      canTick && feat("quick_tick") ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
       el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
       phase === "next" && !canTick ? el("div", { class: "tr-foot" }, el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => cancelOwn(x) }, "Absagen")) : null) };
   })));
@@ -2175,6 +2224,7 @@ async function findClashes(items, ignoreSlot = null) {
 }
 // Überschneidung: nachfragen. Wer darauf besteht: die Fahrstunde DAVOR wird bis zum neuen Beginn gekürzt (und so gespeichert).
 async function confirmClash(items, ignoreSlot = null) {
+  if (!feat("clash")) return true;
   const list = await findClashes(items, ignoreSlot);
   if (!list.length) return true;
   const when = (c) => `${fmtDay(c.start)} ${fmtRange(c.start, c.dur)} Uhr`;
@@ -2389,7 +2439,7 @@ async function adminToday() {
   let weekEnd = dayStart(new Date());
   for (let n = 0; n < 7; weekEnd = addDays(weekEnd, 1)) if (isWorkday(weekEnd)) n++;
   weekEnd = weekEnd.getTime();
-  const freeSlots = (slots || []).filter((s) => !activeBooking(s) && !lessons.some((x) => x.s.id === s.id)
+  const freeSlots = !feat("free_today") ? [] : (slots || []).filter((s) => !activeBooking(s) && !lessons.some((x) => x.s.id === s.id)
     && new Date(s.starts_at).getTime() > now && (new Date(s.starts_at).getTime() < weekEnd || lastNotHeld(s)));
   const freeRow = (s) => {
     const x = lastNotHeld(s);
@@ -2485,20 +2535,20 @@ async function adminToday() {
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
       el("span", { class: "tr-name" },
-        B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : "",
-        noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id))),
+        B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
+      feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
             onclick: () => openQuick(s, b, canTick) }, `${s.duration_min} Min. ✎`),
       // Schnell abhaken mit der geplanten Dauer
-      canTick ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
+      canTick && feat("quick_tick") ? el("button", { class: "tr-tick", title: `Gefahren – ${s.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
         if (askSchalt(b)) return openSchaltAsk(b, s.duration_min, save);
         const btn = ev.currentTarget; btn.disabled = true;
         try { await save(b, { actual_minutes: s.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${s.duration_min} Min. gefahren`); }
         catch (e) { btn.disabled = false; fail(e); }
       } }, "✓") : null,
-      phase === "next" && !b._own ? el("button", { class: "tr-move", title: "Verschiebung anfragen", "aria-label": "Verschiebung anfragen", onclick: () => openChangeRequest(s.id) }, "🔁") : null,
+      phase === "next" && !b._own && feat("move") ? el("button", { class: "tr-move", title: "Verschiebung anfragen", "aria-label": "Verschiebung anfragen", onclick: () => openChangeRequest(s.id) }, "🔁") : null,
       el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
@@ -2522,31 +2572,37 @@ async function adminToday() {
     // Tagessumme: Minuten aller stattfindenden/gefahrenen Fahrstunden (gefahren = tatsächliche, sonst geplante Dauer);
     // FS = Fahrstunden à 45 Min. (90 Min. = 2 FS)
     const minutes = dayLessons.filter((x) => x.b.status === "confirmed")
-      .reduce((n, x) => n + (x.b.actual_minutes !== null ? x.b.actual_minutes : x.s.duration_min), 0);
+      .reduce((n, x) => n + (x.b.actual_minutes !== null ? x.b.actual_minutes : x.s.duration_min), 0)
+      + (planned.own || []).filter((x) => x.kind === "lesson" && sameDay(new Date(x.starts_at), day)).reduce((n, x) => n + x.duration_min, 0);   // auch Schüler/innen ohne App
     const fs = Math.round((minutes / LESSON_MIN) * 10) / 10;
     // Ausgefallen nach der Bestätigung (Fehlstunde, krank, abgesagt, nicht erschienen) – Termin nicht neu vergeben
     const missedMin = (slots || []).filter((s) => sameDay(new Date(s.starts_at), day)
       && !(s.bookings || []).some((x) => x.status === "confirmed")
-      && (s.bookings || []).some((x) => NOT_HELD_ICON[x.status] && x.status !== "cancelled_teacher"))
+      && (s.bookings || []).some((x) => NOT_HELD_ICON[x.status] && x.status !== "cancelled_teacher" && x.late_cancel))   // nur Fehlstunden, rechtzeitige Absagen zählen nicht
       .reduce((n, s) => n + s.duration_min, 0);
     const missedFs = Math.round((missedMin / LESSON_MIN) * 10) / 10;
-    const sumText = minutes || missedMin
-      ? `${fs.toLocaleString("de-DE")} FS${missedMin ? ` (+${missedFs.toLocaleString("de-DE")} ausgefallen)` : ""} · ${minutes + missedMin} Min.` : "";
+    // Prüfungen und Schaltkompetenz-Tests (auch von Schüler/innen ohne App) zählen zur Tageszeit dazu
+    const dayExams = (exams || []).filter((e) => sameDay(new Date(e.exam_at), day)).map((e) => e.duration_min || 55)
+      .concat((planned.own || []).filter((x) => x.kind === "exam" && sameDay(new Date(x.starts_at), day)).map((x) => x.duration_min));
+    const examMin = dayExams.reduce((n, m) => n + m, 0);
+    const sumText = minutes || missedMin || examMin
+      ? [minutes ? `${fs.toLocaleString("de-DE")} FS` : "", dayExams.length ? `${dayExams.length} Prüfung${dayExams.length === 1 ? "" : "en"}` : "",
+        missedMin ? `+${missedFs.toLocaleString("de-DE")} Fehlstd.` : ""].filter(Boolean).join(" · ") + ` · ${minutes + missedMin + examMin} Min.` : "";
     const todo = dayLessons.filter((x) => x.b.status === "confirmed" && x.b.actual_minutes === null && new Date(x.s.starts_at).getTime() <= now).length;
-    const overview = dayOverview((slots || []).filter((s) => sameDay(new Date(s.starts_at), day)), day,
+    const overview = !feat("day_overview") ? null : dayOverview((slots || []).filter((s) => sameDay(new Date(s.starts_at), day)), day,
       { onClick: (d) => { showDate(d); goTab("calendar"); } });
     days.push(el("div", { class: "day" + (sameDay(day, new Date()) ? " today" : "") },
       el("div", { class: "day-head" }, el("span", {}, (sameDay(day, new Date()) ? "Heute · " : "") + fmtDay(day)),
-        el("span", { class: "ctl-sum", title: missedMin ? `Gefahren/geplant: ${minutes} Min. · ausgefallen (Fehlstunde, krank …): ${missedMin} Min.` : null }, [sumText, todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
+        el("span", { class: "ctl-sum", title: missedMin || examMin ? `Fahrstunden: ${minutes} Min.${examMin ? ` · Prüfungen: ${examMin} Min.` : ""}${missedMin ? ` · Fehlstunden: ${missedMin} Min.` : ""}` : null }, [sumText, todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
       overview,
       items.length ? items.map((x) => x.node) : overview ? null : el("div", { class: "empty" }, noSlotsText(day))));
   }
-  const todoBox = await adminRequests({ compact: true }).catch(() => null);
+  const todoBox = feat("todo") ? await adminRequests({ compact: true }).catch(() => null) : null;
   const view = el("div", { class: "today-view" },
-    pushBanner(),
+    feat("push_banner") ? pushBanner() : null,
     // Oben: alles, was zu tun ist (Anfragen, Antworten, Abhaken, Registrierungen)
     todoBox,
-    el("div", { class: "remind-row" }, remindBtn()),
+    feat("remind") ? el("div", { class: "remind-row" }, remindBtn()) : null,
     el("div", { class: "today-head" },
       el("button", { class: "btn small ghost", onclick: () => go(-1), "aria-label": "Einen Tag zurück" }, "‹"),
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
@@ -2627,10 +2683,10 @@ async function adminCalendar() {
     // Bestätigte/gefahrene Fahrstunde: Name antippen → Schüler-Infos; Rest des Termins → Termin-Details
     const nameTap = b && b.status === "confirmed" && label
       ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
-    const canMove = b && b.status === "confirmed" && b.actual_minutes === null && !past;
+    const canMove = feat("move") && b && b.status === "confirmed" && b.actual_minutes === null && !past;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
-      b && b.teacher_note ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
+      b && b.teacher_note && feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
 
@@ -2643,7 +2699,7 @@ async function adminCalendar() {
           it("🤒 Krank / 🏖️ Urlaub", () => openSick()),
           it("🗑 Mehrere Termine löschen", () => openDeleteMany(slots)),
           slots.length && !isPhone() ? it("⧉ Woche kopieren", () => openCopyWeek(slots)) : null));
-    } }, "⋯ Mehr"), remindBtn()]),
+    } }, "⋯ Mehr"), feat("remind") ? remindBtn() : null]),
     grid,
   );
 }
@@ -3755,7 +3811,7 @@ async function openAdminSlot(slotId) {
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
     );
     // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
-    {
+    if (feat("notes")) {
       const nt = el("textarea", { maxlength: 1000, rows: 3, placeholder: "z. B. Abholung an der Schule, Kupplung üben, Mutter zahlt bar …" }, b.teacher_note || "");
       const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
       ns.onclick = () => busy(ns, async () => {
@@ -4257,7 +4313,7 @@ function openAddMenu() {
       item("✍️", "Gefahrenes nachtragen", "schon gefahrene Fahrstunde", () => openBackfill()),
       item("🤒", "Krank / Urlaub", "Fahrstunden absagen, Schüler/innen benachrichtigen", () => openSick()),
       item("🏖️", "Tage sperren", "an diesen Tagen keine Anfragen", () => openTimeOff()),
-      item("📣", "Freie Stunden melden", "alle Schüler/innen per Mitteilung erinnern", () => busy(el("button"), remindAllFree))));
+      feat("remind") ? item("📣", "Freie Stunden melden", "alle Schüler/innen per Mitteilung erinnern", () => busy(el("button"), remindAllFree)) : null));
 }
 
 /* ---------------- Fahrlehrer: „Mehr“ ---------------- */
@@ -5423,6 +5479,7 @@ function adminSettings() {
       el("p", { class: "muted small" }, "Du kannst Termine Wochen vorher anlegen – Schüler/innen sehen und anfragen können sie erst so viele Tage vorher. Leer = ohne Grenze."),
       aheadBox,
       el("hr"), saturdaySetting()),
+    group("🧩", "Funktionen ein-/ausschalten", (() => { const n = Object.values(state.settings.features || {}).filter((v) => v === false).length; return n ? `${n} ausgeschaltet` : "alles an"; })(), featuresCard()),
     group("🔔", "Mitteilungen", "an Schüler/innen und an dich", studentPushSettings(), el("hr"), pushCard()),
     group("👤", "Profil & Treffpunkte", sum.profile,
       genderCard(),
@@ -5648,14 +5705,14 @@ function openBooking(s) {
   openModal("Fahrstunde anfragen",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
     earlyBox,
-    el("div", { class: "wish-box" },
+    !feat("wish_time") ? null : el("div", { class: "wish-box" },
       el("b", { class: "wish-box-title" }, "🕐 Andere Uhrzeit gewünscht?"),
       el("div", {}, "Tippe einfach deine Wunschzeit an: bis zu 1 Stunde früher oder später. Dein Fahrlehrer entscheidet, ob es passt."),
       el("div", { class: "tabs wish-tabs" }, wishBtns),
       el("p", { class: "small muted", style: "margin:6px 0 0" }, "✓ = angegebene Uhrzeit, am sichersten."), wishHint),
     meetingBox(meetingOf(s)),
-    el("label", {}, "📍 Anderen Treffpunkt vorschlagen? (optional)"), wishMeet,
-    el("p", { class: "muted small", style: "margin:4px 0 0" }, "Dein Fahrlehrer bestätigt ihn oder schlägt einen anderen vor."),
+    feat("wish_meeting") ? [el("label", {}, "📍 Anderen Treffpunkt vorschlagen? (optional)"), wishMeet,
+      el("p", { class: "muted small", style: "margin:4px 0 0" }, "Dein Fahrlehrer bestätigt ihn oder schlägt einen anderen vor.")] : null,
     el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note, counter,
     el("div", { class: "notice" },
       el("b", {}, "Wichtig: "), "Nach der Bestätigung durch deinen Fahrlehrer ist die Fahrstunde verbindlich. ",
@@ -5776,7 +5833,7 @@ async function adminControl() {
     const start = new Date(b.slots.starts_at).getTime(), nowMs = Date.now();
     const over = start + b.slots.duration_min * 60000 <= nowMs;
     const canTick = nowMs >= start - 45 * 60000;
-    const tick = canTick ? el("button", { type: "button", class: "tr-tick", title: `Gefahren – ${b.slots.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
+    const tick = canTick && feat("quick_tick") ? el("button", { type: "button", class: "tr-tick", title: `Gefahren – ${b.slots.duration_min} Min. abhaken`, "aria-label": "Gefahren abhaken", onclick: async (ev) => {
       if (!b._own && askSchalt(b)) return openSchaltAsk(b, b.slots.duration_min, saveTick);
       const btn = ev.currentTarget; btn.disabled = true;
       try { await saveTick(b, { actual_minutes: b.slots.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(b.profiles)}: ${b.slots.duration_min} Min. gefahren`); }
@@ -5785,6 +5842,7 @@ async function adminControl() {
     return el("div", { class: "cl-row tap-row todo" + (over ? " over" : ""), onclick: rowTap(() => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id))) },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
+      feat("notes") ? noteIcon(b._own ? b._src.note : b.teacher_note, `📝 ${fullName(b.profiles)}`) : null,
       el("span", { class: "cl-flag" }, over ? "☐ nicht abgehakt" : "☐ geplant", ` · ${b.slots.duration_min} Min.`, b.no_pay ? el("span", { class: "unpaid-tag" }, " 💸 unbezahlt") : null),
       tick);
   };
@@ -5797,6 +5855,7 @@ async function adminControl() {
       onclick: rowTap(() => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id))) },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
+      feat("notes") ? noteIcon(b._own ? b._src.note : b.teacher_note, `📝 ${fullName(b.profiles)}`) : null,
       el("b", { class: "cl-min" }, b.no_pay ? el("span", { class: "unpaid-tag" }, `💸 unbezahlt · ${ok ? b.actual_minutes : b.slots.duration_min} Min.`)
         : ok ? `✓ ${b.actual_minutes} Min.` : `Fehlstunde · ${b.slots.duration_min} Min.`),
       el("label", { class: "check cl-box", title: "Ins Fahrschulsystem übertragen" }, box));
@@ -5974,7 +6033,7 @@ function monthOverview(d) {
     el("div", { class: "actions", style: "margin:0" }, addTheory),
     theoryList,
     el("hr"),
-    el("h3", { class: "sec-title", style: "margin-top:0" }, "💶 Einnahmen brutto (unverbindlich)"),
+    feat("pay_estimate") ? [el("h3", { class: "sec-title", style: "margin-top:0" }, "💶 Einnahmen brutto (unverbindlich)"),
     est.parts.length ? [
       est.parts.map(([label, value]) => el("div", { class: "cl-row", style: "cursor:default" }, el("span", { class: "cl-name" }, label), el("b", { class: "cl-min" }, euro(value)))),
       el("div", { class: "cl-sum" }, el("span", {}, "Ungefähr brutto"), el("b", {}, euro(est.total))),
@@ -5984,7 +6043,7 @@ function monthOverview(d) {
       el("summary", {}, "Lohn und Zuschläge eintragen"),
       el("p", { class: "muted small" }, "Nur du siehst diese Angaben. Schüler und andere Fahrlehrer sehen sie nicht."),
       fields.map((f) => f.node),
-      el("div", { class: "actions" }, save)));
+      el("div", { class: "actions" }, save))] : null);
 }
 function openTheoryForm() {
   const now = new Date();
