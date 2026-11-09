@@ -926,3 +926,5 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 #app.readonly .btn:not(.backbtn) { display: none !important; }
 /* Lohn & Notiz beim Eintragen */
 .pay-note { background: #f7faf9; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px 10px; margin-top: 10px; }
+.cl-row.extra { cursor: default; color: var(--muted); }
+.cl-row.extra .cl-min { font-weight: 600; }

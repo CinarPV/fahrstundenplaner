@@ -5672,7 +5672,7 @@ async function adminControl() {
   const from = new Date(m.getFullYear(), m.getMonth(), 1), to = new Date(m.getFullYear(), m.getMonth() + 1, 1);
   const [bookRows, examRes, theoryRes, payRes, ownRes] = await Promise.all([
     loadControlRows(from, to),
-    sb.from("exams").select("id,exam_at,duration_min").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
+    sb.from("exams").select("id,kind,exam_at,duration_min,result,profiles(first_name,last_name)").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
     sb.from("teacher_pay").select("*").eq("teacher_id", state.profile.id).maybeSingle(),
     sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
@@ -5732,7 +5732,7 @@ async function adminControl() {
     const row = el("label", { class: "cl-row" + (ok ? "" : " late") + (b.transferred_at ? " sent" : "") },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
-      el("b", { class: "cl-min" }, ok ? `✓ ${b.actual_minutes} Min.${b.no_pay ? " · ohne Lohn" : ""}` : "Fehlstunde"),
+      el("b", { class: "cl-min" }, ok ? `✓ ${b.actual_minutes} Min.${b.no_pay ? " · ohne Lohn" : ""}` : `Fehlstunde · ${b.slots.duration_min} Min.${b.no_pay ? " · ohne Lohn" : ""}`),
       !ok && !b._own ? el("button", { type: "button", class: "btn small ghost", title: "Fehlstunde ändern (krank / keine Fehlstunde)", onclick: (e) => { e.preventDefault(); e.stopPropagation(); openAdminSlot(b.slots.id); } }, "✎") : null,
       box);
     box.addEventListener("change", async () => {
@@ -5744,15 +5744,30 @@ async function adminControl() {
     return row;
   };
   // Nach Tagen gruppieren (nur Tage mit Fahrstunden)
+  // Minuten, die bezahlt werden: gefahrene Minuten + Fehlstunden (geplante Dauer)
+  const paidMin = (b) => (isTicked(b) ? b.actual_minutes : b.status !== "confirmed" && b.late_cancel ? b.slots.duration_min : 0);
+  const dayMin = (list) => list.reduce((n, b) => n + paidMin(b), 0);
+  // Weitere relevante Einträge des Tages: Prüfungen (auch Schaltkompetenz, auch ohne App) und Theorie – nichts Privates
+  const nowMs0 = Date.now();
+  const extras = openOnly ? [] : [
+    ...(examRes.data || []).map((e) => ({ at: e.exam_at, min: new Date(e.exam_at).getTime() <= nowMs0 ? (e.duration_min || 55) : 0,
+      icon: EXAM_ICON[e.kind] || "🎓", text: `${e.kind === "schalt" ? "Schaltkompetenz" : "Prüfung"} · ${fullName(e.profiles || {})}`, dur: e.duration_min || 55,
+      res: e.result === "passed" ? "bestanden" : e.result === "failed" ? "nicht bestanden" : "" })),
+    ...ownAll.filter((x) => x.kind === "exam").map((x) => ({ at: x.starts_at, min: new Date(x.starts_at).getTime() <= nowMs0 ? x.duration_min : 0,
+      icon: "🎓", text: `Prüfung · ${x.student_name} (ohne App)`, dur: x.duration_min, res: "" })),
+    ...(theoryRes.data || []).map((t) => ({ at: t.held_at, min: new Date(t.held_at).getTime() <= nowMs0 ? t.duration_min : 0,
+      icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : "" })),
+  ];
+  const extraLine = (x) => el("div", { class: "cl-row extra" },
+    el("span", { class: "cl-time" }, fmtTime(x.at)), el("span", { class: "cl-name" }, `${x.icon} ${x.text}`),
+    el("b", { class: "cl-min" }, `${x.dur} Min.${x.res ? ` · ${x.res}` : ""}`), el("span", {}));
   const days = [];
-  for (const b of shown) {
-    const key = dateInput(b.slots.starts_at);
-    let d = days.find((x) => x.key === key);
-    if (!d) days.push((d = { key, list: [] }));
-    d.list.push(b);
-  }
-  const dayMin = (list) => list.filter(isTicked).reduce((n, b) => n + b.actual_minutes, 0);
+  const dayOf = (key) => { let d = days.find((x) => x.key === key); if (!d) days.push((d = { key, list: [], extra: [] })); return d; };
+  for (const b of shown) dayOf(dateInput(b.slots.starts_at)).list.push(b);
+  for (const x of extras) dayOf(dateInput(x.at)).extra.push(x);
+  days.sort((a, b) => a.key.localeCompare(b.key));
   const driven = rows.filter((b) => b.status === "confirmed"), totalMin = dayMin(rows), late = rows.length - driven.length;
+  const lateMin = rows.filter((b) => b.status !== "confirmed").reduce((n, b) => n + paidMin(b), 0);
   const notTicked = allRows.filter((b) => !isFinished(b) && new Date(b.slots.starts_at).getTime() + b.slots.duration_min * 60000 <= Date.now()).length;
   // Monatsübersicht: Prüfungen, Theorie, Gesamtzeit, unverbindlicher Lohn
   const examsApp = (examRes.data || []).filter((e) => new Date(e.exam_at).getTime() <= Date.now());
@@ -5763,14 +5778,16 @@ async function adminControl() {
   const theory = theoryAll.filter((t) => new Date(t.held_at).getTime() <= Date.now());   // geplante, noch nicht gehaltene zählen nicht mit
   const theoryMin = theory.reduce((n, t) => n + t.duration_min, 0);
   // Für den Lohn: nur Fahrstunden, die nicht als „zählt nicht für den Lohn“ markiert sind
-  const payMin = dayMin(rows.filter((b) => !b.no_pay));
+  const payMin = dayMin(rows.filter((b) => !b.no_pay && b.status === "confirmed"));
+  const payLateMin = dayMin(rows.filter((b) => !b.no_pay && b.status !== "confirmed"));
   const nightMin = driven.filter((b) => b.lesson_type === "nacht" && !b.no_pay).reduce((n, b) => n + b.actual_minutes, 0);
   const allMin = totalMin + theoryMin + examMin;
   await loadTimeOff();
   const yKey = (mm) => `${m.getFullYear()}-${pad(mm)}`;
   const vacMonth = countVacation(state.timeOff, dateInput(from), dateInput(addDays(to, -1)));
   const vacYear = countVacation(state.timeOff, `${yKey(1)}-01`, `${yKey(12)}-31`);
-  const monthCard = monthOverview({ vacMonth, vacYear, year: m.getFullYear(), examCount: examsDone.length, theory, theoryAll, theoryMin, allMin, drivenMin: payMin, nightMin, pay: payRes.data || null, schemaOk: !theoryRes.error });
+  const sickMonth = countVacation(state.timeOff, dateInput(from), dateInput(addDays(to, -1)), /krank/i);   // eigene Krankheitstage (Lohnfortzahlung)
+  const monthCard = monthOverview({ vacMonth, vacYear, year: m.getFullYear(), examCount: examsDone.length, theory, theoryAll, theoryMin, allMin, drivenMin: payMin, lateMin: payLateMin, sickMonth, nightMin, pay: payRes.data || null, schemaOk: !theoryRes.error });
 
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
   const next = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); render(); } }, "›");
@@ -5778,7 +5795,7 @@ async function adminControl() {
   onlyOpen.addEventListener("change", () => { state.controlOpenOnly = onlyOpen.checked; render(); });
   const totals = el("div", { class: "cl-totals" },
     el("div", {}, el("b", {}, String(driven.length)), el("span", {}, "Fahrstunden")),
-    el("div", {}, el("b", {}, String(totalMin)), el("span", {}, "Minuten")),
+    el("div", {}, el("b", {}, String(totalMin)), el("span", {}, lateMin ? "Minuten (inkl. Fehlstd.)" : "Minuten")),
     notTicked ? el("div", { class: "warn" }, el("b", {}, String(notTicked)), el("span", {}, "nicht abgehakt")) : null,
     late ? el("div", { class: "warn" }, el("b", {}, String(late)), el("span", {}, late === 1 ? "Fehlstunde" : "Fehlstunden")) : null);
 
@@ -5796,9 +5813,10 @@ async function adminControl() {
     days.length ? el("div", { class: "card cl-list" },
       days.map((d) => el("div", { class: "cl-day" },
         el("div", { class: "cl-head" },
-          el("span", {}, new Date(d.list[0].slots.starts_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })),
-          el("b", {}, dayMin(d.list) ? `${dayMin(d.list)} Min.` : "–")),
-        d.list.map(line))),
+          el("span", {}, new Date(d.key + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })),
+          el("b", {}, (() => { const n = dayMin(d.list.filter(isFinished)) + d.extra.reduce((a, x) => a + x.min, 0); return n ? `${n} Min.` : "–"; })())),
+        d.list.map((b) => ({ at: b.slots.starts_at, node: line(b) })).concat(d.extra.map((x) => ({ at: x.at, node: extraLine(x) })))
+          .sort((a, b) => a.at.localeCompare(b.at)).map((x) => x.node))),
       el("div", { class: "cl-sum" }, el("span", {}, `Monat gesamt · ${driven.length} Fahrstunde${driven.length === 1 ? "" : "n"}` + (late ? ` · ${late} Fehlstd.` : "")), el("b", {}, `${totalMin} Min.`)))
       : el("p", { class: "muted" }, openOnly && allRows.length ? "Alles übertragen – nichts mehr offen. 👍" : "In diesem Monat gibt es noch keine bestätigten Fahrstunden."));
 }
@@ -5809,10 +5827,10 @@ const euro = (v) => (+v || 0).toLocaleString("de-DE", { style: "currency", curre
 // Unverbindliche Brutto-Schätzung: Sätze je 45 Minuten, Prüfungszuschlag je Prüfung; Fehlstunden zählen nicht mit
 // Urlaubstage (Eintrag mit „Urlaub“) zwischen zwei Tagen zählen – Sonntage zählen nicht
 const VACATION_MIN = 480;   // 1 Urlaubstag = 480 Min. Fahrstunde
-function countVacation(list, fromKey, toKey) {
+function countVacation(list, fromKey, toKey, re = /urlaub/i) {
   let n = 0;
   for (const t of list || []) {
-    if (!/urlaub/i.test(t.note || "")) continue;
+    if (!re.test(t.note || "")) continue;
     const a = t.from_day > fromKey ? t.from_day : fromKey, b = t.to_day < toKey ? t.to_day : toKey;
     for (let d = fromInputs(a, "12:00"); dateInput(d) <= b; d = addDays(d, 1)) if (isWorkday(d)) n++;
   }
@@ -5822,6 +5840,8 @@ function payEstimate(pay, d) {
   const per45 = (rate, min) => (+rate || 0) * min / LESSON_MIN;
   const parts = [
     ["Fahrstunden", per45(pay.lesson_rate, d.drivenMin), +pay.lesson_rate > 0],
+    [`Fehlstunden (${d.lateMin || 0} Min.)`, per45(pay.lesson_rate, d.lateMin || 0), +pay.lesson_rate > 0 && d.lateMin > 0],
+    [`Krankheitstage (${d.sickMonth || 0} × ${VACATION_MIN} Min.)`, per45(pay.lesson_rate, (d.sickMonth || 0) * VACATION_MIN), +pay.lesson_rate > 0 && d.sickMonth > 0],
     [`Urlaub (${d.vacMonth || 0} × ${VACATION_MIN} Min.)`, per45(pay.lesson_rate, (d.vacMonth || 0) * VACATION_MIN), +pay.lesson_rate > 0 && d.vacMonth > 0],
     // Theorie wird wie eine Fahrstunde je 45 Min. bezahlt (90 Min. Theorie = 2 × Satz), ein Zuschlag kommt ggf. obendrauf
     [`Theorieunterricht (${d.theoryMin || 0} Min.)`, per45(pay.lesson_rate, d.theoryMin), +pay.lesson_rate > 0 && d.theoryMin > 0],
@@ -5877,9 +5897,10 @@ function monthOverview(d) {
       el("div", {}, el("b", {}, String(d.examCount)), el("span", {}, d.examCount === 1 ? "Prüfung" : "Prüfungen")),
       el("div", {}, el("b", {}, String(d.theory.length)), el("span", {}, "Theoriestunden")),
       el("div", {}, el("b", {}, fmtHours(d.allMin)), el("span", {}, "Gesamtzeit"))),
-    el("p", { class: "muted small", style: "margin:6px 0" }, "Gesamtzeit = abgehakte Fahrstunden, Theorie und Prüfungen."),
+    el("p", { class: "muted small", style: "margin:6px 0" }, "Gesamtzeit = abgehakte Fahrstunden, Fehlstunden, Theorie und Prüfungen."),
     el("div", { class: "cl-totals", style: "margin-top:8px" },
       el("div", {}, el("b", {}, String(d.vacMonth)), el("span", {}, "Urlaubstage im Monat")),
+      d.sickMonth ? el("div", {}, el("b", {}, String(d.sickMonth)), el("span", {}, "Krankheitstage im Monat")) : null,
       el("div", {}, el("b", {}, String(d.vacYear)), el("span", {}, `Urlaubstage ${d.year}`)),
       +pay.vacation_days > 0 ? el("div", { class: +pay.vacation_days - d.vacYear < 0 ? "warn" : "" }, el("b", {}, String(+pay.vacation_days - d.vacYear)), el("span", {}, `noch übrig von ${+pay.vacation_days}`)) : null),
     +pay.vacation_days > 0 ? null : el("p", { class: "muted small", style: "margin:6px 0" }, "Trag unten deine Urlaubstage pro Jahr ein, dann siehst du, wie viele noch übrig sind."),
@@ -5890,7 +5911,7 @@ function monthOverview(d) {
     est.parts.length ? [
       est.parts.map(([label, value]) => el("div", { class: "cl-row", style: "cursor:default" }, el("span", { class: "cl-name" }, label), el("b", { class: "cl-min" }, euro(value)))),
       el("div", { class: "cl-sum" }, el("span", {}, "Ungefähr brutto"), el("b", {}, euro(est.total))),
-      el("p", { class: "muted small", style: "margin:6px 0 0" }, "Nur eine Schätzung, keine Lohnabrechnung. Fehlstunden sind nicht eingerechnet."),
+      el("p", { class: "muted small", style: "margin:6px 0 0" }, "Nur eine Schätzung, keine Lohnabrechnung. Fehlstunden zählen mit ihrer geplanten Dauer, eigene Krankheitstage wie Urlaubstage (480 Min.)."),
     ] : el("p", { class: "muted small" }, "Trag unten deinen Lohn ein, dann rechnet die App die Einnahmen aus."),
     el("details", { class: "fold", open: !est.parts.length },
       el("summary", {}, "Lohn und Zuschläge eintragen"),
