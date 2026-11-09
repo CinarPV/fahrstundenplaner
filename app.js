@@ -360,7 +360,7 @@ const FEATURES = [
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
-    ["moved", "📅 Im Fahrschulsystem an einem anderen Tag eintragen", "z. B. gefahren am 14.01., aufgeschrieben am 10.01. – lila Eintrag im Kalender am Eintrage-Tag", false],
+    ["moved", "📅 Fahrstunde auf einen anderen Tag legen (Fahrschulsystem)", "z. B. gefahren am 14.01., eingetragen am 10.01. – steht dann am 10.01., lila mit „ursprünglich gefahren 14.01.“", false],
   ]],
   ["Schüler/innen", [
     ["evening_reminder", "🌙 Erinnerung am Vorabend", "Schüler/innen bekommen um 18 Uhr eine Mitteilung: „Morgen 14:00 Uhr Fahrstunde · 📍 Treffpunkt“", false],
@@ -2103,12 +2103,12 @@ async function loadPlanned(from, to) {
 const movedAt = (m) => new Date(`${m.day}T${timeInput(m.start)}`).toISOString();
 const movedExtras = (p) => (feat("moved") ? p.moved || [] : []).map((m) => ({ at: movedAt(m),
   node: el("button", { class: "slot moved-in", onclick: (ev) => { ev.stopPropagation(); m.open(); } },
-    slotHead(`↪ ${m.dur} Min.`, "im System eintragen"), m.name,
-    el("div", { class: "moved-real" }, `🚗 gefahren am ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr`)) }));
+    slotHead(fmtRange(movedAt(m), m.dur), "verlegt"), m.name,
+    el("div", { class: "moved-real" }, `🚗 Ursprünglich gefahren: ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr`)) }));
 const movedToday = (p, day) => (feat("moved") ? p.moved || [] : []).filter((m) => sameDay(new Date(m.day + "T12:00:00"), day)).map((m) => ({ at: movedAt(m),
   node: el("div", { class: "tr tap-row moved-in", onclick: rowTap(m.open) },
-    el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, "↪"), el("span", { class: "tr-name" }, m.name), el("span", { class: "tr-pill" }, `${m.dur} Min.`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
-    el("div", { class: "moved-real" }, `🚗 Wirklich gefahren am ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr – hier im System eintragen`)) }));
+    el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(m.start)), el("span", { class: "tr-name" }, m.name), el("span", { class: "tr-pill" }, `${m.dur} Min.`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
+    el("div", { class: "moved-real" }, `🚗 Ursprünglich gefahren: ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr`)) }));
 const ownLabel = (x) => (x.kind === "exam" ? "🎓 Prüfung" : typeLabel(x.lesson_type));
 async function setOwnDone(x, on) {
   const { error } = await sb.from("own_entries").update({ done: on }).eq("id", x.id);
@@ -2182,7 +2182,7 @@ function openPlanned(kind, x) {
     eName ? [el("label", {}, "Name"), eName] : null,
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), eDate), el("div", {}, el("label", {}, "Beginn"), eTime)),
     el("label", {}, "Dauer"), eDur.node, ePn ? ePn.node : null,
-    eBooked ? [el("label", {}, "📅 Im System eingetragen am (optional, leer = Fahrtag)"), eBooked] : null,
+    eBooked ? [el("label", {}, "📅 Auf anderen Tag legen – im System eingetragen am (leer = ursprünglicher Fahrtag)"), eBooked] : null,
     el("p", { class: "muted small" }, isT ? "" : "Der/die Schüler/in hat keine App – die Änderung gilt sofort."),
     el("div", { class: "actions" }, eSave));
   openModal(isT ? "📚 Theorieunterricht" : `${ownLabel(x)} · ${x.student_name}`,
@@ -2201,7 +2201,9 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
   node: el("button", { class: "slot theory", onclick: (ev) => { ev.stopPropagation(); openPlanned("theory", t); } },
     slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) })))
   .concat(p.own.map((x) => ({ at: x.starts_at,
-    node: x.kind === "exam"
+    node: feat("moved") && x.booked_on && x.booked_on !== dateInput(x.starts_at)
+      ? el("button", { class: "slot moved-away", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } }, `→ ${x.student_name} · ${fmtTime(x.starts_at)} – liegt am ${fmtDayStr(x.booked_on)}`)
+      : x.kind === "exam"
       ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null)
       : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
@@ -2217,7 +2219,10 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
     el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
-    const name = [el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name), movedChip(x.booked_on, x.starts_at), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null];
+    if (feat("moved") && x.booked_on && x.booked_on !== dateInput(x.starts_at))
+      return { at: x.starts_at, node: el("div", { class: "tr tap-row moved-away", onclick: rowTap(() => openPlanned("own", x)) },
+        el("div", { class: "tr-head" }, el("span", { class: "tr-time" }, fmtTime(x.starts_at)), el("span", { class: "tr-name" }, `→ ${x.student_name} – liegt am ${fmtDayStr(x.booked_on)}`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) };
+    const name = [el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null];
     if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr tap-row exam", onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
@@ -2565,6 +2570,10 @@ async function adminToday() {
   };
   // Kompakte Zeile pro Fahrstunde – alles in einer Zeile
   const row = ({ s, b }) => {
+    if (feat("moved") && b.booked_on && b.booked_on !== dateInput(s.starts_at))
+      return el("div", { class: "tr tap-row moved-away", onclick: rowTap(() => openAdminSlot(s.id)) },
+        el("div", { class: "tr-head" }, el("span", { class: "tr-time" }, fmtTime(s.starts_at)),
+          el("span", { class: "tr-name" }, `→ ${fullName(b.profiles || {})} – liegt am ${fmtDayStr(b.booked_on)}`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")));
     const start = new Date(s.starts_at).getTime(), end = start + s.duration_min * 60000;
     const p = b.profiles || {}, held = b.status === "confirmed", done = held && b.actual_minutes !== null;
     const meet = b.meeting_point || s.meeting_point || state.settings.meeting_point || "";
@@ -2705,6 +2714,10 @@ async function adminCalendar() {
 
   const grid = weekGrid(slots, (s) => {
     const b = activeBooking(s);
+    // Im Kalender auf den Eintrage-Tag gelegt: hier am echten Fahrtag nur ein kleiner grauer Hinweis
+    if (feat("moved") && b && b.booked_on && b.booked_on !== dateInput(s.starts_at))
+      return el("button", { class: "slot moved-away", onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
+        `→ ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} – liegt am ${fmtDayStr(b.booked_on)}`);
     const notHeld = (s.bookings || []).filter((x) => NOT_HELD_ICON[x.status]).pop();
     const past = new Date(s.starts_at).getTime() < Date.now();
     const glasses = (p) => (p && p.needs_glasses ? " 👓" : "");
@@ -2749,7 +2762,7 @@ async function adminCalendar() {
 async function openBackfill(preStudent) {
   const pn = payNoteFields();
   const bookedOn = el("input", { type: "date" });
-  const bookedBox = el("details", { class: "fold" }, el("summary", {}, "📅 Im System an einem anderen Tag eingetragen? (optional)"),
+  const bookedBox = el("details", { class: "fold" }, el("summary", {}, "📅 Auf einen anderen Tag legen? (im System eingetragen, optional)"),
     el("p", { class: "muted small", style: "margin:4px 0" }, "Datum, unter dem du die Fahrstunde im Fahrschulsystem aufschreibst. Leer = am Fahrtag."), bookedOn);
   const bookedVal = (start) => (bookedOn.value && bookedOn.value !== dateInput(start) ? bookedOn.value : null);
   const { data: students, error } = await myProfiles()
@@ -3907,12 +3920,12 @@ async function openAdminSlot(slotId) {
         const { error } = await sb.from("bookings").update({ booked_on: v }).eq("id", b.id);
         if (error) throw new Error(/booked_on/.test(error.message || "") ? "Dafür muss erst das neue SQL in Supabase laufen." : error.message);
         b.booked_on = v; state.renderOnClose = true;
-        toast(v ? `Gespeichert: zählt in der Kontrolle am ${fmtDayStr(v)}.` : "Gespeichert: zählt am Fahrtag.");
+        toast(v ? `Verlegt auf ${fmtDayStr(v)} – lila markiert mit dem ursprünglichen Fahrtag.` : "Zurück auf den ursprünglichen Fahrtag.");
       });
       const boClear = el("button", { class: "btn small ghost", onclick: () => { bo.value = ""; boSave.click(); } }, "Zurück auf den Fahrtag");
       const bookedBox = el("details", { class: "fold moved-box", open: !!b.booked_on },
-        el("summary", {}, b.booked_on ? `📅 Im System eingetragen am ${fmtDayStr(b.booked_on)}` : "📅 Im System an einem anderen Tag eingetragen?"),
-        el("p", { class: "muted small", style: "margin:4px 0" }, `Gefahren am ${fmtDate(slot.starts_at)}, ${fmtTime(slot.starts_at)} Uhr. Trag hier das Datum ein, unter dem du sie im Fahrschulsystem aufgeschrieben hast – die Kontrolle zeigt sie dann dort mit dem Hinweis auf den echten Fahrtag.`),
+        el("summary", {}, b.booked_on ? `📅 Verlegt auf ${fmtDayStr(b.booked_on)} (im System eingetragen)` : "📅 Auf einen anderen Tag legen (im System eintragen)"),
+        el("p", { class: "muted small", style: "margin:4px 0" }, `Ursprünglich gefahren am ${fmtDate(slot.starts_at)}, ${fmtTime(slot.starts_at)} Uhr. Wähle den Tag, an dem du sie im Fahrschulsystem einträgst – im Kalender, in Heute und in der Kontrolle steht sie dann dort, lila markiert mit dem ursprünglichen Fahrtag.`),
         el("div", { class: "done-row" }, bo, boSave, b.booked_on ? boClear : null));
       // gut sichtbar oben: direkt unter der Notiz
       const ni = parts.findIndex((x) => x && x.classList && x.classList.contains("note-sec"));
