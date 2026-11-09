@@ -5805,6 +5805,8 @@ function payEstimate(pay, d) {
   const parts = [
     ["Fahrstunden", per45(pay.lesson_rate, d.drivenMin), +pay.lesson_rate > 0],
     [`Urlaub (${d.vacMonth || 0} × ${VACATION_MIN} Min.)`, per45(pay.lesson_rate, (d.vacMonth || 0) * VACATION_MIN), +pay.lesson_rate > 0 && d.vacMonth > 0],
+    // Theorie wird wie eine Fahrstunde je 45 Min. bezahlt (90 Min. Theorie = 2 × Satz), ein Zuschlag kommt ggf. obendrauf
+    [`Theorieunterricht (${d.theoryMin || 0} Min.)`, per45(pay.lesson_rate, d.theoryMin), +pay.lesson_rate > 0 && d.theoryMin > 0],
     ["Zuschlag Theorie", per45(pay.theory_bonus, d.theoryMin), +pay.theory_bonus > 0],
     ["Zuschlag Prüfungen", (+pay.exam_bonus || 0) * d.examCount, +pay.exam_bonus > 0],
     ["Zuschlag Nachtfahrten", per45(pay.night_bonus, d.nightMin), +pay.night_bonus > 0],
@@ -5834,7 +5836,7 @@ function monthOverview(d) {
     const input = el("input", { type: "number", min: 0, step: "0.01", inputmode: "decimal", value: pay[key] ?? "", placeholder: "0,00" });
     return { key, input, node: el("div", {}, el("label", {}, label), input) };
   };
-  const fields = [field("Fahrstunde, brutto je 45 Min. (€)", "lesson_rate"), field("Zuschlag Theorie je 45 Min. (€)", "theory_bonus"),
+  const fields = [field("Fahrstunde und Theorie, brutto je 45 Min. (€)", "lesson_rate"), field("Zuschlag Theorie je 45 Min. (€)", "theory_bonus"),
     field("Zuschlag je Prüfung (€)", "exam_bonus"), field("Zuschlag Nachtfahrt je 45 Min. (€)", "night_bonus"),
     field("Urlaubstage pro Jahr", "vacation_days")];
   fields[4].input.step = "1"; fields[4].input.placeholder = "z. B. 25";
