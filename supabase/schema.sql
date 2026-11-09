@@ -1528,3 +1528,125 @@ begin
   return v_id;
 end $$;
 grant execute on function public.book_slot(uuid, text, boolean, timestamptz) to authenticated;
+
+-- ===== November-Paket: Lohn-Schalter, Notizen, Wunsch-Treffpunkt, Übergabe an anderen Fahrlehrer, 3 Monate Lesezugriff =====
+
+-- Fahrstunde zählt nicht für den Lohn + private Notiz des Fahrlehrers
+alter table public.bookings add column if not exists no_pay boolean not null default false;
+alter table public.bookings add column if not exists teacher_note text check (char_length(teacher_note) <= 1000);
+alter table public.own_entries add column if not exists no_pay boolean not null default false;
+-- Wunsch-Treffpunkt der Schülerin / des Schülers bei der Anfrage
+alter table public.bookings add column if not exists wish_meeting text check (char_length(wish_meeting) <= 200);
+
+create or replace function public.set_wish_meeting(p_booking uuid, p_text text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  update bookings set wish_meeting = nullif(left(trim(coalesce(p_text, '')), 200), '')
+  where id = p_booking and student_id = auth.uid() and status = 'requested';
+end $$;
+grant execute on function public.set_wish_meeting(uuid, text) to authenticated;
+
+-- Gesperrt seit (für 3 Monate Lesezugriff nach Sperre / Abschluss)
+alter table public.profiles add column if not exists blocked_at timestamptz;
+update public.profiles set blocked_at = coalesce(finished_at, now()) where status = 'blocked' and blocked_at is null;
+create or replace function public.track_blocked_at()
+returns trigger language plpgsql as $$
+begin
+  if new.status = 'blocked' and old.status is distinct from 'blocked' then new.blocked_at := now();
+  elsif new.status <> 'blocked' then new.blocked_at := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists profiles_blocked_at on public.profiles;
+create trigger profiles_blocked_at before update of status on public.profiles
+  for each row execute function public.track_blocked_at();
+
+-- Schüler/in darf die eigenen Fahrstunden noch ansehen: aktiv ODER bis 3 Monate nach Sperre/Abschluss/Ablauf
+create or replace function public.can_view_own()
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.is_active() or exists (
+    select 1 from profiles p where p.id = auth.uid() and p.role = 'student' and (
+      (p.status = 'blocked' and coalesce(p.blocked_at, p.finished_at, now()) >= now() - interval '90 days')
+      or (p.status = 'active' and p.valid_until is not null and p.valid_until >= current_date - 90 - 28)));
+$$;
+grant execute on function public.can_view_own() to authenticated;
+
+drop policy if exists bookings_select on public.bookings;
+create policy bookings_select on public.bookings for select
+  using (student_id = auth.uid() and public.can_view_own());
+drop policy if exists slots_own on public.slots;
+create policy slots_own on public.slots for select
+  using (public.can_view_own() and public.has_own_booking(id));
+drop policy if exists progress_select on public.training_progress;
+create policy progress_select on public.training_progress for select
+  using ((student_id = auth.uid() and public.can_view_own())
+         or (public.is_teacher() and public.student_teacher(student_id) = auth.uid()));
+drop policy if exists exams_select on public.exams;
+create policy exams_select on public.exams for select
+  using (student_id = auth.uid() and public.can_view_own());
+drop policy if exists topics_select on public.training_topics;
+create policy topics_select on public.training_topics for select
+  using (public.can_view_own() and (teacher_id is null or teacher_id = public.my_teacher_id()));
+
+-- Übergabe an anderen Fahrlehrer
+alter table public.profiles add column if not exists transferred_from uuid references public.profiles(id) on delete set null;
+alter table public.profiles add column if not exists transfer_to_name text;
+alter table public.profiles add column if not exists transferred_at timestamptz;
+alter table public.profiles add column if not exists transfer_ack boolean not null default true;
+
+-- Frühere Schüler/innen (Fahrstunden auf meinen Terminen): Namen weiter sichtbar (Kontrolle, Lohn)
+create or replace function public.taught_by_me(p_student uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from bookings b join slots s on s.id = b.slot_id where b.student_id = p_student and s.teacher_id = auth.uid());
+$$;
+grant execute on function public.taught_by_me(uuid) to authenticated;
+drop policy if exists profiles_select on public.profiles;
+create policy profiles_select on public.profiles for select
+  using (id = auth.uid()
+         or (public.is_teacher() and teacher_id = auth.uid())
+         or (public.is_teacher() and role = 'student' and public.taught_by_me(id))
+         or (public.is_owner() and role = 'teacher')
+         or (public.is_school_admin() and role = 'teacher' and school_id = auth.uid()));
+
+-- Mögliche Ziel-Fahrlehrer (aktive, gültige Fahrlehrer außer mir)
+create or replace function public.transfer_targets()
+returns table (id uuid, display_name text)
+language sql stable security definer set search_path = public as $$
+  select p.id, coalesce(nullif(s.display_name, ''), trim(p.first_name || ' ' || p.last_name))
+  from profiles p left join settings s on s.teacher_id = p.id
+  where p.role = 'teacher' and p.status = 'active' and p.id <> auth.uid() and public.teacher_valid(p.id) and public.is_teacher()
+  order by 2;
+$$;
+grant execute on function public.transfer_targets() to authenticated;
+
+-- Schüler/in übergeben: nur der aktuelle Fahrlehrer. Offene Anfragen/Angebote und künftige Fahrstunden beim alten Fahrlehrer werden abgesagt.
+create or replace function public.transfer_student(p_student uuid, p_teacher uuid)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_name text; v_n int;
+begin
+  if not is_teacher() then raise exception 'Nur Fahrlehrer'; end if;
+  if not exists (select 1 from profiles where id = p_student and role = 'student' and teacher_id = auth.uid()) then
+    raise exception 'Diese/r Schüler/in gehört nicht zu dir';
+  end if;
+  if p_teacher = auth.uid() or not teacher_valid(p_teacher) then raise exception 'Bitte einen gültigen Fahrlehrer wählen'; end if;
+  select coalesce(nullif(s.display_name, ''), trim(p.first_name || ' ' || p.last_name)) into v_name
+  from profiles p left join settings s on s.teacher_id = p.id where p.id = p_teacher;
+  update bookings b set status = 'cancelled_teacher', cancel_reason = 'Fahrlehrerwechsel', late_cancel = false, decided_at = now()
+  from slots s where s.id = b.slot_id and b.student_id = p_student and s.teacher_id = auth.uid()
+    and b.status in ('requested', 'offered', 'confirmed') and b.actual_minutes is null and s.starts_at > now();
+  get diagnostics v_n = row_count;
+  delete from student_limits where student_id = p_student;
+  update profiles set teacher_id = p_teacher, transferred_from = auth.uid(), transfer_to_name = v_name,
+    transferred_at = now(), transfer_ack = false, max_open = null
+  where id = p_student;
+  return v_n;
+end $$;
+grant execute on function public.transfer_student(uuid, uuid) to authenticated;
+
+-- Schüler/in bestätigt, dass er/sie die Übergabe gesehen hat
+create or replace function public.ack_transfer()
+returns void language sql security definer set search_path = public as $$
+  update profiles set transfer_ack = true where id = auth.uid();
+$$;
+grant execute on function public.ack_transfer() to authenticated;

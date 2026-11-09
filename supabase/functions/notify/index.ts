@@ -153,6 +153,12 @@ Deno.serve(async (req) => {
           for (const id of to) messages.push({ to: id, title, body });
         }
       }
+    } else if (kind === "transferred" && Array.isArray(ids) && ids.length === 1) {
+      // Übergabe an andere/n Fahrlehrer/in: nur der bisherige Fahrlehrer darf auslösen
+      const { data: p } = await admin.from("profiles").select("id,role,transferred_from,transfer_to_name").eq("id", ids[0]).maybeSingle();
+      if (p && p.role === "student" && p.transferred_from === user.id) {
+        messages.push({ to: p.id, title: "🔀 Neue/r Fahrlehrer/in", body: `Ab sofort ist ${p.transfer_to_name || "ein/e neue/r Fahrlehrer/in"} für deine Fahrstunden zuständig. Bitte öffne die App und bestätige es.` });
+      }
     } else if (kind === "registered") {
       // Neue Registrierung: dem Fahrlehrer Bescheid geben (nur solange der Schüler noch auf Freischaltung wartet)
       const { data: p } = await admin.from("profiles").select("*").eq("id", user.id).maybeSingle();

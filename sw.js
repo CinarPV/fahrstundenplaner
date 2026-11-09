@@ -3,7 +3,7 @@
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
    Daten (Supabase) werden NIE zwischengespeichert. */
-const CACHE = "fsp-v93";
+const CACHE = "fsp-v94";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 

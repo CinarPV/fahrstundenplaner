@@ -922,3 +922,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 .remind-row { display: flex; justify-content: flex-end; margin: -6px 0 10px; }
 .remind-btn { background: #fff4e5; color: #b45309; border: 1px solid #f5b971; font-weight: 600; }
 .remind-btn:hover { background: #ffe9cc; }
+/* Nur ansehen (gesperrt/abgeschlossen): keine Aktionsknöpfe */
+#app.readonly .btn:not(.backbtn) { display: none !important; }
+/* Lohn & Notiz beim Eintragen */
+.pay-note { background: #f7faf9; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px 10px; margin-top: 10px; }
