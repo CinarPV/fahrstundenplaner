@@ -979,3 +979,6 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 .cl-row.extra.ghost { color: #6b4fbb; font-style: italic; }
 .moved-box summary { font-weight: 600; }
 .moved-box input[type="date"] { max-width: 180px; }
+.moved-chip { display: inline-flex; align-items: center; flex: none; margin-left: 6px; padding: 1px 7px; border-radius: 8px; background: #efe9fb; border: 1px solid #b9a5ea; color: #5b3fb0; font-size: 12px; font-weight: 700; white-space: nowrap; vertical-align: middle; }
+.slot .moved-chip { margin: 4px 4px 0 0; }
+.moved-box { background: #f6f2ff; border: 1px solid #d9cdf6; border-radius: 12px; padding: 8px 12px; margin: 10px 0; }

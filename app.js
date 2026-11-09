@@ -397,6 +397,13 @@ function featuresCard() {
 }
 // Ganze Zeile antippen öffnet die Fahrstunde – außer man tippt auf einen Knopf, Link oder Haken in der Zeile
 const rowTap = (fn) => (e) => { if (e.target.closest("button, a, input, label.check, .note-ic, [role=button]")) return; fn(); };
+// 📅 Kennzeichen: Fahrstunde steht im Fahrschulsystem an einem anderen Tag
+function movedChip(bookedOn, startIso, long = false) {
+  if (!bookedOn || bookedOn === dateInput(startIso)) return null;
+  const d = new Date(bookedOn + "T12:00:00");
+  const short = d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" });
+  return el("span", { class: "moved-chip", title: `Im Fahrschulsystem eingetragen am ${fmtDayStr(bookedOn)}` }, long ? `📅 im System: ${short}` : `📅 ${short}`);
+}
 // 📝 antippen → Notiz sofort lesen (ohne den Termin zu öffnen)
 function noteIcon(text, title = "📝 Notiz", open = null) {
   if (!text) return null;
@@ -2180,7 +2187,7 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
           slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null)
       : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
-          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null) })));
+          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, movedChip(x.booked_on, x.starts_at, true), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => ({ at: x.starts_at,
   node: el("div", { class: "tr tap-row block", onclick: rowTap(() => openBlock(x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
@@ -2191,7 +2198,7 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
     el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
-    const name = [el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null];
+    const name = [el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name), movedChip(x.booked_on, x.starts_at), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null];
     if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr tap-row exam", onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
@@ -2430,7 +2437,7 @@ async function adminToday() {
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
-    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
@@ -2548,6 +2555,7 @@ async function adminToday() {
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
       el("span", { class: "tr-name" },
         B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
+      movedChip(b.booked_on, s.starts_at),
       feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
@@ -2664,7 +2672,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", 
 async function adminCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,booked_on,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
@@ -2698,6 +2706,7 @@ async function adminCalendar() {
     const canMove = feat("move") && b && b.status === "confirmed" && b.actual_minutes === null && !past;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
+      b ? movedChip(b.booked_on, s.starts_at, true) : null,
       b && b.teacher_note && feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
@@ -3886,7 +3895,10 @@ async function openAdminSlot(slotId) {
         el("summary", {}, b.booked_on ? `📅 Im System eingetragen am ${fmtDayStr(b.booked_on)}` : "📅 Im System an einem anderen Tag eingetragen?"),
         el("p", { class: "muted small", style: "margin:4px 0" }, `Gefahren am ${fmtDate(slot.starts_at)}, ${fmtTime(slot.starts_at)} Uhr. Trag hier das Datum ein, unter dem du sie im Fahrschulsystem aufgeschrieben hast – die Kontrolle zeigt sie dann dort mit dem Hinweis auf den echten Fahrtag.`),
         el("div", { class: "done-row" }, bo, boSave, b.booked_on ? boClear : null));
-      parts.push(el("hr"), doneControls(slot, b, done), bookedBox,
+      // gut sichtbar oben: direkt unter der Notiz
+      const ni = parts.findIndex((x) => x && x.classList && x.classList.contains("note-sec"));
+      parts.splice(ni >= 0 ? ni + 1 : 2, 0, bookedBox);
+      parts.push(el("hr"), doneControls(slot, b, done),
         el("details", { class: "fold", open: !!b.no_pay }, el("summary", {}, b.no_pay ? "💸 Unbezahlt" : "💶 Bezahlt / unbezahlt"),
           pn.node, el("div", { class: "actions", style: "margin:6px 0 0" }, pnSave)),
         el("hr"), el("h3", {}, "Termin & Hinweis"));
