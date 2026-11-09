@@ -360,6 +360,7 @@ const FEATURES = [
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
+    ["moved", "📅 Im Fahrschulsystem an einem anderen Tag eintragen", "z. B. gefahren am 14.01., aufgeschrieben am 10.01. – lila Eintrag im Kalender am Eintrage-Tag", false],
   ]],
   ["Schüler/innen", [
     ["evening_reminder", "🌙 Erinnerung am Vorabend", "Schüler/innen bekommen um 18 Uhr eine Mitteilung: „Morgen 14:00 Uhr Fahrstunde · 📍 Treffpunkt“", false],
@@ -399,7 +400,7 @@ function featuresCard() {
 const rowTap = (fn) => (e) => { if (e.target.closest("button, a, input, label.check, .note-ic, [role=button]")) return; fn(); };
 // 📅 Kennzeichen: Fahrstunde steht im Fahrschulsystem an einem anderen Tag
 function movedChip(bookedOn, startIso, long = false) {
-  if (!bookedOn || bookedOn === dateInput(startIso)) return null;
+  if (!feat("moved") || !bookedOn || bookedOn === dateInput(startIso)) return null;
   const d = new Date(bookedOn + "T12:00:00");
   const short = d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" });
   return el("span", { class: "moved-chip out", title: `Im Fahrschulsystem eingetragen am ${fmtDayStr(bookedOn)}` }, long ? `→ im System am ${short}` : `→ System ${short}`);
@@ -2100,11 +2101,11 @@ async function loadPlanned(from, to) {
 }
 // Lila Eintrag am Tag, an dem die Fahrstunde im Fahrschulsystem aufgeschrieben wird: zeigt, wann sie wirklich gefahren wurde
 const movedAt = (m) => new Date(`${m.day}T${timeInput(m.start)}`).toISOString();
-const movedExtras = (p) => (p.moved || []).map((m) => ({ at: movedAt(m),
+const movedExtras = (p) => (feat("moved") ? p.moved || [] : []).map((m) => ({ at: movedAt(m),
   node: el("button", { class: "slot moved-in", onclick: (ev) => { ev.stopPropagation(); m.open(); } },
     slotHead(`↪ ${m.dur} Min.`, "im System eintragen"), m.name,
     el("div", { class: "moved-real" }, `🚗 gefahren am ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr`)) }));
-const movedToday = (p, day) => (p.moved || []).filter((m) => sameDay(new Date(m.day + "T12:00:00"), day)).map((m) => ({ at: movedAt(m),
+const movedToday = (p, day) => (feat("moved") ? p.moved || [] : []).filter((m) => sameDay(new Date(m.day + "T12:00:00"), day)).map((m) => ({ at: movedAt(m),
   node: el("div", { class: "tr tap-row moved-in", onclick: rowTap(m.open) },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, "↪"), el("span", { class: "tr-name" }, m.name), el("span", { class: "tr-pill" }, `${m.dur} Min.`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
     el("div", { class: "moved-real" }, `🚗 Wirklich gefahren am ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr – hier im System eintragen`)) }));
@@ -2163,7 +2164,7 @@ function openPlanned(kind, x) {
   const eDur = durationControl(x.duration_min);
   const eName = isT ? null : el("input", { maxlength: 80, value: x.student_name || "" });
   const ePn = !isT && x.kind === "lesson" ? payNoteFields(!x.no_pay, x.note || "") : null;
-  const eBooked = !isT && x.kind === "lesson" ? el("input", { type: "date", value: x.booked_on || "" }) : null;
+  const eBooked = !isT && x.kind === "lesson" && (feat("moved") || x.booked_on) ? el("input", { type: "date", value: x.booked_on || "" }) : null;
   const eSave = el("button", { class: "btn" }, "Änderung speichern");
   eSave.onclick = () => busy(eSave, async () => {
     const at = fromInputs(eDate.value, eTime.value);
@@ -2842,7 +2843,7 @@ async function openBackfill(preStudent) {
     el("label", {}, "Was?"), typeRow, result,
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
     el("label", {}, "Dauer (gefahrene Minuten)"), dur.node,
-    pn.node, bookedBox,
+    pn.node, feat("moved") ? bookedBox : null,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Fertig")),
     log);
 }
@@ -3915,7 +3916,7 @@ async function openAdminSlot(slotId) {
         el("div", { class: "done-row" }, bo, boSave, b.booked_on ? boClear : null));
       // gut sichtbar oben: direkt unter der Notiz
       const ni = parts.findIndex((x) => x && x.classList && x.classList.contains("note-sec"));
-      parts.splice(ni >= 0 ? ni + 1 : 2, 0, bookedBox);
+      if (feat("moved") || b.booked_on) parts.splice(ni >= 0 ? ni + 1 : 2, 0, bookedBox);
       parts.push(el("hr"), doneControls(slot, b, done),
         el("details", { class: "fold", open: !!b.no_pay }, el("summary", {}, b.no_pay ? "💸 Unbezahlt" : "💶 Bezahlt / unbezahlt"),
           pn.node, el("div", { class: "actions", style: "margin:6px 0 0" }, pnSave)),
