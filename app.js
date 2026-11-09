@@ -2500,12 +2500,20 @@ async function adminToday() {
     const minutes = dayLessons.filter((x) => x.b.status === "confirmed")
       .reduce((n, x) => n + (x.b.actual_minutes !== null ? x.b.actual_minutes : x.s.duration_min), 0);
     const fs = Math.round((minutes / LESSON_MIN) * 10) / 10;
+    // Ausgefallen nach der Bestätigung (Fehlstunde, krank, abgesagt, nicht erschienen) – Termin nicht neu vergeben
+    const missedMin = (slots || []).filter((s) => sameDay(new Date(s.starts_at), day)
+      && !(s.bookings || []).some((x) => x.status === "confirmed")
+      && (s.bookings || []).some((x) => NOT_HELD_ICON[x.status] && x.status !== "cancelled_teacher"))
+      .reduce((n, s) => n + s.duration_min, 0);
+    const missedFs = Math.round((missedMin / LESSON_MIN) * 10) / 10;
+    const sumText = minutes || missedMin
+      ? `${fs.toLocaleString("de-DE")} FS${missedMin ? ` (+${missedFs.toLocaleString("de-DE")} ausgefallen)` : ""} · ${minutes + missedMin} Min.` : "";
     const todo = dayLessons.filter((x) => x.b.status === "confirmed" && x.b.actual_minutes === null && new Date(x.s.starts_at).getTime() <= now).length;
     const overview = dayOverview((slots || []).filter((s) => sameDay(new Date(s.starts_at), day)), day,
       { onClick: (d) => { showDate(d); goTab("calendar"); } });
     days.push(el("div", { class: "day" + (sameDay(day, new Date()) ? " today" : "") },
       el("div", { class: "day-head" }, el("span", {}, (sameDay(day, new Date()) ? "Heute · " : "") + fmtDay(day)),
-        el("span", { class: "ctl-sum" }, [minutes ? `${fs.toLocaleString("de-DE")} FS · ${minutes} Min.` : "", todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
+        el("span", { class: "ctl-sum", title: missedMin ? `Gefahren/geplant: ${minutes} Min. · ausgefallen (Fehlstunde, krank …): ${missedMin} Min.` : null }, [sumText, todo ? `⏰ ${todo} offen` : ""].filter(Boolean).join(" · "))),
       overview,
       items.length ? items.map((x) => x.node) : overview ? null : el("div", { class: "empty" }, noSlotsText(day))));
   }
