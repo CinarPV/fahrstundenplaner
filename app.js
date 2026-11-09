@@ -402,7 +402,7 @@ function movedChip(bookedOn, startIso, long = false) {
   if (!bookedOn || bookedOn === dateInput(startIso)) return null;
   const d = new Date(bookedOn + "T12:00:00");
   const short = d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" });
-  return el("span", { class: "moved-chip", title: `Im Fahrschulsystem eingetragen am ${fmtDayStr(bookedOn)}` }, long ? `📅 im System: ${short}` : `📅 ${short}`);
+  return el("span", { class: "moved-chip out", title: `Im Fahrschulsystem eingetragen am ${fmtDayStr(bookedOn)}` }, long ? `→ im System am ${short}` : `→ System ${short}`);
 }
 // 📝 antippen → Notiz sofort lesen (ohne den Termin zu öffnen)
 function noteIcon(text, title = "📝 Notiz", open = null) {
@@ -2083,13 +2083,31 @@ const blockAt = (startMs, durMin) => (state.timeBlocks || []).find((b) => { cons
 
 // Theorie und eigene Einträge (Schüler ohne App) eines Zeitraums – nur für den Fahrlehrer sichtbar
 async function loadPlanned(from, to) {
-  const [t, o, bl] = await Promise.all([
+  const [t, o, bl, mb, mo] = await Promise.all([
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
     sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
     sb.from("time_blocks").select("id,starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
+    // Fahrstunden, die an einem anderen Tag gefahren, aber an diesen Tagen im Fahrschulsystem eingetragen werden
+    sb.from("bookings").select("id,status,actual_minutes,booked_on,profiles(first_name,last_name),slots!inner(id,starts_at,duration_min,teacher_id)")
+      .eq("slots.teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to)),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to)),
   ]);
-  return { theory: t.data || [], own: o.data || [], blocks: bl.data || [] };
+  const moved = (mb.error ? [] : mb.data || []).filter((b) => b.slots && b.status === "confirmed" && b.booked_on !== dateInput(b.slots.starts_at))
+    .map((b) => ({ day: b.booked_on, start: b.slots.starts_at, dur: b.actual_minutes || b.slots.duration_min, name: fullName(b.profiles), open: () => openAdminSlot(b.slots.id) }))
+    .concat((mo.error ? [] : mo.data || []).filter((x) => x.booked_on !== dateInput(x.starts_at))
+      .map((x) => ({ day: x.booked_on, start: x.starts_at, dur: x.duration_min, name: x.student_name + " (ohne App)", open: () => openPlanned("own", x) })));
+  return { theory: t.data || [], own: o.data || [], blocks: bl.data || [], moved };
 }
+// Lila Eintrag am Tag, an dem die Fahrstunde im Fahrschulsystem aufgeschrieben wird: zeigt, wann sie wirklich gefahren wurde
+const movedAt = (m) => new Date(`${m.day}T${timeInput(m.start)}`).toISOString();
+const movedExtras = (p) => (p.moved || []).map((m) => ({ at: movedAt(m),
+  node: el("button", { class: "slot moved-in", onclick: (ev) => { ev.stopPropagation(); m.open(); } },
+    slotHead(`↪ ${m.dur} Min.`, "im System eintragen"), m.name,
+    el("div", { class: "moved-real" }, `🚗 gefahren am ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr`)) }));
+const movedToday = (p, day) => (p.moved || []).filter((m) => sameDay(new Date(m.day + "T12:00:00"), day)).map((m) => ({ at: movedAt(m),
+  node: el("div", { class: "tr tap-row moved-in", onclick: rowTap(m.open) },
+    el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, "↪"), el("span", { class: "tr-name" }, m.name), el("span", { class: "tr-pill" }, `${m.dur} Min.`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
+    el("div", { class: "moved-real" }, `🚗 Wirklich gefahren am ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr – hier im System eintragen`)) }));
 const ownLabel = (x) => (x.kind === "exam" ? "🎓 Prüfung" : typeLabel(x.lesson_type));
 async function setOwnDone(x, on) {
   const { error } = await sb.from("own_entries").update({ done: on }).eq("id", x.id);
@@ -2586,7 +2604,7 @@ async function adminToday() {
     const items = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day)).map((x) => ({ at: x.s.starts_at, node: row(x) }))
       .concat(freeSlots.filter((s) => sameDay(new Date(s.starts_at), day)).map((s) => ({ at: s.starts_at, node: freeRow(s) })))
       .concat((exams || []).filter((e) => sameDay(new Date(e.exam_at), day)).map((e) => ({ at: e.exam_at, node: examRow(e) })))
-      .concat(plannedToday(planned, day))
+      .concat(plannedToday(planned, day), movedToday(planned, day))
       .sort((a, b) => a.at.localeCompare(b.at));
     const dayLessons = lessons.filter((x) => sameDay(new Date(x.s.starts_at), day));
     // Tagessumme: Minuten aller stattfindenden/gefahrenen Fahrstunden (gefahren = tatsächliche, sonst geplante Dauer);
@@ -2709,7 +2727,7 @@ async function adminCalendar() {
       b ? movedChip(b.booked_on, s.starts_at, true) : null,
       b && b.teacher_note && feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
-  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
+  }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned), movedExtras(planned)), true);
 
   return el("div", {},
     weekBar([el("button", { class: "btn small ghost", onclick: () => {

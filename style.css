@@ -982,3 +982,9 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 .moved-chip { display: inline-flex; align-items: center; flex: none; margin-left: 6px; padding: 1px 7px; border-radius: 8px; background: #efe9fb; border: 1px solid #b9a5ea; color: #5b3fb0; font-size: 12px; font-weight: 700; white-space: nowrap; vertical-align: middle; }
 .slot .moved-chip { margin: 4px 4px 0 0; }
 .moved-box { background: #f6f2ff; border: 1px solid #d9cdf6; border-radius: 12px; padding: 8px 12px; margin: 10px 0; }
+/* Am System-Tag: lila Eintrag mit dem echten Fahrtag */
+.slot.moved-in, .tr.moved-in { background: #f3edff; border: 1px dashed #9b7fe0; color: #3d2a7a; }
+.moved-real { font-size: 12.5px; font-weight: 700; color: #5b3fb0; margin-top: 3px; }
+.tr.moved-in .moved-real { margin: 2px 0 0 4px; }
+/* Am echten Fahrtag nur dezenter Hinweis */
+.moved-chip.out { background: #f1f2f4; border-color: #cfd3da; color: #555; font-weight: 600; }
