@@ -338,17 +338,32 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
 }
 // „Nicht gefahren“: Termin gleich neu vergeben – optional einen anderen Schüler wählen (nichts gewählt = Termin bleibt frei)
 // Aktive Schüler = freigeschaltet, nicht bestanden (bestanden = archiviert), Zugang nicht abgelaufen
+// 📝 antippen → Notiz sofort lesen (ohne den Termin zu öffnen)
+function noteIcon(text, title = "📝 Notiz", open = null) {
+  if (!text) return null;
+  return el("span", { role: "button", tabindex: "0", class: "note-ic", title: text, "aria-label": "Notiz lesen", onclick: (e) => {
+    e.stopPropagation(); e.preventDefault();
+    openModal(title, el("div", { class: "note-read" }, text),
+      el("div", { class: "actions" }, open ? el("button", { class: "btn", onclick: () => { closeModal(); setTimeout(open, 30); } }, "Termin öffnen") : null,
+        el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+  } }, "📝");
+}
 // Beim Eintragen: zählt für den Lohn (Standard an) + private Notiz zur Fahrstunde
 function payNoteFields(pay = true, note = "", noNote = false) {
   const box = el("input", { type: "checkbox", checked: pay });
+  // Haken = bezahlt (zählt in Lohn und Kontrolle), ohne Haken = unbezahlt
+  const payLbl = el("span", {});
+  const syncPay = () => payLbl.replaceChildren(box.checked ? el("b", {}, "💶 Bezahlt") : el("b", { style: "color:#b42318" }, "💸 Unbezahlt"),
+    el("span", { class: "muted small" }, box.checked ? " – zählt in Lohn und Kontrolle" : " – zählt nicht in Lohn und Kontrolle"));
+  box.addEventListener("change", syncPay); syncPay();
   const text = el("textarea", { maxlength: 1000, rows: 2, placeholder: "Notiz zur Fahrstunde (nur für dich), z. B. Probefahrt, Kollege vertreten …" }, note || "");
   return {
     node: el("div", { class: "pay-note" },
-      el("label", { class: "check" }, box, el("span", {}, "💶 Zählt für meinen Lohn")),
+      el("label", { class: "check pay-check" }, box, payLbl),
       noNote ? null : [el("label", {}, "Notiz (optional, nur für dich)"), text]),
     noPay: () => !box.checked,
     note: () => text.value.trim() || null,
-    reset: () => { box.checked = true; text.value = ""; },
+    reset: () => { box.checked = true; text.value = ""; syncPay(); },
   };
 }
 // Namen der Schüler/innen ohne App (aus den eigenen Einträgen)
@@ -2080,7 +2095,7 @@ function openPlanned(kind, x) {
     el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr · ${x.duration_min} Min.`),
     editBox,
     !isT ? el("p", { class: "small muted" }, "Eintrag nur für deinen Kalender – der/die Schüler/in hat keinen App-Zugang, andere Schüler/innen sehen diese Zeit nicht als frei.") : null,
-    !isT && x.kind === "lesson" ? el("p", {}, x.done ? (x.no_pay ? "✓ Abgehakt – zählt nicht für den Lohn" : "✓ Abgehakt – zählt in Kontrolle und Lohn") : "☐ Noch nicht abgehakt") : null,
+    !isT && x.kind === "lesson" ? el("p", {}, x.done ? (x.no_pay ? "✓ Abgehakt – 💸 unbezahlt" : "✓ Abgehakt – 💶 bezahlt, zählt in Kontrolle und Lohn") : "☐ Noch nicht abgehakt") : null,
     text ? el("p", {}, "Notiz: ", text) : null,
     el("div", { class: "actions" }, tick, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
@@ -2092,11 +2107,11 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
     slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) })))
   .concat(p.own.map((x) => ({ at: x.starts_at,
     node: x.kind === "exam"
-      ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
-          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name + (x.note ? " 📝" : ""))
-      : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+      ? el("button", { class: "slot exam" + (x.note ? " has-note" : ""), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)))
+      : el("button", { class: "slot " + (x.done ? "done" : "confirmed") + (x.note ? " has-note" : ""), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
-          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name + (x.note ? " 📝" : "")) })));
+          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x))) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => ({ at: x.starts_at,
   node: el("div", { class: "tr block" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
@@ -2107,11 +2122,11 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
     el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("theory", t) }, "⋯"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
-    const name = el("button", { type: "button", class: "tr-name name-link", title: "Details", onclick: () => openPlanned("own", x) }, (x.kind === "exam" ? "🎓 " : "") + x.student_name, x.note ? el("span", { class: "note-ic", title: x.note }, " 📝") : null);
-    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr exam" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
+    const name = el("button", { type: "button", class: "tr-name name-link", title: "Details", onclick: () => openPlanned("own", x) }, (x.kind === "exam" ? "🎓 " : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)));
+    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr exam" + (x.note ? " has-note" : "") }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
-    return { at: x.starts_at, node: el("div", { class: "tr " + phase }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
+    return { at: x.starts_at, node: el("div", { class: "tr " + phase + (x.note ? " has-note" : "") }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
       x.done ? el("span", { class: "tr-pill ok" }, `✓ ${x.duration_min} Min.`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), onclick: () => openPlanned("own", x) }, `${x.duration_min} Min. ✎`),
       canTick ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
@@ -2462,7 +2477,7 @@ async function adminToday() {
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
       el("button", { type: "button", class: "tr-name name-link", title: "Infos zum Schüler", onclick: () => openStudentById(b.student_id) },
         B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : "",
-        b.teacher_note ? el("span", { class: "note-ic", title: b.teacher_note }, " 📝") : null),
+        noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id))),
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -2479,7 +2494,7 @@ async function adminToday() {
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
     const cancelBtn = phase === "next" && !canTick ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "Absagen") : null;
-    return el("div", { class: "tr " + phase }, head,
+    return el("div", { class: "tr " + phase + (b.teacher_note ? " has-note" : "") }, head,
       phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, meetLine));
   };
   const examRow = (e) => el("div", { class: "tr exam" },
@@ -2600,13 +2615,13 @@ async function adminCalendar() {
       tag = b.actual_minutes !== null ? "gefahren" : "bestätigt";
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : B197_TYPES.includes(b.lesson_type) ? `${LESSON_ICON[b.lesson_type]} ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
-    if (b && b.teacher_note && label) label += " 📝";
     // Bestätigte/gefahrene Fahrstunde: Name antippen → Schüler-Infos; Rest des Termins → Termin-Details
     const nameTap = b && b.status === "confirmed" && label
       ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
     const canMove = b && b.status === "confirmed" && b.actual_minutes === null && !past;
-    return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
+    return el("button", { class: "slot " + cls + (b && b.teacher_note ? " has-note" : ""), onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
+      b && b.teacher_note ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
   }, (day) => openSlotForm(day), offExtras(openTimeOff).concat(examExtras, plannedExtras(planned)), true);
 
@@ -2706,7 +2721,7 @@ async function openBackfill(preStudent) {
       okMsg = `${LESSON_TYPES[type]} · ${fullName(st)} · ${fmtDay(start.toISOString())} ${fmtTime(start.toISOString())} Uhr · ${dur.value} Min.`;
     }
     // Fenster bleibt offen: gleich die nächste Fahrstunde eintragen (Schüler, Art und Dauer bleiben stehen)
-    toast("Nachgetragen: " + okMsg + (pn.noPay() ? " · zählt nicht für den Lohn" : ""));
+    toast("Nachgetragen: " + okMsg + (pn.noPay() ? " · unbezahlt" : ""));
     pn.reset();
     log.prepend(el("div", { class: "list-item small" }, "✓ " + okMsg));
     state.renderOnClose = true;   // Kalender/Kontrolle werden beim Schließen aktualisiert
@@ -3772,10 +3787,10 @@ async function openAdminSlot(slotId) {
       pnSave.onclick = () => busy(pnSave, async () => {
         const { error } = await sb.from("bookings").update({ no_pay: pn.noPay() }).eq("id", b.id);
         if (error) throw error;
-        toast(pn.noPay() ? "Gespeichert – zählt nicht für den Lohn." : "Gespeichert – zählt für den Lohn.");
+        toast(pn.noPay() ? "Gespeichert – unbezahlt." : "Gespeichert – bezahlt.");
       });
       parts.push(el("hr"), doneControls(slot, b, done),
-        el("details", { class: "fold", open: !!b.no_pay }, el("summary", {}, b.no_pay ? "💶 Zählt nicht für den Lohn" : "💶 Lohn"),
+        el("details", { class: "fold", open: !!b.no_pay }, el("summary", {}, b.no_pay ? "💸 Unbezahlt" : "💶 Bezahlt / unbezahlt"),
           pn.node, el("div", { class: "actions", style: "margin:6px 0 0" }, pnSave)),
         el("hr"), el("h3", {}, "Termin & Hinweis"));
     }
@@ -5761,7 +5776,7 @@ async function adminControl() {
     return el("div", { class: "cl-row todo" + (over ? " over" : "") },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("button", { type: "button", class: "cl-name name-link", title: "Termin öffnen", onclick: () => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id)) }, fullName(b.profiles)),
-      el("span", { class: "cl-flag" }, over ? "☐ nicht abgehakt" : "☐ geplant", ` · ${b.slots.duration_min} Min.`),
+      el("span", { class: "cl-flag" }, over ? "☐ nicht abgehakt" : "☐ geplant", ` · ${b.slots.duration_min} Min.`, b.no_pay ? el("span", { class: "unpaid-tag" }, " 💸 unbezahlt") : null),
       tick);
   };
   // Eine Zeile: Uhrzeit · Name · Minuten · Haken „übertragen“
@@ -5769,10 +5784,11 @@ async function adminControl() {
     if (!isFinished(b)) return todoLine(b);
     const ok = b.status === "confirmed";
     const box = el("input", { type: "checkbox", checked: !!b.transferred_at, title: "Ins Fahrschulsystem übertragen", "aria-label": "Übertragen" });
-    const row = el("label", { class: "cl-row" + (ok ? "" : " late") + (b.transferred_at ? " sent" : "") },
+    const row = el("label", { class: "cl-row" + (ok ? "" : " late") + (b.no_pay ? " unpaid" : "") + (b.transferred_at ? " sent" : "") },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
-      el("b", { class: "cl-min" }, ok ? `✓ ${b.actual_minutes} Min.${b.no_pay ? " · ohne Lohn" : ""}` : `Fehlstunde · ${b.slots.duration_min} Min.${b.no_pay ? " · ohne Lohn" : ""}`),
+      el("b", { class: "cl-min" }, b.no_pay ? el("span", { class: "unpaid-tag" }, `💸 unbezahlt · ${ok ? b.actual_minutes : b.slots.duration_min} Min.`)
+        : ok ? `✓ ${b.actual_minutes} Min.` : `Fehlstunde · ${b.slots.duration_min} Min.`),
       !ok && !b._own ? el("button", { type: "button", class: "btn small ghost", title: "Fehlstunde ändern (krank / keine Fehlstunde)", onclick: (e) => { e.preventDefault(); e.stopPropagation(); openAdminSlot(b.slots.id); } }, "✎") : null,
       box);
     box.addEventListener("change", async () => {
@@ -5785,7 +5801,7 @@ async function adminControl() {
   };
   // Nach Tagen gruppieren (nur Tage mit Fahrstunden)
   // Minuten, die bezahlt werden: gefahrene Minuten + Fehlstunden (geplante Dauer)
-  const paidMin = (b) => (isTicked(b) ? b.actual_minutes : b.status !== "confirmed" && b.late_cancel ? b.slots.duration_min : 0);
+  const paidMin = (b) => (b.no_pay ? 0 : isTicked(b) ? b.actual_minutes : b.status !== "confirmed" && b.late_cancel ? b.slots.duration_min : 0);
   const dayMin = (list) => list.reduce((n, b) => n + paidMin(b), 0);
   // Weitere relevante Einträge des Tages: Prüfungen (auch Schaltkompetenz, auch ohne App) und Theorie – nichts Privates
   const nowMs0 = Date.now();
@@ -5806,7 +5822,8 @@ async function adminControl() {
   for (const b of shown) dayOf(dateInput(b.slots.starts_at)).list.push(b);
   for (const x of extras) dayOf(dateInput(x.at)).extra.push(x);
   days.sort((a, b) => a.key.localeCompare(b.key));
-  const driven = rows.filter((b) => b.status === "confirmed"), totalMin = dayMin(rows), late = rows.length - driven.length;
+  const driven = rows.filter((b) => b.status === "confirmed" && !b.no_pay), totalMin = dayMin(rows), late = rows.filter((b) => b.status !== "confirmed" && !b.no_pay).length;
+  const unpaid = rows.filter((b) => b.no_pay);
   const lateMin = rows.filter((b) => b.status !== "confirmed").reduce((n, b) => n + paidMin(b), 0);
   const notTicked = allRows.filter((b) => !isFinished(b) && new Date(b.slots.starts_at).getTime() + b.slots.duration_min * 60000 <= Date.now()).length;
   // Monatsübersicht: Prüfungen, Theorie, Gesamtzeit, unverbindlicher Lohn
@@ -5837,7 +5854,8 @@ async function adminControl() {
     el("div", {}, el("b", {}, String(driven.length)), el("span", {}, "Fahrstunden")),
     el("div", {}, el("b", {}, String(totalMin)), el("span", {}, lateMin ? "Minuten (inkl. Fehlstd.)" : "Minuten")),
     notTicked ? el("div", { class: "warn" }, el("b", {}, String(notTicked)), el("span", {}, "nicht abgehakt")) : null,
-    late ? el("div", { class: "warn" }, el("b", {}, String(late)), el("span", {}, late === 1 ? "Fehlstunde" : "Fehlstunden")) : null);
+    late ? el("div", { class: "warn" }, el("b", {}, String(late)), el("span", {}, late === 1 ? "Fehlstunde" : "Fehlstunden")) : null,
+    unpaid.length ? el("div", { class: "unpaid" }, el("b", {}, String(unpaid.length)), el("span", {}, "💸 unbezahlt (nicht mitgezählt)")) : null);
 
   return el("div", {},
     el("div", { class: "card" },
@@ -5847,8 +5865,8 @@ async function adminControl() {
       el("div", { class: "done-row", style: "justify-content:space-between;margin:10px 0 0" }, openInfo,
         el("label", { class: "check", style: "margin:0" }, onlyOpen, el("span", { class: "small" }, "Nur nicht übertragene"))),
       el("div", { class: "actions" },
-        el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows) }, "📊 Excel"),
-        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows) }, "🖨️ Drucken / PDF"))),
+        el("button", { class: "btn small ghost", onclick: () => exportControlCsv(m, rows.filter((b) => !b.no_pay)) }, "📊 Excel"),
+        el("button", { class: "btn small ghost", onclick: () => exportControlPrint(m, rows.filter((b) => !b.no_pay)) }, "🖨️ Drucken / PDF"))),
     monthCard,
     days.length ? el("div", { class: "card cl-list" },
       days.map((d) => el("div", { class: "cl-day" },
