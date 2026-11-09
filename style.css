@@ -931,3 +931,19 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 .note-sec { background: #fffbea; border: 1px solid #f3dc8a; border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
 .note-sec textarea { margin-top: 6px; background: #fff; }
 .note-ic { font-size: 14px; }
+/* Termin: frühere Anfragen/Absagen kompakt oben */
+.hist-card { background: #f8f6ff; border: 1px solid #dcd3f5; border-radius: 12px; padding: 8px 12px; margin: 0 0 12px; }
+.hist-title { font-size: 12px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: #6b5ca5; margin: 0 0 4px; }
+.hist-item { padding: 6px 0; border-top: 1px solid #e7e1f8; }
+.hist-item:first-of-type { border-top: 0; }
+.hist-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; }
+.hist-ic { font-size: 16px; }
+.hist-chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #eef0f3; color: #445; }
+.hist-chip.late { background: #fdecea; color: #b42318; font-weight: 600; }
+.hist-chip.ok { background: #e7f6ee; color: #1e7b45; }
+.hist-chip.sick { background: #fff4e5; color: #9a5b00; }
+.hist-reason { font-size: 13px; color: var(--muted); margin: 2px 0 0 22px; }
+.hist-btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0 22px; }
+.hist-btns .btn { padding: 4px 10px; font-size: 13px; }
+.rebook-sec { background: var(--free-bg, #eafaf6); border: 1px solid var(--free-bd, #9fd8d3); border-radius: 12px; padding: 4px 12px 10px; margin: 0 0 12px; }
+.rebook-sec h3 { margin-top: 8px; }

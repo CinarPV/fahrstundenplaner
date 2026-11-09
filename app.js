@@ -1253,7 +1253,7 @@ async function askFinishedLessons() {
       .filter((x) => !askedLater(x.id)).sort((a, b) => a.start.localeCompare(b.start));
     if (!list.length || modal.open) return;
     const it = list[0];
-    const dur = durationControl(it.dur);
+    const dur = durationControl(it.dur, { result: true });
     const kind = !it.own && askSchalt(it.b) ? schaltPicker(it.b.lesson_type, (t) => { if (t === "schaltpruefung") dur.set(15); }) : null;
     const yes = el("button", { class: "btn ok inst-big" });
     const syncYes = () => (yes.textContent = `✓ Gefahren – ${dur.value} Min. abhaken`);
@@ -3661,6 +3661,29 @@ async function openAdminSlot(slotId) {
   }
   const done = (msg) => { toast(msg); closeModal(); render(); };
 
+  // Frühere Anfragen / Absagen kompakt: wer, was (krank, abgesagt, Fehlstunde …), Grund, Korrektur-Knöpfe
+  const historyCard = history.length ? el("div", { class: "hist-card" },
+    el("div", { class: "hist-title" }, "🕘 Vorher zu diesem Termin"),
+    history.slice().reverse().map((h) => {
+      // Versehentlich als „nicht gefahren“ markiert? Solange der Termin frei ist, lässt es sich zurücknehmen.
+      const undo = NOT_HELD_ICON[h.status] && !b ? el("button", { class: "btn small ghost" }, "↩️ Rückgängig") : null;
+      if (undo) undo.onclick = () => busy(undo, async () => {
+        const { error } = await sb.from("bookings").update({ status: "confirmed", cancel_reason: null, late_cancel: false }).eq("id", h.id);
+        if (error) throw error;
+        done("Zurückgenommen – Fahrstunde ist wieder bestätigt.");
+      });
+      const fix = lateFix({ ...h, slots: slot }, () => { closeModal(); render(); });
+      return el("div", { class: "hist-item" },
+        el("div", { class: "hist-line" },
+          el("span", { class: "hist-ic" }, NOT_HELD_ICON[h.status] || "•"),
+          el("b", {}, fullName(h.profiles)),
+          el("span", { class: "hist-chip " + h.status }, STATUS_TEXT[h.status]),
+          NOT_HELD_ICON[h.status] && h.status !== "cancelled_teacher"
+            ? el("span", { class: "hist-chip " + (h.late_cancel ? "late" : "ok") }, h.late_cancel ? "Fehlstunde – kostenpflichtig" : "keine Fehlstunde") : null),
+        h.cancel_reason ? el("div", { class: "hist-reason" }, "Grund: ", h.cancel_reason) : null,
+        fix || undo ? el("div", { class: "hist-btns" }, fix ? [...fix.childNodes] : null, undo) : null);
+    })) : null;
+
   const parts = [];
   if (!b) {
     const save = el("button", { class: "btn" }, "Speichern");
@@ -3680,8 +3703,17 @@ async function openAdminSlot(slotId) {
       });
       parts.push(el("div", { class: "actions", style: "margin:0 0 10px" }, nudge));
     }
-    parts.push(el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
-      timeFields, el("div", { class: "actions" }, save, del), el("hr"), await bookForStudentForm(slot, saveTime, () => meet.value()));
+    const bookForm = await bookForStudentForm(slot, saveTime, () => meet.value());
+    if (historyCard) {
+      // Nach Absage/Krankmeldung: oben was war, direkt darunter neu vergeben – Zeit ändern/löschen weiter unten
+      const h3 = bookForm.querySelector && bookForm.querySelector("h3"); if (h3) h3.textContent = "🔁 Termin neu vergeben";
+      parts.unshift(historyCard, el("div", { class: "rebook-sec" }, bookForm));
+      parts.push(el("hr"), el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
+        timeFields, el("div", { class: "actions" }, save, del));
+    } else {
+      parts.push(el("p", {}, el("span", { class: "badge confirmed", style: "background:var(--free-bg);color:var(--free-fg);border-color:var(--free-bd)" }, "Frei")),
+        timeFields, el("div", { class: "actions" }, save, del), el("hr"), bookForm);
+    }
   } else {
     const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen." }, b.admin_reply || "");
     parts.push(
@@ -3690,6 +3722,20 @@ async function openAdminSlot(slotId) {
         el("button", { class: "btn small ghost", onclick: () => openStudentById(b.student_id) }, "👤 Schüler-Infos")),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
     );
+    // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
+    {
+      const nt = el("textarea", { maxlength: 1000, rows: 3, placeholder: "z. B. Abholung an der Schule, Kupplung üben, Mutter zahlt bar …" }, b.teacher_note || "");
+      const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
+      ns.onclick = () => busy(ns, async () => {
+        const v = nt.value.trim() || null;
+        const { error } = await sb.from("bookings").update({ teacher_note: v }).eq("id", b.id);
+        if (error) throw error;
+        b.teacher_note = v; state.renderOnClose = true;
+        toast(v ? "Notiz gespeichert." : "Notiz gelöscht.");
+      });
+      parts.push(el("div", { class: "note-sec" }, el("b", {}, "📝 Notiz (nur für dich)"), nt, el("div", { class: "actions", style: "margin:6px 0 0" }, ns)));
+    }
+
     // Wunschzeit: per Tipp in das Uhrzeit-Feld übernehmen (vorbelegt) – „Bestätigen“ speichert dann die neue Zeit
     if (b.status === "requested" && b.wish_meeting) {
       parts.push(el("div", { class: "notice wish" }, el("b", {}, "📍 Wunsch-Treffpunkt: "), b.wish_meeting,
@@ -3710,19 +3756,6 @@ async function openAdminSlot(slotId) {
         el("h3", {}, "🔁 Verschieben oder ändern"),
         el("p", { class: "muted small", style: "margin:0 0 8px" }, "Neue Uhrzeit, Dauer oder Treffpunkt vorschlagen – der/die Schüler/in muss in der App zusagen."),
         el("button", { class: "btn ok", onclick: () => openChangeRequest(slot.id) }, "📨 Verschiebung anfragen")));
-    }
-    // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
-    {
-      const nt = el("textarea", { maxlength: 1000, rows: 3, placeholder: "z. B. Abholung an der Schule, Kupplung üben, Mutter zahlt bar …" }, b.teacher_note || "");
-      const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
-      ns.onclick = () => busy(ns, async () => {
-        const v = nt.value.trim() || null;
-        const { error } = await sb.from("bookings").update({ teacher_note: v }).eq("id", b.id);
-        if (error) throw error;
-        b.teacher_note = v; state.renderOnClose = true;
-        toast(v ? "Notiz gespeichert." : "Notiz gelöscht.");
-      });
-      parts.push(el("div", { class: "note-sec" }, el("b", {}, "📝 Notiz (nur für dich)"), nt, el("div", { class: "actions", style: "margin:6px 0 0" }, ns)));
     }
     if (b.status === "confirmed") {
       // Zählt für den Lohn – jederzeit änderbar
@@ -3861,23 +3894,7 @@ async function openAdminSlot(slotId) {
     }
   }
 
-  if (history.length) {
-    parts.push(el("hr"), el("p", { class: "muted small" }, "Frühere Anfragen zu diesem Termin:"),
-      history.map((h) => {
-        // Versehentlich als „nicht gefahren“ markiert? Solange der Termin frei ist, lässt es sich zurücknehmen.
-        const undo = NOT_HELD_ICON[h.status] && !b ? el("button", { class: "btn small ghost" }, "Rückgängig") : null;
-        if (undo) undo.onclick = () => busy(undo, async () => {
-          const { error } = await sb.from("bookings").update({ status: "confirmed", cancel_reason: null, late_cancel: false }).eq("id", h.id);
-          if (error) throw error;
-          done("Zurückgenommen – Fahrstunde ist wieder bestätigt.");
-        });
-        return el("div", { class: "list-item small" },
-          el("div", { class: "done-row", style: "margin:0" }, el("b", {}, fullName(h.profiles)), el("span", { class: "badge " + h.status }, STATUS_TEXT[h.status]),
-            h.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null, undo),
-          h.cancel_reason ? el("div", { class: "note" }, "Grund: ", h.cancel_reason) : null,
-          lateFix({ ...h, slots: slot }, () => { closeModal(); render(); }));
-      }));
-  }
+  if (historyCard && b) parts.unshift(historyCard);   // auch bei neu vergebenem Termin: was vorher war, ganz oben
 
   // Gebuchte Termine (angefragt, angeboten, bestätigt, gefahren) ebenfalls löschbar
   if (b) {
