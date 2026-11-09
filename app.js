@@ -3001,7 +3001,7 @@ function newSlotForm(opts = {}) {
     kindBtns.forEach((b, i) => b.classList.toggle("active", KINDS[i][0] === kindOf));
     subBtns.forEach((b, i) => b.classList.toggle("active", SUBS[i][0] === lessonMode));
     subRow.hidden = !isLesson;
-    assignBox.hidden = m !== "assign";
+    assignBox.hidden = m !== "assign" && m !== "exam";   // Schülerauswahl auch bei Prüfungen (mit und ohne App)
     assignExtras.hidden = m === "exam";
     examBox.hidden = m !== "exam";
     theoryBox.hidden = m !== "theory";
@@ -3310,7 +3310,7 @@ function newSlotForm(opts = {}) {
       return;
     }
     if (mode === "exam") {
-      if (!student) throw new Error("Bitte eine/n Schüler/in auswählen");
+      if (!student) { assignBox.scrollIntoView({ behavior: "smooth", block: "start" }); search.focus(); throw new Error("Bitte oben eine/n Schüler/in antippen"); }
       const at = fromInputs(date.value, examTime.value);
       if (isNaN(at)) throw new Error("Bitte Datum und Beginn angeben");
       const meet = examNote.value() || null, note = examHint.value.trim() || null;
@@ -3383,7 +3383,7 @@ function newSlotForm(opts = {}) {
       return;
     }
     const list = build();
-    if (mode === "assign" && !student) throw new Error("Bitte eine/n Schüler/in auswählen");
+    if (mode === "assign" && !student) { assignBox.scrollIntoView({ behavior: "smooth", block: "start" }); search.focus(); throw new Error("Bitte oben eine/n Schüler/in antippen"); }
     if (mode === "assign" && !(await confirmClash(list))) return;
     await meetSlot.commit();
     const res = await insertSlots(list);
