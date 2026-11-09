@@ -3481,9 +3481,10 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur,
 }
 // Fahrlehrer: Schüler/in hat „abgesagt“ gedrückt, war aber krank → als krank eintragen (keine Fehlstunde)
 function sickButton(b, after) {
-  if (b.status !== "cancelled_student") return null;
+  if (!["cancelled_student", "no_show"].includes(b.status)) return null;
   const btn = el("button", { class: "btn small" }, "🤒 War krank – als krank eintragen");
-  btn.onclick = () => {
+  btn.onclick = (e) => {
+    e && e.stopPropagation();
     const why = el("input", { maxlength: 300, value: b.cancel_reason && !/^krank$/i.test(b.cancel_reason) ? `Krank (${b.cancel_reason})` : "Krank", placeholder: "z. B. Krank, Attest liegt vor" });
     const free = el("input", { type: "checkbox", checked: true });
     const ok = el("button", { class: "btn ok" }, "🤒 Als krank speichern");
@@ -3504,6 +3505,22 @@ function sickButton(b, after) {
   return btn;
 }
 // Fahrlehrer: Kurzfristig krank abgesagt und Attest liegt vor → Fehlstunde wird gestrichen
+// Fehlstunde jederzeit korrigieren: als krank, keine Fehlstunde – oder doch Fehlstunde
+function lateFix(b, after) {
+  if (!NOT_HELD_ICON[b.status] || b.status === "cancelled_teacher") return null;
+  const set = (patch, msg, ask) => async (e) => {
+    e.stopPropagation();
+    if (ask && !confirm(ask)) return;
+    const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
+    if (error) return fail(error);
+    toast(msg); after && after();
+  };
+  const sickish = b.status === "sick" || /^krank/i.test(b.cancel_reason || "");
+  const no = b.late_cancel ? el("button", { class: "btn small ok", onclick: set({ late_cancel: false },
+    "Keine Fehlstunde mehr.", sickish ? "Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen." : "Fehlstunde streichen (nicht kostenpflichtig)?") }, sickish ? "📄 Attest liegt vor – keine Fehlstunde" : "✓ Keine Fehlstunde") : null;
+  const yes = !b.late_cancel ? el("button", { class: "btn small ghost danger-text", onclick: set({ late_cancel: true }, "Als Fehlstunde gespeichert.", "Doch als Fehlstunde (kostenpflichtig) werten?") }, "⚠️ Doch Fehlstunde") : null;
+  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, sickButton(b, after), no, yes);
+}
 function attestButton(b, onDone) {
   if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
   const btn = el("button", { class: "btn small ok" }, "📄 Attest liegt vor – Fehlstunde streichen");
@@ -3843,7 +3860,7 @@ async function openAdminSlot(slotId) {
           el("div", { class: "done-row", style: "margin:0" }, el("b", {}, fullName(h.profiles)), el("span", { class: "badge " + h.status }, STATUS_TEXT[h.status]),
             h.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null, undo),
           h.cancel_reason ? el("div", { class: "note" }, "Grund: ", h.cancel_reason) : null,
-          attestButton(h, () => done("Fehlstunde gestrichen.")), sickButton({ ...h, slots: slot }, () => { closeModal(); render(); }));
+          lateFix({ ...h, slots: slot }, () => { closeModal(); render(); }));
       }));
   }
 
@@ -4346,7 +4363,7 @@ async function adminRequests(opts = {}) {
         b.status === "declined" ? el("span", { class: "badge declined" }, "Angebot abgelehnt") :
         b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : el("span", { class: "badge rejected" }, "rechtzeitig"),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
-        attestButton(b, () => render()), sickButton(b, () => render()),
+        lateFix(b, () => render()),
       ])),
     ] : null,
     offers.data.length ? [
@@ -4717,7 +4734,7 @@ async function openStudent(st) {
       b.actual_minutes !== null ? el("div", { class: "small" }, `Gefahren: ${fmtMinutes(b.actual_minutes)} · ${typeLabel(b.lesson_type)}`) : null,
       b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null,
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null,
-      attestButton(b, () => openStudent(st))))
+      lateFix(b, () => openStudent(st))))
     : el("p", { class: "muted" }, "Noch keine Fahrstunden.");
   const examNode = await examCard(st, true);
   const tabs = paneTabs([
@@ -5716,6 +5733,7 @@ async function adminControl() {
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
       el("b", { class: "cl-min" }, ok ? `✓ ${b.actual_minutes} Min.${b.no_pay ? " · ohne Lohn" : ""}` : "Fehlstunde"),
+      !ok && !b._own ? el("button", { type: "button", class: "btn small ghost", title: "Fehlstunde ändern (krank / keine Fehlstunde)", onclick: (e) => { e.preventDefault(); e.stopPropagation(); openAdminSlot(b.slots.id); } }, "✎") : null,
       box);
     box.addEventListener("change", async () => {
       box.disabled = true;
