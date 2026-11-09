@@ -2093,10 +2093,10 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
   .concat(p.own.map((x) => ({ at: x.starts_at,
     node: x.kind === "exam"
       ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
-          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name)
+          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name + (x.note ? " 📝" : ""))
       : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
-          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name) })));
+          (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name + (x.note ? " 📝" : "")) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => ({ at: x.starts_at,
   node: el("div", { class: "tr block" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
@@ -2107,7 +2107,7 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
     el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("theory", t) }, "⋯"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
-    const name = el("button", { type: "button", class: "tr-name name-link", title: "Details", onclick: () => openPlanned("own", x) }, (x.kind === "exam" ? "🎓 " : "") + x.student_name);
+    const name = el("button", { type: "button", class: "tr-name name-link", title: "Details", onclick: () => openPlanned("own", x) }, (x.kind === "exam" ? "🎓 " : "") + x.student_name, x.note ? el("span", { class: "note-ic", title: x.note }, " 📝") : null);
     if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr exam" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
@@ -2345,7 +2345,7 @@ async function adminToday() {
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
-    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
@@ -2461,7 +2461,8 @@ async function adminToday() {
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
       el("button", { type: "button", class: "tr-name name-link", title: "Infos zum Schüler", onclick: () => openStudentById(b.student_id) },
-        B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
+        B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : "",
+        b.teacher_note ? el("span", { class: "note-ic", title: b.teacher_note }, " 📝") : null),
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -2563,7 +2564,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", 
 async function adminCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
@@ -2591,6 +2592,7 @@ async function adminCalendar() {
       tag = b.actual_minutes !== null ? "gefahren" : "bestätigt";
       label = (b.actual_minutes !== null ? `✓ ${b.actual_minutes} Min. ${LESSON_ICON[b.lesson_type] || ""} · ` : B197_TYPES.includes(b.lesson_type) ? `${LESSON_ICON[b.lesson_type]} ` : "") + fullName(b.profiles) + glasses(b.profiles);
     }
+    if (b && b.teacher_note && label) label += " 📝";
     // Bestätigte/gefahrene Fahrstunde: Name antippen → Schüler-Infos; Rest des Termins → Termin-Details
     const nameTap = b && b.status === "confirmed" && label
       ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
@@ -3709,17 +3711,30 @@ async function openAdminSlot(slotId) {
         el("p", { class: "muted small", style: "margin:0 0 8px" }, "Neue Uhrzeit, Dauer oder Treffpunkt vorschlagen – der/die Schüler/in muss in der App zusagen."),
         el("button", { class: "btn ok", onclick: () => openChangeRequest(slot.id) }, "📨 Verschiebung anfragen")));
     }
+    // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
+    {
+      const nt = el("textarea", { maxlength: 1000, rows: 3, placeholder: "z. B. Abholung an der Schule, Kupplung üben, Mutter zahlt bar …" }, b.teacher_note || "");
+      const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
+      ns.onclick = () => busy(ns, async () => {
+        const v = nt.value.trim() || null;
+        const { error } = await sb.from("bookings").update({ teacher_note: v }).eq("id", b.id);
+        if (error) throw error;
+        b.teacher_note = v; state.renderOnClose = true;
+        toast(v ? "Notiz gespeichert." : "Notiz gelöscht.");
+      });
+      parts.push(el("div", { class: "note-sec" }, el("b", {}, "📝 Notiz (nur für dich)"), nt, el("div", { class: "actions", style: "margin:6px 0 0" }, ns)));
+    }
     if (b.status === "confirmed") {
-      // Lohn & private Notiz – jederzeit änderbar
-      const pn = payNoteFields(!b.no_pay, b.teacher_note || "");
+      // Zählt für den Lohn – jederzeit änderbar
+      const pn = payNoteFields(!b.no_pay, "", true);
       const pnSave = el("button", { class: "btn small" }, "Speichern");
       pnSave.onclick = () => busy(pnSave, async () => {
-        const { error } = await sb.from("bookings").update({ no_pay: pn.noPay(), teacher_note: pn.note() }).eq("id", b.id);
+        const { error } = await sb.from("bookings").update({ no_pay: pn.noPay() }).eq("id", b.id);
         if (error) throw error;
-        toast(pn.noPay() ? "Gespeichert – zählt nicht für den Lohn." : "Gespeichert.");
+        toast(pn.noPay() ? "Gespeichert – zählt nicht für den Lohn." : "Gespeichert – zählt für den Lohn.");
       });
       parts.push(el("hr"), doneControls(slot, b, done),
-        el("details", { class: "fold", open: !!(b.no_pay || b.teacher_note) }, el("summary", {}, b.no_pay ? "💶 Zählt nicht für den Lohn" + (b.teacher_note ? " · 📝 Notiz" : "") : b.teacher_note ? "📝 Notiz" : "💶 Lohn & Notiz"),
+        el("details", { class: "fold", open: !!b.no_pay }, el("summary", {}, b.no_pay ? "💶 Zählt nicht für den Lohn" : "💶 Lohn"),
           pn.node, el("div", { class: "actions", style: "margin:6px 0 0" }, pnSave)),
         el("hr"), el("h3", {}, "Termin & Hinweis"));
     }
