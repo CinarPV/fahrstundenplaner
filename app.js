@@ -338,6 +338,8 @@ function waTextForStudent(kind, profile, slot, reply, meeting) {
 }
 // „Nicht gefahren“: Termin gleich neu vergeben – optional einen anderen Schüler wählen (nichts gewählt = Termin bleibt frei)
 // Aktive Schüler = freigeschaltet, nicht bestanden (bestanden = archiviert), Zugang nicht abgelaufen
+// Ganze Zeile antippen öffnet die Fahrstunde – außer man tippt auf einen Knopf, Link oder Haken in der Zeile
+const rowTap = (fn) => (e) => { if (e.target.closest("button, a, input, label.check, .note-ic, [role=button]")) return; fn(); };
 // 📝 antippen → Notiz sofort lesen (ohne den Termin zu öffnen)
 function noteIcon(text, title = "📝 Notiz", open = null) {
   if (!text) return null;
@@ -726,6 +728,12 @@ function lessonOverview(p, rows, exams = []) {
   }
   const missed = rows.filter((b) => b.late_cancel).length;
   tiles.push(tile("⚠️", "Fehlstunden", `${missed}×`, "kostenpflichtig", missed ? "warn" : ""));
+  // Alle Absagen im Überblick (rechtzeitig, kurzfristig, krank, nicht erschienen)
+  const cancels = rows.filter((b) => ["cancelled_student", "sick", "no_show"].includes(b.status));
+  if (cancels.length) {
+    const n = (st) => cancels.filter((b) => b.status === st).length;
+    tiles.push(tile("🙋", "Abgesagt", `${cancels.length}×`, [n("cancelled_student") ? `${n("cancelled_student")}× abgesagt` : "", n("sick") ? `${n("sick")}× krank` : "", n("no_show") ? `${n("no_show")}× nicht da` : ""].filter(Boolean).join(" · ")));
+  }
   return el("div", { class: "ov-grid" }, tiles);
 }
 
@@ -2107,30 +2115,30 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
     slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) })))
   .concat(p.own.map((x) => ({ at: x.starts_at,
     node: x.kind === "exam"
-      ? el("button", { class: "slot exam" + (x.note ? " has-note" : ""), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+      ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)))
-      : el("button", { class: "slot " + (x.done ? "done" : "confirmed") + (x.note ? " has-note" : ""), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
+      : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
           (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x))) })));
 // Einträge für „Heute“
 const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => ({ at: x.starts_at,
-  node: el("div", { class: "tr block" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
+  node: el("div", { class: "tr tap-row block", onclick: rowTap(() => openBlock(x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)),
     el("span", { class: "tr-name" }, "📌 " + x.reason), el("span", { class: "tr-pill" }, `bis ${fmtTime(addMin(x.starts_at, x.duration_min))}`),
-    el("button", { class: "tr-icon", title: "Details", onclick: () => openBlock(x) }, "⋯"))) })).concat(p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
-  node: el("div", { class: "tr theory" }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
+    el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) })).concat(p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
+  node: el("div", { class: "tr tap-row theory", onclick: rowTap(() => openPlanned("theory", t)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
     el("span", { class: "tr-name" }, "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
-    el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("theory", t) }, "⋯"))) }))
+    el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
-    const name = el("button", { type: "button", class: "tr-name name-link", title: "Details", onclick: () => openPlanned("own", x) }, (x.kind === "exam" ? "🎓 " : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)));
-    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr exam" + (x.note ? " has-note" : "") }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
+    const name = el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name, noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)));
+    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr tap-row exam", onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
-    return { at: x.starts_at, node: el("div", { class: "tr " + phase + (x.note ? " has-note" : "") }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
+    return { at: x.starts_at, node: el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
       x.done ? el("span", { class: "tr-pill ok" }, `✓ ${x.duration_min} Min.`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), onclick: () => openPlanned("own", x) }, `${x.duration_min} Min. ✎`),
       canTick ? el("button", { class: "tr-tick", title: "Gefahren abhaken", "aria-label": "Gefahren abhaken", onclick: (ev) => { ev.currentTarget.disabled = true; setOwnDone(x, true).catch(fail); } }, "✓") : null,
-      el("button", { class: "tr-icon", title: "Details", onclick: () => openPlanned("own", x) }, "⋯")),
+      el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
       phase === "next" && !canTick ? el("div", { class: "tr-foot" }, el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => cancelOwn(x) }, "Absagen")) : null) };
   })));
 // Fahrstunde eines Schülers ohne App absagen = Eintrag entfernen
@@ -2388,7 +2396,8 @@ async function adminToday() {
     return el("button", { type: "button", class: "tr free", onclick: () => openAdminSlot(s.id) },
       el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
         el("span", { class: "tr-name" }, "🟢 Frei"), el("span", { class: "tr-pill" }, `${s.duration_min} Min.`), el("span", { class: "tr-icon" }, "›")),
-      x ? el("div", { class: "tr-foot small muted" }, `${NOT_HELD_ICON[x.status]} ${fullName(x.profiles || {})} – ${STATUS_TEXT[x.status]}${x.late_cancel ? " · Fehlstunde" : ""} · wieder frei`) : null);
+      // Nur kurzfristige Absagen (Fehlstunde) als Hinweis – rechtzeitige stehen auf der Schüler-Karte und in der Schülerliste
+      x && x.late_cancel ? el("div", { class: "tr-foot small muted" }, `${NOT_HELD_ICON[x.status]} ${fullName(x.profiles || {})} – ${STATUS_TEXT[x.status]} · Fehlstunde · wieder frei`) : null);
   };
   const mapsLink = (p) => "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(p);
   const go = (n) => { state.todayDate = noSunday(addDays(first, n), n); render(); };
@@ -2475,7 +2484,7 @@ async function adminToday() {
     const canTick = held && !done && now >= start - 45 * 60000;   // abhaken frühestens 45 Min. vor Beginn
     const head = el("div", { class: "tr-head" },
       el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
-      el("button", { type: "button", class: "tr-name name-link", title: "Infos zum Schüler", onclick: () => openStudentById(b.student_id) },
+      el("span", { class: "tr-name" },
         B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : "",
         noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id))),
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
@@ -2490,14 +2499,14 @@ async function adminToday() {
         catch (e) { btn.disabled = false; fail(e); }
       } }, "✓") : null,
       phase === "next" && !b._own ? el("button", { class: "tr-move", title: "Verschiebung anfragen", "aria-label": "Verschiebung anfragen", onclick: () => openChangeRequest(s.id) }, "🔁") : null,
-      el("button", { class: "tr-icon", title: "Details", onclick: () => openAdminSlot(s.id) }, "⋯"));
+      el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"));
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
     const cancelBtn = phase === "next" && !canTick ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "Absagen") : null;
-    return el("div", { class: "tr " + phase + (b.teacher_note ? " has-note" : "") }, head,
+    return el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openAdminSlot(s.id)) }, head,
       phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, meetLine));
   };
-  const examRow = (e) => el("div", { class: "tr exam" },
+  const examRow = (e) => el("div", { class: "tr tap-row exam", onclick: rowTap(() => openExamModal(e.profiles ? { ...e.profiles, id: e.student_id } : { id: e.student_id })) },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
       el("span", { class: "tr-name" }, `${EXAM_ICON[e.kind] || "🎓"} ` + fullName(e.profiles || {})), el("span", { class: "tr-pill" }, e.kind === "schalt" ? "Schalt-Test" : "Prüfung")),
     e.meeting_point ? el("a", { class: "tr-meet", href: mapsLink(e.meeting_point), target: "_blank", rel: "noopener" }, "📍 " + e.meeting_point) : null);
@@ -2605,7 +2614,7 @@ async function adminCalendar() {
     const past = new Date(s.starts_at).getTime() < Date.now();
     const glasses = (p) => (p && p.needs_glasses ? " 👓" : "");
     let cls = past ? "past" : "free", label = past ? "Nicht gebucht" : "", tag = past ? "vergangen" : "frei";
-    if (!b && notHeld) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
+    if (!b && notHeld && (past || notHeld.late_cancel)) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
     if (!b && notHeld && past) tag = "nicht stattgefunden"; // angesetzt, aber abgesagt/krank – Grund steht im Text
     if (b && b.status === "requested") { cls = "requested"; tag = b.over_limit ? "⚠️ Ausnahme" : "angefragt"; label = fullName(b.profiles) + glasses(b.profiles) + (b.wish_start ? ` · ⏰ Wunsch ${fmtTime(b.wish_start)}` : ""); }
@@ -2619,7 +2628,7 @@ async function adminCalendar() {
     const nameTap = b && b.status === "confirmed" && label
       ? el("span", { class: "name-link", title: "Infos zum Schüler", onclick: (e) => { e.stopPropagation(); openStudentById(b.student_id); } }, label) : label;
     const canMove = b && b.status === "confirmed" && b.actual_minutes === null && !past;
-    return el("button", { class: "slot " + cls + (b && b.teacher_note ? " has-note" : ""), onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
+    return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
       b && b.teacher_note ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
@@ -5773,9 +5782,9 @@ async function adminControl() {
       try { await saveTick(b, { actual_minutes: b.slots.duration_min, lesson_type: b.lesson_type || "normal" }, `✓ ${fullName(b.profiles)}: ${b.slots.duration_min} Min. gefahren`); }
       catch (e) { btn.disabled = false; fail(e); }
     } }, "✓") : null;
-    return el("div", { class: "cl-row todo" + (over ? " over" : "") },
+    return el("div", { class: "cl-row tap-row todo" + (over ? " over" : ""), onclick: rowTap(() => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id))) },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
-      el("button", { type: "button", class: "cl-name name-link", title: "Termin öffnen", onclick: () => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id)) }, fullName(b.profiles)),
+      el("span", { class: "cl-name" }, fullName(b.profiles)),
       el("span", { class: "cl-flag" }, over ? "☐ nicht abgehakt" : "☐ geplant", ` · ${b.slots.duration_min} Min.`, b.no_pay ? el("span", { class: "unpaid-tag" }, " 💸 unbezahlt") : null),
       tick);
   };
@@ -5784,13 +5793,13 @@ async function adminControl() {
     if (!isFinished(b)) return todoLine(b);
     const ok = b.status === "confirmed";
     const box = el("input", { type: "checkbox", checked: !!b.transferred_at, title: "Ins Fahrschulsystem übertragen", "aria-label": "Übertragen" });
-    const row = el("label", { class: "cl-row" + (ok ? "" : " late") + (b.no_pay ? " unpaid" : "") + (b.transferred_at ? " sent" : "") },
+    const row = el("div", { class: "cl-row tap-row" + (ok ? "" : " late") + (b.no_pay ? " unpaid" : "") + (b.transferred_at ? " sent" : ""),
+      onclick: rowTap(() => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id))) },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
       el("span", { class: "cl-name" }, fullName(b.profiles)),
       el("b", { class: "cl-min" }, b.no_pay ? el("span", { class: "unpaid-tag" }, `💸 unbezahlt · ${ok ? b.actual_minutes : b.slots.duration_min} Min.`)
         : ok ? `✓ ${b.actual_minutes} Min.` : `Fehlstunde · ${b.slots.duration_min} Min.`),
-      !ok && !b._own ? el("button", { type: "button", class: "btn small ghost", title: "Fehlstunde ändern (krank / keine Fehlstunde)", onclick: (e) => { e.preventDefault(); e.stopPropagation(); openAdminSlot(b.slots.id); } }, "✎") : null,
-      box);
+      el("label", { class: "check cl-box", title: "Ins Fahrschulsystem übertragen" }, box));
     box.addEventListener("change", async () => {
       box.disabled = true;
       try { await setTransferred([b], box.checked); row.classList.toggle("sent", box.checked); updateOpen(); }
