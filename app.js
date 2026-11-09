@@ -2144,6 +2144,28 @@ function openBlock(x) {
     el("p", { class: "small muted" }, "Nur du siehst diesen Eintrag. Er zählt nicht als Fahrstunde (keine Statistik, Kontrolle oder Lohn). Schüler/innen können in dieser Zeit nichts anfragen."),
     el("div", { class: "actions" }, save, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
+// 📝 Notiz bei Schüler/innen ohne App: automatisch speichern, löschen möglich
+function ownNoteSec(x) {
+  const nt = el("textarea", { maxlength: 1000, rows: 3, placeholder: "Notiz (nur für dich)" }, x.note || "");
+  const saveNote = async (quiet) => {
+    const v = nt.value.trim() || null;
+    if (v === (x.note || null)) return false;
+    const { error } = await sb.from("own_entries").update({ note: v }).eq("id", x.id);
+    if (error) throw error;
+    x.note = v; state.renderOnClose = true;
+    if (!quiet) toast(v ? "Notiz gespeichert." : "Notiz gelöscht.");
+    return true;
+  };
+  const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
+  ns.onclick = () => busy(ns, () => saveNote(false));
+  const del = el("button", { class: "btn small ghost danger-text" }, "🗑 Notiz löschen");
+  del.onclick = () => busy(del, async () => { nt.value = ""; await saveNote(true); toast("Notiz gelöscht."); });
+  nt.addEventListener("change", () => saveNote(false).catch(fail));
+  modal.addEventListener("close", () => { saveNote(true).then((ch) => { if (ch) { state.renderOnClose = false; render(); } }).catch(() => {}); }, { once: true });
+  return el("div", { class: "note-sec" }, el("b", {}, "📝 Notiz (nur für dich)"), nt,
+    el("div", { class: "actions", style: "margin:6px 0 0" }, ns, x.note ? del : null),
+    el("div", { class: "small muted", style: "margin-top:4px" }, "Wird automatisch gespeichert."));
+}
 function openPlanned(kind, x) {
   const isT = kind === "theory", start = isT ? x.held_at : x.starts_at, text = x.note;
   const del = el("button", { class: "btn danger" }, "🗑 Löschen");
@@ -2163,7 +2185,8 @@ function openPlanned(kind, x) {
   const eTime = el("input", { type: "time", value: timeInput(start), step: 300 });
   const eDur = durationControl(x.duration_min);
   const eName = isT ? null : el("input", { maxlength: 80, value: x.student_name || "" });
-  const ePn = !isT && x.kind === "lesson" ? payNoteFields(!x.no_pay, x.note || "") : null;
+  // Notiz steht oben in einem eigenen Feld (auch bei Prüfungen) – hier nur noch bezahlt/unbezahlt
+  const ePn = !isT && x.kind === "lesson" ? payNoteFields(!x.no_pay, "", true) : null;
   const eBooked = !isT && x.kind === "lesson" && (feat("moved") || x.booked_on) ? el("input", { type: "date", value: x.booked_on || "" }) : null;
   const eSave = el("button", { class: "btn" }, "Änderung speichern");
   eSave.onclick = () => busy(eSave, async () => {
@@ -2173,7 +2196,7 @@ function openPlanned(kind, x) {
     const { error } = isT
       ? await sb.from("theory_lessons").update({ held_at: at.toISOString(), duration_min: eDur.value }).eq("id", x.id)
       : await sb.from("own_entries").update({ starts_at: at.toISOString(), duration_min: eDur.value, student_name: eName.value.trim(),
-        ...(ePn ? { no_pay: ePn.noPay(), note: ePn.note() } : {}),
+        ...(ePn ? { no_pay: ePn.noPay() } : {}),
         ...(eBooked ? { booked_on: eBooked.value && eBooked.value !== dateInput(at) ? eBooked.value : null } : {}) }).eq("id", x.id);
     if (error) throw error;
     closeModal(); toast("Geändert."); render();
@@ -2191,7 +2214,7 @@ function openPlanned(kind, x) {
     editBox,
     !isT ? el("p", { class: "small muted" }, "Eintrag nur für deinen Kalender – der/die Schüler/in hat keinen App-Zugang, andere Schüler/innen sehen diese Zeit nicht als frei.") : null,
     !isT && x.kind === "lesson" ? el("p", {}, x.done ? (x.no_pay ? "✓ Abgehakt – 💸 unbezahlt" : "✓ Abgehakt – 💶 bezahlt, zählt in Kontrolle und Lohn") : "☐ Noch nicht abgehakt") : null,
-    text ? el("p", {}, "Notiz: ", text) : null,
+    !isT && feat("notes") ? ownNoteSec(x) : text ? el("p", {}, "Notiz: ", text) : null,
     el("div", { class: "actions" }, tick, del, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
 }
 // Einträge für die Kalender-Woche (eigene Einträge sehen aus wie normale Fahrstunden/Prüfungen, nur mit 📵 = ohne App)
@@ -3871,15 +3894,25 @@ async function openAdminSlot(slotId) {
     // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
     if (feat("notes")) {
       const nt = el("textarea", { maxlength: 1000, rows: 3, placeholder: "z. B. Abholung an der Schule, Kupplung üben, Mutter zahlt bar …" }, b.teacher_note || "");
-      const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
-      ns.onclick = () => busy(ns, async () => {
+      // Notiz wird automatisch gespeichert: beim Verlassen des Feldes, beim Schließen des Fensters oder über den Knopf
+      const saveNote = async (quiet) => {
         const v = nt.value.trim() || null;
+        if (v === (b.teacher_note || null)) return false;
         const { error } = await sb.from("bookings").update({ teacher_note: v }).eq("id", b.id);
         if (error) throw error;
         b.teacher_note = v; state.renderOnClose = true;
-        toast(v ? "Notiz gespeichert." : "Notiz gelöscht.");
-      });
-      parts.push(el("div", { class: "note-sec" }, el("b", {}, "📝 Notiz (nur für dich)"), nt, el("div", { class: "actions", style: "margin:6px 0 0" }, ns)));
+        if (!quiet) toast(v ? "Notiz gespeichert." : "Notiz gelöscht.");
+        return true;
+      };
+      const ns = el("button", { class: "btn small" }, "💾 Notiz speichern");
+      ns.onclick = () => busy(ns, () => saveNote(false).then(() => { if (!nt.value.trim()) toast("Notiz gelöscht."); }));
+      const del = el("button", { class: "btn small ghost danger-text" }, "🗑 Notiz löschen");
+      del.onclick = () => busy(del, async () => { nt.value = ""; await saveNote(true); toast("Notiz gelöscht."); });
+      nt.addEventListener("change", () => saveNote(false).catch(fail));
+      modal.addEventListener("close", () => { saveNote(true).then((ch) => { if (ch) { state.renderOnClose = false; render(); } }).catch(() => {}); }, { once: true });
+      parts.push(el("div", { class: "note-sec" }, el("b", {}, "📝 Notiz (nur für dich)"), nt,
+        el("div", { class: "actions", style: "margin:6px 0 0" }, ns, b.teacher_note ? del : null),
+        el("div", { class: "small muted", style: "margin-top:4px" }, "Wird automatisch gespeichert.")));
     }
 
     // Wunschzeit: per Tipp in das Uhrzeit-Feld übernehmen (vorbelegt) – „Bestätigen“ speichert dann die neue Zeit
