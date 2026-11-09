@@ -1672,3 +1672,7 @@ select cron.schedule('fsp-evening-reminder', '0 17 * * *', $cron$
       'x-cron-secret', (select value from public.app_secrets where name = 'cron')),
     body := '{"kind":"evening"}'::jsonb)
 $cron$);
+
+-- Fahrstunde im Fahrschulsystem an einem anderen Tag eingetragen (z. B. gefahren am 14.01., aufgeschrieben am 10.01.)
+alter table public.bookings add column if not exists booked_on date;
+alter table public.own_entries add column if not exists booked_on date;

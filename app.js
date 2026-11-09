@@ -2078,7 +2078,7 @@ const blockAt = (startMs, durMin) => (state.timeBlocks || []).find((b) => { cons
 async function loadPlanned(from, to) {
   const [t, o, bl] = await Promise.all([
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
     sb.from("time_blocks").select("id,starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
   ]);
   return { theory: t.data || [], own: o.data || [], blocks: bl.data || [] };
@@ -2138,6 +2138,7 @@ function openPlanned(kind, x) {
   const eDur = durationControl(x.duration_min);
   const eName = isT ? null : el("input", { maxlength: 80, value: x.student_name || "" });
   const ePn = !isT && x.kind === "lesson" ? payNoteFields(!x.no_pay, x.note || "") : null;
+  const eBooked = !isT && x.kind === "lesson" ? el("input", { type: "date", value: x.booked_on || "" }) : null;
   const eSave = el("button", { class: "btn" }, "Änderung speichern");
   eSave.onclick = () => busy(eSave, async () => {
     const at = fromInputs(eDate.value, eTime.value);
@@ -2146,7 +2147,8 @@ function openPlanned(kind, x) {
     const { error } = isT
       ? await sb.from("theory_lessons").update({ held_at: at.toISOString(), duration_min: eDur.value }).eq("id", x.id)
       : await sb.from("own_entries").update({ starts_at: at.toISOString(), duration_min: eDur.value, student_name: eName.value.trim(),
-        ...(ePn ? { no_pay: ePn.noPay(), note: ePn.note() } : {}) }).eq("id", x.id);
+        ...(ePn ? { no_pay: ePn.noPay(), note: ePn.note() } : {}),
+        ...(eBooked ? { booked_on: eBooked.value && eBooked.value !== dateInput(at) ? eBooked.value : null } : {}) }).eq("id", x.id);
     if (error) throw error;
     closeModal(); toast("Geändert."); render();
   });
@@ -2154,10 +2156,12 @@ function openPlanned(kind, x) {
     eName ? [el("label", {}, "Name"), eName] : null,
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), eDate), el("div", {}, el("label", {}, "Beginn"), eTime)),
     el("label", {}, "Dauer"), eDur.node, ePn ? ePn.node : null,
+    eBooked ? [el("label", {}, "📅 Im System eingetragen am (optional, leer = Fahrtag)"), eBooked] : null,
     el("p", { class: "muted small" }, isT ? "" : "Der/die Schüler/in hat keine App – die Änderung gilt sofort."),
     el("div", { class: "actions" }, eSave));
   openModal(isT ? "📚 Theorieunterricht" : `${ownLabel(x)} · ${x.student_name}`,
     el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr · ${x.duration_min} Min.`),
+    !isT && x.booked_on ? el("div", { class: "notice wish" }, `📅 Im System eingetragen am ${fmtDayStr(x.booked_on)} – zählt in der Kontrolle an diesem Tag.`) : null,
     editBox,
     !isT ? el("p", { class: "small muted" }, "Eintrag nur für deinen Kalender – der/die Schüler/in hat keinen App-Zugang, andere Schüler/innen sehen diese Zeit nicht als frei.") : null,
     !isT && x.kind === "lesson" ? el("p", {}, x.done ? (x.no_pay ? "✓ Abgehakt – 💸 unbezahlt" : "✓ Abgehakt – 💶 bezahlt, zählt in Kontrolle und Lohn") : "☐ Noch nicht abgehakt") : null,
@@ -2716,6 +2720,10 @@ async function adminCalendar() {
 // Legt einen vergangenen Termin an und hakt ihn sofort ab – ohne Mitteilung an den Schüler.
 async function openBackfill(preStudent) {
   const pn = payNoteFields();
+  const bookedOn = el("input", { type: "date" });
+  const bookedBox = el("details", { class: "fold" }, el("summary", {}, "📅 Im System an einem anderen Tag eingetragen? (optional)"),
+    el("p", { class: "muted small", style: "margin:4px 0" }, "Datum, unter dem du die Fahrstunde im Fahrschulsystem aufschreibst. Leer = am Fahrtag."), bookedOn);
+  const bookedVal = (start) => (bookedOn.value && bookedOn.value !== dateInput(start) ? bookedOn.value : null);
   const { data: students, error } = await myProfiles()
     .select("id,first_name,last_name,license_class,needs_glasses,is_conversion,status,valid_until")
     .eq("role", "student").in("status", ["active", "blocked"]).order("last_name");
@@ -2770,7 +2778,7 @@ async function openBackfill(preStudent) {
       // Schüler/in ohne App: eigener Eintrag, gleich als gefahren abgehakt
       const isExam = type === "exam";
       const { error } = await sb.from("own_entries").insert({ teacher_id: state.profile.id, kind: isExam ? "exam" : "lesson", lesson_type: isExam ? null : type,
-        student_name: ownName, starts_at: start.toISOString(), duration_min: dur.value, done: true, no_pay: pn.noPay(), note: pn.note() });
+        student_name: ownName, starts_at: start.toISOString(), duration_min: dur.value, done: true, no_pay: pn.noPay(), note: pn.note(), ...(bookedVal(start) ? { booked_on: bookedVal(start) } : {}) });
       if (error) throw error;
       okMsg = `${isExam ? "Prüfung" : LESSON_TYPES[type]} · ${ownName} (ohne App) · ${fmtDay(start.toISOString())} ${fmtTime(start.toISOString())} Uhr · ${dur.value} Min.`;
       if (who.value === "own:") {   // neuer Name: in die Liste aufnehmen und gleich auswählen
@@ -2789,13 +2797,13 @@ async function openBackfill(preStudent) {
       const { data: slot, error } = await sb.from("slots").insert({ starts_at: start.toISOString(), duration_min: dur.value }).select("id").single();
       if (error) throw error;
       const { error: e2 } = await sb.from("bookings").insert({ slot_id: slot.id, student_id: st.id, status: "confirmed",
-        actual_minutes: dur.value, lesson_type: type, decided_at: new Date().toISOString(), no_pay: pn.noPay(), teacher_note: pn.note() });
+        actual_minutes: dur.value, lesson_type: type, decided_at: new Date().toISOString(), no_pay: pn.noPay(), teacher_note: pn.note(), ...(bookedVal(start) ? { booked_on: bookedVal(start) } : {}) });
       if (e2) { await sb.from("slots").delete().eq("id", slot.id); throw e2; }
       okMsg = `${LESSON_TYPES[type]} · ${fullName(st)} · ${fmtDay(start.toISOString())} ${fmtTime(start.toISOString())} Uhr · ${dur.value} Min.`;
     }
     // Fenster bleibt offen: gleich die nächste Fahrstunde eintragen (Schüler, Art und Dauer bleiben stehen)
-    toast("Nachgetragen: " + okMsg + (pn.noPay() ? " · unbezahlt" : ""));
-    pn.reset();
+    toast("Nachgetragen: " + okMsg + (pn.noPay() ? " · unbezahlt" : "") + (bookedVal(start) ? ` · im System am ${fmtDayStr(bookedVal(start))}` : ""));
+    pn.reset(); bookedOn.value = ""; bookedBox.open = false;
     log.prepend(el("div", { class: "list-item small" }, "✓ " + okMsg));
     state.renderOnClose = true;   // Kalender/Kontrolle werden beim Schließen aktualisiert
     const next = new Date(start.getTime() + dur.value * 60000);   // Vorschlag: direkt im Anschluss
@@ -2807,7 +2815,7 @@ async function openBackfill(preStudent) {
     el("label", {}, "Was?"), typeRow, result,
     el("div", { class: "row" }, el("div", {}, el("label", {}, "Datum"), date), el("div", {}, el("label", {}, "Beginn"), time)),
     el("label", {}, "Dauer (gefahrene Minuten)"), dur.node,
-    pn.node,
+    pn.node, bookedBox,
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Fertig")),
     log);
 }
@@ -3721,7 +3729,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -3863,7 +3871,22 @@ async function openAdminSlot(slotId) {
         if (error) throw error;
         toast(pn.noPay() ? "Gespeichert – unbezahlt." : "Gespeichert – bezahlt.");
       });
-      parts.push(el("hr"), doneControls(slot, b, done),
+      // 📅 Im Fahrschulsystem an einem anderen Tag eingetragen (z. B. gefahren 14.01., aufgeschrieben 10.01.)
+      const bo = el("input", { type: "date", value: b.booked_on || "" });
+      const boSave = el("button", { class: "btn small" }, "Speichern");
+      boSave.onclick = () => busy(boSave, async () => {
+        const v = bo.value && bo.value !== dateInput(slot.starts_at) ? bo.value : null;
+        const { error } = await sb.from("bookings").update({ booked_on: v }).eq("id", b.id);
+        if (error) throw new Error(/booked_on/.test(error.message || "") ? "Dafür muss erst das neue SQL in Supabase laufen." : error.message);
+        b.booked_on = v; state.renderOnClose = true;
+        toast(v ? `Gespeichert: zählt in der Kontrolle am ${fmtDayStr(v)}.` : "Gespeichert: zählt am Fahrtag.");
+      });
+      const boClear = el("button", { class: "btn small ghost", onclick: () => { bo.value = ""; boSave.click(); } }, "Zurück auf den Fahrtag");
+      const bookedBox = el("details", { class: "fold moved-box", open: !!b.booked_on },
+        el("summary", {}, b.booked_on ? `📅 Im System eingetragen am ${fmtDayStr(b.booked_on)}` : "📅 Im System an einem anderen Tag eingetragen?"),
+        el("p", { class: "muted small", style: "margin:4px 0" }, `Gefahren am ${fmtDate(slot.starts_at)}, ${fmtTime(slot.starts_at)} Uhr. Trag hier das Datum ein, unter dem du sie im Fahrschulsystem aufgeschrieben hast – die Kontrolle zeigt sie dann dort mit dem Hinweis auf den echten Fahrtag.`),
+        el("div", { class: "done-row" }, bo, boSave, b.booked_on ? boClear : null));
+      parts.push(el("hr"), doneControls(slot, b, done), bookedBox,
         el("details", { class: "fold", open: !!b.no_pay }, el("summary", {}, b.no_pay ? "💸 Unbezahlt" : "💶 Bezahlt / unbezahlt"),
           pn.node, el("div", { class: "actions", style: "margin:6px 0 0" }, pnSave)),
         el("hr"), el("h3", {}, "Termin & Hinweis"));
@@ -5778,13 +5801,18 @@ function isoWeek(d) {
 const monthName = (d) => d.toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 
 async function loadControlRows(from, to) {
-  const { data, error } = await sb.from("bookings")
-    .select("id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,transferred_at,no_pay,teacher_note,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min)")
-    .gte("slots.starts_at", from.toISOString()).lt("slots.starts_at", to.toISOString());
-  if (error) throw error;
+  const cols = "id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,transferred_at,no_pay,teacher_note,booked_on,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min)";
+  const [r1, r2] = await Promise.all([
+    sb.from("bookings").select(cols).gte("slots.starts_at", from.toISOString()).lt("slots.starts_at", to.toISOString()),
+    // in diesem Monat eingetragen, aber an einem anderen Tag gefahren
+    sb.from("bookings").select(cols).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to)),
+  ]);
+  if (r1.error) throw r1.error;
+  const seen = new Set(), data = [];
+  for (const b of (r1.data || []).concat(r2.error ? [] : r2.data || [])) if (!seen.has(b.id)) { seen.add(b.id); data.push(b); }
   // Alle bestätigten Fahrstunden (abgehakt oder noch nicht) + kostenpflichtige Fehlstunden
   return data.filter((b) => b.slots && (b.status === "confirmed" || b.late_cancel))
-    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
+    .sort((a, b) => (effDay(a) + a.slots.starts_at).localeCompare(effDay(b) + b.slots.starts_at));
 }
 const controlKind = (b) => (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : "Fehlstunde (kostenpflichtig)");
 // Zusammenfassung: Anzahl Fahrstunden und Minuten (bewusst nur Minuten, keine Stunden-Umrechnung)
@@ -5806,14 +5834,21 @@ async function adminControl() {
     sb.from("exams").select("id,kind,exam_at,duration_min,result,profiles(first_name,last_name)").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
     sb.from("teacher_pay").select("*").eq("teacher_id", state.profile.id).maybeSingle(),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
   ]);
+  // Schüler/innen ohne App: auch in diesem Monat eingetragene, aber an einem anderen Tag gefahrene
+  const ownMoved = await sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to));
+  if (!ownMoved.error && ownRes.data) for (const x of ownMoved.data || []) if (!ownRes.data.some((y) => y.id === x.id)) ownRes.data.push(x);
   // Eigene Fahrstunden (Schüler ohne App) wie normale Fahrstunden behandeln
   const ownAll = ownRes.data || [];
   const allRows = bookRows.concat(ownAll.filter((x) => x.kind === "lesson").map((x) => ({
     id: x.id, _own: true, _src: x, status: "confirmed", actual_minutes: x.done ? x.duration_min : null, lesson_type: x.lesson_type || "normal",
-    transferred_at: x.transferred_at, no_pay: !!x.no_pay, profiles: { first_name: x.student_name, last_name: "" }, slots: { id: null, starts_at: x.starts_at, duration_min: x.duration_min } })))
-    .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at));
+    transferred_at: x.transferred_at, no_pay: !!x.no_pay, booked_on: x.booked_on || null, profiles: { first_name: x.student_name, last_name: "" }, slots: { id: null, starts_at: x.starts_at, duration_min: x.duration_min } })))
+    .sort((a, b) => (effDay(a) + a.slots.starts_at).localeCompare(effDay(b) + b.slots.starts_at));
+  // Gezählt wird am eingetragenen Tag; an einem anderen Tag gefahrene, die in einen anderen Monat eingetragen sind, gehören dorthin
+  const inMonth = (k) => k >= dateInput(from) && k < dateInput(to);
+  const movedAway = allRows.filter((b) => isMoved(b) && !inMonth(effDay(b)) && inMonth(dateInput(b.slots.starts_at)));
+  allRows.splice(0, allRows.length, ...allRows.filter((b) => inMonth(effDay(b))));
   const isTicked = (b) => b.status === "confirmed" && b.actual_minutes !== null;
   const isFinished = (b) => isTicked(b) || b.status !== "confirmed";
   // Abrechnung und Übertragen betreffen nur Abgehaktes und Fehlstunden
@@ -5864,7 +5899,7 @@ async function adminControl() {
     const row = el("div", { class: "cl-row tap-row" + (ok ? "" : " late") + (b.no_pay ? " unpaid" : "") + (b.transferred_at ? " sent" : ""),
       onclick: rowTap(() => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id))) },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
-      el("span", { class: "cl-name" }, fullName(b.profiles)),
+      el("span", { class: "cl-name" }, fullName(b.profiles), isMoved(b) ? el("small", { class: "moved-tag" }, `↪ ${drivenOnText(b)}`) : null),
       feat("notes") ? noteIcon(b._own ? b._src.note : b.teacher_note, `📝 ${fullName(b.profiles)}`) : null,
       el("b", { class: "cl-min" }, b.no_pay ? el("span", { class: "unpaid-tag" }, `💸 unbezahlt · ${ok ? b.actual_minutes : b.slots.duration_min} Min.`)
         : ok ? `✓ ${b.actual_minutes} Min.` : `Fehlstunde · ${b.slots.duration_min} Min.`),
@@ -5893,12 +5928,15 @@ async function adminControl() {
       icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : "" })),
   ];
   const extras = openOnly ? [] : allExtras;
-  const extraLine = (x) => el("div", { class: "cl-row extra" },
+  const extraLine = (x) => el("div", { class: "cl-row extra" + (x.ghost ? " ghost tap-row" : ""), onclick: x.open ? rowTap(x.open) : null },
     el("span", { class: "cl-time" }, fmtTime(x.at)), el("span", { class: "cl-name" }, `${x.icon} ${x.text}`),
-    el("b", { class: "cl-min" }, `${x.dur} Min.${x.res ? ` · ${x.res}` : ""}`), el("span", {}));
+    el("b", { class: "cl-min" }, x.ghost ? "zählt dort" : `${x.dur} Min.${x.res ? ` · ${x.res}` : ""}`), el("span", {}));
   const days = [];
   const dayOf = (key) => { let d = days.find((x) => x.key === key); if (!d) days.push((d = { key, list: [], extra: [] })); return d; };
-  for (const b of shown) dayOf(dateInput(b.slots.starts_at)).list.push(b);
+  for (const b of shown) dayOf(effDay(b)).list.push(b);
+  // Am echten Fahrtag ein Hinweis, wo die Fahrstunde eingetragen ist
+  for (const b of allRows.filter(isMoved).concat(movedAway)) if (inMonth(dateInput(b.slots.starts_at)))
+    dayOf(dateInput(b.slots.starts_at)).extra.push({ at: b.slots.starts_at, min: 0, icon: "→", text: `${fullName(b.profiles)} – im System eingetragen am ${fmtDayStr(b.booked_on)}`, dur: b.slots.duration_min, res: "", ghost: true, open: () => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id)) });
   for (const x of extras) dayOf(dateInput(x.at)).extra.push(x);
   days.sort((a, b) => a.key.localeCompare(b.key));
   const driven = rows.filter((b) => b.status === "confirmed" && !b.no_pay), totalMin = dayMin(rows), late = rows.filter((b) => b.status !== "confirmed" && !b.no_pay).length;
@@ -5939,15 +5977,15 @@ async function adminControl() {
     const tag = (t, txt, cls) => { const e = d.createElement(t); if (txt !== undefined && txt !== null) e.textContent = txt; if (cls) e.className = cls; return e; };
     const tr = (cells, cls) => { const r = tag("tr", undefined, cls); cells.forEach(([v, c]) => r.append(tag("td", v, c))); return r; };
     // Einträge je Tag: Fahrstunden (bezahlt), Fehlstunden, Prüfungen, gehaltene Theorie
-    const items = rows.filter((b) => !b.no_pay && paidMin(b) > 0).map((b) => ({ at: b.slots.starts_at, name: fullName(b.profiles),
-      kind: b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : `Fehlstunde (${STATUS_TEXT[b.status] || "ausgefallen"})`, min: paidMin(b) }))
-      .concat(allExtras.filter((x) => x.min > 0).map((x) => ({ at: x.at, name: x.text.replace(/^(Prüfung|Schaltkompetenz|Theorie) · /, ""), kind: x.text.split(" · ")[0], min: x.min })))
-      .sort((a, b) => a.at.localeCompare(b.at));
+    const items = rows.filter((b) => !b.no_pay && paidMin(b) > 0).map((b) => ({ at: b.slots.starts_at, day: effDay(b), name: fullName(b.profiles),
+      kind: (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : `Fehlstunde (${STATUS_TEXT[b.status] || "ausgefallen"})`) + (isMoved(b) ? ` – ${drivenOnText(b)}` : ""), min: paidMin(b) }))
+      .concat(allExtras.filter((x) => x.min > 0).map((x) => ({ at: x.at, day: dateInput(x.at), name: x.text.replace(/^(Prüfung|Schaltkompetenz|Theorie) · /, ""), kind: x.text.split(" · ")[0], min: x.min })))
+      .sort((a, b) => (a.day + a.at).localeCompare(b.day + b.at));
     const table = tag("table");
     const head = tag("tr"); ["Uhrzeit", "Schüler/in", "Art", "Dauer"].forEach((h, i) => head.append(tag("th", h, i === 3 ? "r" : ""))); table.append(head);
     let monthMin = 0;
     const byDay = new Map();
-    items.forEach((x) => { const k = dateInput(x.at); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(x); });
+    items.forEach((x) => { const k = x.day; if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(x); });
     for (const [k, list] of byDay) {
       const dayMinutes = list.reduce((n, x) => n + x.min, 0); monthMin += dayMinutes;
       table.append(tr([[new Date(k + "T12:00:00").toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" })], [""], [""], [`${dayMinutes} Min.`, "r"]], "day"));
@@ -6127,10 +6165,16 @@ function openTheoryForm() {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
-const controlTable = (rows) => rows.map((b) => [
-  `KW ${isoWeek(new Date(b.slots.starts_at))}`, new Date(b.slots.starts_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }),
-  fmtRange(b.slots.starts_at, b.slots.duration_min), fullName(b.profiles), (b.profiles && b.profiles.license_class) || "",
-  b.status === "confirmed" ? b.actual_minutes : "", controlKind(b), b.transferred_at ? "ja" : ""]);
+// Im Fahrschulsystem an einem anderen Tag eingetragen? effDay = Tag, unter dem sie zählt; drivenOnText = Hinweis auf den echten Fahrtag
+const effDay = (b) => b.booked_on || dateInput(b.slots.starts_at);
+const isMoved = (b) => !!b.booked_on && b.booked_on !== dateInput(b.slots.starts_at);
+const drivenOnText = (b) => `gefahren am ${fmtDayStr(dateInput(b.slots.starts_at))}, ${fmtTime(b.slots.starts_at)} Uhr`;
+const controlTable = (rows) => rows.map((b) => {
+  const d = new Date(effDay(b) + "T12:00:00");
+  return [`KW ${isoWeek(d)}`, d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }),
+    fmtRange(b.slots.starts_at, b.slots.duration_min), fullName(b.profiles), (b.profiles && b.profiles.license_class) || "",
+    b.status === "confirmed" ? b.actual_minutes : "", controlKind(b) + (isMoved(b) ? ` (${drivenOnText(b)})` : ""), b.transferred_at ? "ja" : ""];
+});
 const CONTROL_HEAD = ["KW", "Datum", "Uhrzeit", "Name", "Klasse", "Minuten", "Art", "Übertragen"];
 function exportControlCsv(m, rows) {
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
