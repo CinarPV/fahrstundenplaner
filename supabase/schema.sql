@@ -1676,3 +1676,6 @@ $cron$);
 -- Fahrstunde im Fahrschulsystem an einem anderen Tag eingetragen (z. B. gefahren am 14.01., aufgeschrieben am 10.01.)
 alter table public.bookings add column if not exists booked_on date;
 alter table public.own_entries add column if not exists booked_on date;
+
+-- Prüfungsergebnis auch bei Schüler/innen ohne App (NULL = noch offen)
+alter table public.own_entries add column if not exists exam_result text check (exam_result in ('passed','failed'));

@@ -2086,12 +2086,12 @@ const blockAt = (startMs, durMin) => (state.timeBlocks || []).find((b) => { cons
 async function loadPlanned(from, to) {
   const [t, o, bl, mb, mo] = await Promise.all([
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
     sb.from("time_blocks").select("id,starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
     // Fahrstunden, die an einem anderen Tag gefahren, aber an diesen Tagen im Fahrschulsystem eingetragen werden
     sb.from("bookings").select("id,status,actual_minutes,booked_on,profiles(first_name,last_name),slots!inner(id,starts_at,duration_min,teacher_id)")
       .eq("slots.teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to)),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to)),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to)),
   ]);
   const moved = (mb.error ? [] : mb.data || []).filter((b) => b.slots && b.status === "confirmed" && b.booked_on !== dateInput(b.slots.starts_at))
     .map((b) => ({ day: b.booked_on, start: b.slots.starts_at, dur: b.actual_minutes || b.slots.duration_min, name: fullName(b.profiles), open: () => openAdminSlot(b.slots.id) }))
@@ -2109,6 +2109,8 @@ const movedToday = (p, day) => (feat("moved") ? p.moved || [] : []).filter((m) =
   node: el("div", { class: "tr tap-row moved-in", onclick: rowTap(m.open) },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(m.start)), el("span", { class: "tr-name" }, m.name), el("span", { class: "tr-pill" }, `${m.dur} Min.`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›")),
     el("div", { class: "moved-real" }, `🚗 Ursprünglich gefahren: ${fmtDayStr(dateInput(m.start))}, ${fmtTime(m.start)} Uhr`)) }));
+// Prüfungsergebnis bei Schüler/innen ohne App
+const ownExamRes = (x) => (x.exam_result === "passed" ? "🎉 bestanden" : x.exam_result === "failed" ? "✗ nicht bestanden" : "");
 const ownLabel = (x) => (x.kind === "exam" ? "🎓 Prüfung" : typeLabel(x.lesson_type));
 async function setOwnDone(x, on) {
   const { error } = await sb.from("own_entries").update({ done: on }).eq("id", x.id);
@@ -2175,6 +2177,23 @@ function openPlanned(kind, x) {
     if (error) throw error;
     closeModal(); toast("Gelöscht."); render();
   });
+  // Prüfung (ohne App): Ergebnis bestanden / nicht bestanden / offen
+  let resSec = null;
+  if (!isT && x.kind === "exam") {
+    const setRes = (v) => async (ev) => busy(ev.currentTarget, async () => {
+      const { error } = await sb.from("own_entries").update({ exam_result: v }).eq("id", x.id);
+      if (error) throw error;
+      x.exam_result = v; closeModal(); render();
+      toast(v === "passed" ? "🎉 Bestanden eingetragen!" : v === "failed" ? "Nicht bestanden eingetragen." : "Ergebnis zurückgesetzt.");
+    });
+    resSec = el("div", { class: "card exam-card" + (x.exam_result === "passed" ? " exam-passed" : ""), style: "padding:10px 14px" },
+      el("b", {}, "Ergebnis: "), x.exam_result === "passed" ? el("span", { class: "badge confirmed" }, "🎉 Bestanden")
+        : x.exam_result === "failed" ? el("span", { class: "badge rejected" }, "Nicht bestanden") : el("span", { class: "badge requested" }, "offen"),
+      el("div", { class: "actions" }, x.exam_result
+        ? el("button", { type: "button", class: "btn small ghost", onclick: setRes(null) }, "Ergebnis zurücksetzen")
+        : [el("button", { type: "button", class: "btn small ok", onclick: setRes("passed") }, "✓ Bestanden"),
+           el("button", { type: "button", class: "btn small danger", onclick: setRes("failed") }, "✗ Nicht bestanden")]));
+  }
   let tick = null;
   if (!isT && x.kind === "lesson") {
     tick = el("button", { class: "btn" + (x.done ? " ghost" : " ok") }, x.done ? "Haken zurücknehmen" : "✓ Als gefahren abhaken");
@@ -2210,6 +2229,7 @@ function openPlanned(kind, x) {
     el("div", { class: "actions" }, eSave));
   openModal(isT ? "📚 Theorieunterricht" : `${ownLabel(x)} · ${x.student_name}`,
     el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr · ${x.duration_min} Min.`),
+    resSec,
     !isT && x.booked_on ? el("div", { class: "notice wish" }, `📅 Im System eingetragen am ${fmtDayStr(x.booked_on)} – zählt in der Kontrolle an diesem Tag.`) : null,
     editBox,
     !isT ? el("p", { class: "small muted" }, "Eintrag nur für deinen Kalender – der/die Schüler/in hat keinen App-Zugang, andere Schüler/innen sehen diese Zeit nicht als frei.") : null,
@@ -2228,7 +2248,7 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
       ? el("button", { class: "slot moved-away", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } }, `→ ${x.student_name} · ${fmtTime(x.starts_at)} – liegt am ${fmtDayStr(x.booked_on)}`)
       : x.kind === "exam"
       ? el("button", { class: "slot exam", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
-          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, "Prüfung"), x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null)
+          slotHead(`🎓 ${fmtRange(x.starts_at, x.duration_min)}`, ownExamRes(x) || "Prüfung"), x.student_name, feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null)
       : el("button", { class: "slot " + (x.done ? "done" : "confirmed"), onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } },
           slotHead(fmtRange(x.starts_at, x.duration_min), x.done ? "gefahren" : "bestätigt"),
           (x.done ? `✓ ${x.duration_min} Min. ${LESSON_ICON[x.lesson_type] || ""} · ` : "") + x.student_name, movedChip(x.booked_on, x.starts_at, true), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null) })));
@@ -2246,7 +2266,7 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
       return { at: x.starts_at, node: el("div", { class: "tr tap-row moved-away", onclick: rowTap(() => openPlanned("own", x)) },
         el("div", { class: "tr-head" }, el("span", { class: "tr-time" }, fmtTime(x.starts_at)), el("span", { class: "tr-name" }, `→ ${x.student_name} – liegt am ${fmtDayStr(x.booked_on)}`), el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) };
     const name = [el("span", { class: "tr-name" }, (x.kind === "exam" ? "🎓 " : "") + x.student_name), feat("notes") ? noteIcon(x.note, `📝 ${x.student_name}`, () => openPlanned("own", x)) : null];
-    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr tap-row exam", onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, "Prüfung"))) };
+    if (x.kind === "exam") return { at: x.starts_at, node: el("div", { class: "tr tap-row exam", onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name, el("span", { class: "tr-pill" }, ownExamRes(x) || "Prüfung"))) };
     const phase = x.done ? "done" : now >= start && now < end ? "live" : now >= end ? "over" : "next";
     const canTick = !x.done && now >= start - 45 * 60000;
     return { at: x.starts_at, node: el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openPlanned("own", x)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(x.starts_at)), name,
@@ -4614,7 +4634,7 @@ async function adminStudents() {
     myProfiles().select(STUDENT_FIELDS).order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
     sb.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed"),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay").eq("teacher_id", state.profile.id).order("starts_at"),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).order("starts_at"),
   ]);
   if (p.error) throw p.error;
   const ownCard = ownStudentsCard(own.data || []);
@@ -4748,11 +4768,22 @@ function openOwnStudent(pp) {
   const now = Date.now();
   return openModal(pp.name,
     el("p", { class: "muted small" }, "Schüler/innen ohne App – nur in deinem Kalender."),
+    ownStats(pp.list),
     el("div", { class: "actions" }, el("button", { class: "btn ok", onclick: () => { closeModal(); openSlotForm(new Date(), null, pp.name); } }, "➕ Neuen Termin für " + pp.name)),
     pp.list.slice().reverse().map((x) => el("div", { class: "list-item clickable", onclick: () => openPlanned("own", x) },
       el("div", { class: "head" },
         el("span", {}, `${fmtDay(x.starts_at)} ${fmtRange(x.starts_at, x.duration_min)}`),
-        el("span", { class: "badge " + (x.done ? "confirmed" : "requested") }, x.kind === "exam" ? "🎓 Prüfung" : x.done ? `✓ ${x.duration_min} Min.` : new Date(x.starts_at).getTime() > now ? "geplant" : "nicht abgehakt")))));
+        el("span", { class: "badge " + (x.done ? "confirmed" : "requested") }, x.kind === "exam" ? "🎓 Prüfung" + (ownExamRes(x) ? " · " + ownExamRes(x) : "") : x.done ? `✓ ${x.duration_min} Min.` : new Date(x.starts_at).getTime() > now ? "geplant" : "nicht abgehakt")))));
+}
+// Kurzstatistik für Schüler/innen ohne App: Fahrstunden, Minuten, Prüfungen mit Ergebnis
+function ownStats(list) {
+  const done = list.filter((x) => x.kind === "lesson" && x.done);
+  const exams = list.filter((x) => x.kind === "exam");
+  return el("div", { class: "card", style: "padding:10px 14px" },
+    el("b", {}, `🚗 ${done.length} Fahrstunde${done.length === 1 ? "" : "n"} · ${fmtMinutes(done.reduce((n, x) => n + x.duration_min, 0))}`),
+    exams.length ? el("div", { style: "margin-top:4px" }, el("b", {}, `🎓 Prüfungen: ${exams.length}`),
+      ` · ${exams.filter((x) => x.exam_result === "passed").length}× bestanden · ${exams.filter((x) => x.exam_result === "failed").length}× nicht bestanden`,
+      el("div", { class: "small", style: "margin-top:4px" }, exams.map((x) => `🎓 ${fmtDay(x.starts_at)}: ${ownExamRes(x).replace(/^\S+ /, "") || "offen"}`).join(" · "))) : null);
 }
 // Schüler ohne App: aus den eigenen Einträgen, nach Namen zusammengefasst
 function ownStudentsCard(entries) {
@@ -4770,12 +4801,14 @@ function ownStudentsCard(entries) {
   return el("div", { class: "card" },
     el("h2", {}, "Schüler/innen ohne App"),
     el("div", { style: "overflow-x:auto" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"))),
+      el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Prüfung"))),
       el("tbody", {}, people.map((pp) => {
         const done = pp.list.filter((x) => x.kind === "lesson" && x.done);
         const planned = pp.list.filter((x) => !x.done && new Date(x.starts_at).getTime() > now).length;
         return el("tr", { class: "clickable", onclick: () => open(pp) },
-          el("td", {}, pp.name), el("td", { class: "num" }, done.length), el("td", { class: "num" }, fmtMinutes(done.reduce((n, x) => n + x.duration_min, 0))), el("td", { class: "num" }, planned));
+          el("td", {}, pp.name), el("td", { class: "num" }, done.length), el("td", { class: "num" }, fmtMinutes(done.reduce((n, x) => n + x.duration_min, 0))), el("td", { class: "num" }, planned),
+          el("td", {}, (() => { const ex = pp.list.filter((x) => x.kind === "exam"); const last = ex[ex.length - 1];
+            return !last ? "–" : ex.some((x) => x.exam_result === "passed") ? "🎉 bestanden" : ownExamRes(last) || (new Date(last.starts_at).getTime() > now ? `📅 ${fmtDay(last.starts_at)}` : "offen"); })()));
       })))),
     el("p", { class: "muted small" }, "Namen antippen für alle Termine. Beim Anlegen unter „👤 Ohne App“ werden die Namen beim Tippen vorgeschlagen."));
 }
@@ -5911,10 +5944,10 @@ async function adminControl() {
     sb.from("exams").select("id,kind,exam_at,duration_min,result,profiles(first_name,last_name)").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
     sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
     sb.from("teacher_pay").select("*").eq("teacher_id", state.profile.id).maybeSingle(),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
   ]);
   // Schüler/innen ohne App: auch in diesem Monat eingetragene, aber an einem anderen Tag gefahrene
-  const ownMoved = await sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on").eq("teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to));
+  const ownMoved = await sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).gte("booked_on", dateInput(from)).lt("booked_on", dateInput(to));
   if (!ownMoved.error && ownRes.data) for (const x of ownMoved.data || []) if (!ownRes.data.some((y) => y.id === x.id)) ownRes.data.push(x);
   // Eigene Fahrstunden (Schüler ohne App) wie normale Fahrstunden behandeln
   const ownAll = ownRes.data || [];
@@ -6000,7 +6033,7 @@ async function adminControl() {
       icon: EXAM_ICON[e.kind] || "🎓", text: `${e.kind === "schalt" ? "Schaltkompetenz" : "Prüfung"} · ${fullName(e.profiles || {})}`, dur: e.duration_min || 55,
       res: e.result === "passed" ? "bestanden" : e.result === "failed" ? "nicht bestanden" : "" })),
     ...ownAll.filter((x) => x.kind === "exam").map((x) => ({ at: x.starts_at, min: new Date(x.starts_at).getTime() <= nowMs0 ? x.duration_min : 0,
-      icon: "🎓", text: `Prüfung · ${x.student_name} (ohne App)`, dur: x.duration_min, res: "" })),
+      icon: "🎓", text: `Prüfung · ${x.student_name} (ohne App)`, dur: x.duration_min, res: ownExamRes(x).replace(/^\S+ /, "") })),
     ...(theoryRes.data || []).map((t) => ({ at: t.held_at, min: new Date(t.held_at).getTime() <= nowMs0 ? t.duration_min : 0,
       icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : "" })),
   ];
