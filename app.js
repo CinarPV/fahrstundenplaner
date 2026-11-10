@@ -435,7 +435,7 @@ function payNoteFields(pay = true, note = "", noNote = false) {
 }
 // Namen der Schüler/innen ohne App (aus den eigenen Einträgen)
 async function loadOwnNames() {
-  const { data } = await sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id);
+  const { data } = await sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id).is("archived_at", null);
   return [...new Map((data || []).map((x) => [(x.student_name || "").trim().toLowerCase(), (x.student_name || "").trim()])).values()].filter(Boolean).sort((a, b) => a.localeCompare(b, "de"));
 }
 // Freien Termin an Schüler/in ohne App vergeben: eigener Eintrag zur selben Zeit, der freie Termin entfällt
@@ -2085,7 +2085,7 @@ const blockAt = (startMs, durMin) => (state.timeBlocks || []).find((b) => { cons
 // Theorie und eigene Einträge (Schüler ohne App) eines Zeitraums – nur für den Fahrlehrer sichtbar
 async function loadPlanned(from, to) {
   const [t, o, bl, mb, mo] = await Promise.all([
-    sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
+    sb.from("theory_lessons").select("id,held_at,duration_min,note,done").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()),
     sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
     sb.from("time_blocks").select("id,starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()),
     // Fahrstunden, die an einem anderen Tag gefahren, aber an diesen Tagen im Fahrschulsystem eingetragen werden
@@ -2183,8 +2183,10 @@ function openPlanned(kind, x) {
     const setRes = (v) => async (ev) => busy(ev.currentTarget, async () => {
       const { error } = await sb.from("own_entries").update({ exam_result: v }).eq("id", x.id);
       if (error) throw error;
-      x.exam_result = v; closeModal(); render();
+      x.exam_result = v; closeModal();
       toast(v === "passed" ? "🎉 Bestanden eingetragen!" : v === "failed" ? "Nicht bestanden eingetragen." : "Ergebnis zurückgesetzt.");
+      if (v === "passed" && confirm(`🎉 ${x.student_name} hat bestanden!\n\nAus der aktiven Liste ins Archiv verschieben? (Wird 1 Jahr nach dem Archivieren automatisch gelöscht.)`)) await archiveOwn(x.student_name, true);
+      render();
     });
     resSec = el("div", { class: "card exam-card" + (x.exam_result === "passed" ? " exam-passed" : ""), style: "padding:10px 14px" },
       el("b", {}, "Ergebnis: "), x.exam_result === "passed" ? el("span", { class: "badge confirmed" }, "🎉 Bestanden")
@@ -2195,6 +2197,14 @@ function openPlanned(kind, x) {
            el("button", { type: "button", class: "btn small danger", onclick: setRes("failed") }, "✗ Nicht bestanden")]));
   }
   let tick = null;
+  if (isT) {
+    tick = el("button", { class: "btn" + (x.done ? " ghost" : " ok") }, x.done ? "Haken zurücknehmen" : "✓ Als gehalten abhaken");
+    tick.onclick = () => busy(tick, async () => {
+      const { error } = await sb.from("theory_lessons").update({ done: !x.done }).eq("id", x.id);
+      if (error) throw error;
+      x.done = !x.done; closeModal(); toast(x.done ? "✓ Theorie abgehakt." : "Haken zurückgenommen."); render();
+    });
+  }
   if (!isT && x.kind === "lesson") {
     tick = el("button", { class: "btn" + (x.done ? " ghost" : " ok") }, x.done ? "Haken zurücknehmen" : "✓ Als gefahren abhaken");
     tick.onclick = () => busy(tick, async () => { await setOwnDone(x, !x.done); closeModal(); });
@@ -2229,6 +2239,7 @@ function openPlanned(kind, x) {
     el("div", { class: "actions" }, eSave));
   openModal(isT ? "📚 Theorieunterricht" : `${ownLabel(x)} · ${x.student_name}`,
     el("p", {}, el("b", {}, fmtDate(start)), el("br"), `${fmtRange(start, x.duration_min)} Uhr · ${x.duration_min} Min.`),
+    isT ? el("p", {}, x.done ? "✓ Abgehakt – gehalten" : "☐ Noch nicht abgehakt") : null,
     resSec,
     !isT && x.booked_on ? el("div", { class: "notice wish" }, `📅 Im System eingetragen am ${fmtDayStr(x.booked_on)} – zählt in der Kontrolle an diesem Tag.`) : null,
     editBox,
@@ -2242,7 +2253,7 @@ const plannedExtras = (p) => (p.blocks || []).map((x) => ({ at: x.starts_at,
   node: el("button", { class: "slot block", onclick: (ev) => { ev.stopPropagation(); openBlock(x); } },
     slotHead(`📌 ${fmtRange(x.starts_at, x.duration_min)}`, "privat"), x.reason) })).concat(p.theory.map((t) => ({ at: t.held_at,
   node: el("button", { class: "slot theory", onclick: (ev) => { ev.stopPropagation(); openPlanned("theory", t); } },
-    slotHead(fmtRange(t.held_at, t.duration_min), "Theorie"), "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) })))
+    slotHead(fmtRange(t.held_at, t.duration_min), t.done ? "✓ gehalten" : "Theorie"), (t.done ? "✓ " : "") + "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")) })))
   .concat(p.own.map((x) => ({ at: x.starts_at,
     node: feat("moved") && x.booked_on && x.booked_on !== dateInput(x.starts_at)
       ? el("button", { class: "slot moved-away", onclick: (ev) => { ev.stopPropagation(); openPlanned("own", x); } }, `→ ${x.student_name} · ${fmtTime(x.starts_at)} – liegt am ${fmtDayStr(x.booked_on)}`)
@@ -2258,7 +2269,7 @@ const plannedToday = (p, day) => (p.blocks || []).filter((x) => sameDay(new Date
     el("span", { class: "tr-name" }, "📌 " + x.reason), el("span", { class: "tr-pill" }, `bis ${fmtTime(addMin(x.starts_at, x.duration_min))}`),
     el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) })).concat(p.theory.filter((t) => sameDay(new Date(t.held_at), day)).map((t) => ({ at: t.held_at,
   node: el("div", { class: "tr tap-row theory", onclick: rowTap(() => openPlanned("theory", t)) }, el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(t.held_at)),
-    el("span", { class: "tr-name" }, "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
+    el("span", { class: "tr-name" }, (t.done ? "✓ " : "") + "📚 Theorieunterricht" + (t.note ? ` · ${t.note}` : "")), el("span", { class: "tr-pill" }, `${t.duration_min} Min.`),
     el("span", { class: "tr-icon", "aria-hidden": "true" }, "›"))) }))
   .concat(p.own.filter((x) => sameDay(new Date(x.starts_at), day)).map((x) => {
     const start = new Date(x.starts_at).getTime(), end = start + x.duration_min * 60000, now = Date.now();
@@ -2814,7 +2825,7 @@ async function openBackfill(preStudent) {
   if (error) return fail(error);
   students.splice(0, students.length, ...(await onlyActive(students)));
   // Schüler/innen ohne App (aus den eigenen Einträgen) mit anbieten – und einen neuen Namen erlauben
-  const { data: ownRows } = await sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id);
+  const { data: ownRows } = await sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id).is("archived_at", null);
   const ownNames = [...new Map((ownRows || []).map((x) => [(x.student_name || "").trim().toLowerCase(), (x.student_name || "").trim()])).values()]
     .filter(Boolean).sort((a, b) => a.localeCompare(b, "de"));
   const who = el("select", {}, el("option", { value: "" }, "Schüler/in wählen …"),
@@ -3129,7 +3140,7 @@ function newSlotForm(opts = {}) {
   const ownNames = el("datalist", { id: "own-names-" + Math.random().toString(36).slice(2) });
   ownName.setAttribute("list", ownNames.id);
   let ownNameList = [];
-  sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id).then(({ data }) => {
+  sb.from("own_entries").select("student_name").eq("teacher_id", state.profile.id).is("archived_at", null).then(({ data }) => {
     const seen = new Map();
     for (const x of data || []) { const n = (x.student_name || "").trim(); if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n); }
     ownNameList = [...seen.values()].sort((a, b) => a.localeCompare(b, "de"));
@@ -4634,7 +4645,7 @@ async function adminStudents() {
     myProfiles().select(STUDENT_FIELDS).order("last_name"),
     sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
     sb.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed"),
-    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).order("starts_at"),
+    sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result,archived_at").eq("teacher_id", state.profile.id).order("starts_at"),
   ]);
   if (p.error) throw p.error;
   const ownCard = ownStudentsCard(own.data || []);
@@ -4734,7 +4745,7 @@ function studentSearchCard(students, ownEntries, stats) {
       return el("div", { class: "list-item clickable", onclick: () => openStudent(st) },
         el("div", { class: "head" }, el("span", {}, el("b", {}, fullName(st)), ` · ${s.done} Fahrstunden`), el("span", { class: "badge " + cls }, label)));
     }), ...ownHits.map((n) => el("div", { class: "list-item clickable", onclick: () => openOwnStudent({ name: n, list: ownEntries.filter((x) => (x.student_name || "").trim().toLowerCase() === n.toLowerCase()).sort((a, b) => a.starts_at.localeCompare(b.starts_at)) }) },
-      el("div", { class: "head" }, el("b", {}, n), el("span", { class: "badge" }, "ohne App")))),
+      el("div", { class: "head" }, el("b", {}, n), el("span", { class: "badge" }, ownEntries.filter((x) => (x.student_name || "").trim().toLowerCase() === n.toLowerCase()).every((x) => x.archived_at) ? "📦 Archiv · ohne App" : "ohne App")))),
       hits.length || ownHits.length ? null : el("p", { class: "muted small" }, "Kein Treffer."));
   });
   return el("div", { class: "card" }, q, out);
@@ -4763,12 +4774,32 @@ async function openTransfer(st) {
     el("label", {}, "Neue/r Fahrlehrer/in"), sel,
     el("div", { class: "actions" }, ok, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
+// Schüler/in ohne App ins Archiv (raus aus der aktiven Liste und den Namensvorschlägen) bzw. zurückholen.
+// Archivierte Einträge löscht die Datenbank 1 Jahr nach dem Archivieren automatisch.
+async function archiveOwn(name, on) {
+  const key = (name || "").trim().toLowerCase();
+  const { data, error } = await sb.from("own_entries").select("id,student_name").eq("teacher_id", state.profile.id);
+  if (error) throw error;
+  const ids = (data || []).filter((x) => (x.student_name || "").trim().toLowerCase() === key).map((x) => x.id);
+  if (!ids.length) return;
+  const { error: e2 } = await sb.from("own_entries").update({ archived_at: on ? new Date().toISOString() : null }).in("id", ids);
+  if (e2) throw e2;
+  toast(on ? `📦 ${name.trim()} ist jetzt im Archiv.` : `↩︎ ${name.trim()} ist wieder in der aktiven Liste.`);
+}
 // Schüler/in ohne App: alle Termine (aus der Suche oder der Liste)
 function openOwnStudent(pp) {
   const now = Date.now();
   return openModal(pp.name,
     el("p", { class: "muted small" }, "Schüler/innen ohne App – nur in deinem Kalender."),
     ownStats(pp.list),
+    (() => { const isArch = pp.list.length && pp.list.every((x) => x.archived_at);
+      const b = el("button", { class: "btn small ghost" }, isArch ? "↩︎ Aus dem Archiv holen" : "📦 Ins Archiv verschieben");
+      b.onclick = () => busy(b, async () => {
+        if (!isArch && !confirm(`${pp.name} ins Archiv verschieben?\n\n${pp.name} verschwindet aus der aktiven Liste und den Namensvorschlägen. Das Archiv wird 1 Jahr nach dem Archivieren automatisch gelöscht.`)) return;
+        await archiveOwn(pp.name, !isArch); closeModal(); render();
+      });
+      return el("div", { class: "actions", style: "margin-top:0" }, b,
+        isArch ? el("span", { class: "small muted" }, `📦 Im Archiv seit ${fmtDayStr(dateInput(pp.list[0].archived_at))} – wird am ${fmtDayStr(dateInput(addDays(new Date(pp.list[0].archived_at), 365)))} gelöscht`) : null); })(),
     el("div", { class: "actions" }, el("button", { class: "btn ok", onclick: () => { closeModal(); openSlotForm(new Date(), null, pp.name); } }, "➕ Neuen Termin für " + pp.name)),
     pp.list.slice().reverse().map((x) => el("div", { class: "list-item clickable", onclick: () => openPlanned("own", x) },
       el("div", { class: "head" },
@@ -4794,13 +4825,24 @@ function ownStudentsCard(entries) {
     if (!by.has(key.toLowerCase())) by.set(key.toLowerCase(), { name: key, list: [] });
     by.get(key.toLowerCase()).list.push(x);
   }
-  const people = [...by.values()].sort((a, b) => a.name.localeCompare(b.name, "de"));
-  if (!people.length) return null;
+  const all = [...by.values()].sort((a, b) => a.name.localeCompare(b.name, "de"));
+  if (!all.length) return null;
+  // Archiviert = alle Einträge des Namens archiviert (ein neuer Termin holt den Namen automatisch zurück)
+  const isArch = (pp) => pp.list.every((x) => x.archived_at);
+  const people = all.filter((pp) => !isArch(pp)), archive = all.filter(isArch);
   const now = Date.now();
   const open = openOwnStudent;
+  const archiveBox = archive.length ? el("details", { class: "fold", style: "margin-top:10px" },
+    el("summary", {}, `📦 Archiv (${archive.length})`),
+    el("p", { class: "muted small" }, "Wird 1 Jahr nach dem Archivieren automatisch gelöscht. Antippen zum Ansehen oder Zurückholen."),
+    archive.map((pp) => { const at = pp.list.reduce((m, x) => (x.archived_at > m ? x.archived_at : m), "");
+      const ex = pp.list.filter((x) => x.kind === "exam");
+      return el("div", { class: "list-item clickable", onclick: () => open(pp) }, el("div", { class: "head" }, el("b", {}, pp.name),
+        el("span", { class: "small muted" }, (ex.some((x) => x.exam_result === "passed") ? "🎉 bestanden · " : "") + `gelöscht am ${fmtDayStr(dateInput(addDays(new Date(at), 365)))}`))); })) : null;
   return el("div", { class: "card" },
     el("h2", {}, "Schüler/innen ohne App"),
-    el("div", { style: "overflow-x:auto" }, el("table", {},
+    people.length ? null : el("p", { class: "muted small" }, "Keine aktiven Schüler/innen ohne App."),
+    el("div", { style: "overflow-x:auto", hidden: !people.length }, el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "Name"), el("th", { class: "num" }, "Gefahren"), el("th", { class: "num" }, "Gesamtzeit"), el("th", { class: "num" }, "Geplant"), el("th", {}, "Prüfung"))),
       el("tbody", {}, people.map((pp) => {
         const done = pp.list.filter((x) => x.kind === "lesson" && x.done);
@@ -4810,7 +4852,8 @@ function ownStudentsCard(entries) {
           el("td", {}, (() => { const ex = pp.list.filter((x) => x.kind === "exam"); const last = ex[ex.length - 1];
             return !last ? "–" : ex.some((x) => x.exam_result === "passed") ? "🎉 bestanden" : ownExamRes(last) || (new Date(last.starts_at).getTime() > now ? `📅 ${fmtDay(last.starts_at)}` : "offen"); })()));
       })))),
-    el("p", { class: "muted small" }, "Namen antippen für alle Termine. Beim Anlegen unter „👤 Ohne App“ werden die Namen beim Tippen vorgeschlagen."));
+    el("p", { class: "muted small" }, "Namen antippen für alle Termine. Beim Anlegen unter „👤 Ohne App“ werden die Namen beim Tippen vorgeschlagen."),
+    archiveBox);
 }
 
 // Zugang eines Schülers: Status + „+6 Monate“ verlängern (vom aktuellen Ablaufdatum bzw. ab heute)
@@ -5942,7 +5985,7 @@ async function adminControl() {
   const [bookRows, examRes, theoryRes, payRes, ownRes] = await Promise.all([
     loadControlRows(from, to),
     sb.from("exams").select("id,kind,exam_at,duration_min,result,profiles(first_name,last_name)").gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()),
-    sb.from("theory_lessons").select("id,held_at,duration_min,note").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
+    sb.from("theory_lessons").select("id,held_at,duration_min,note,done").eq("teacher_id", state.profile.id).gte("held_at", from.toISOString()).lt("held_at", to.toISOString()).order("held_at"),
     sb.from("teacher_pay").select("*").eq("teacher_id", state.profile.id).maybeSingle(),
     sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,transferred_at,no_pay,booked_on,exam_result").eq("teacher_id", state.profile.id).gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
   ]);
@@ -6035,7 +6078,7 @@ async function adminControl() {
     ...ownAll.filter((x) => x.kind === "exam").map((x) => ({ at: x.starts_at, min: new Date(x.starts_at).getTime() <= nowMs0 ? x.duration_min : 0,
       icon: "🎓", text: `Prüfung · ${x.student_name} (ohne App)`, dur: x.duration_min, res: ownExamRes(x).replace(/^\S+ /, "") })),
     ...(theoryRes.data || []).map((t) => ({ at: t.held_at, min: new Date(t.held_at).getTime() <= nowMs0 ? t.duration_min : 0,
-      icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : "" })),
+      icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : t.done ? "✓ abgehakt" : "" })),
   ];
   const extras = openOnly ? [] : allExtras;
   const extraLine = (x) => el("div", { class: "cl-row extra" + (x.ghost ? " ghost tap-row" : ""), onclick: x.open ? rowTap(x.open) : null },

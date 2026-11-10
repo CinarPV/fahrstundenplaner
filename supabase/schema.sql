@@ -1679,3 +1679,12 @@ alter table public.own_entries add column if not exists booked_on date;
 
 -- Prüfungsergebnis auch bei Schüler/innen ohne App (NULL = noch offen)
 alter table public.own_entries add column if not exists exam_result text check (exam_result in ('passed','failed'));
+
+-- Theorieunterricht abhaken (gehalten)
+alter table public.theory_lessons add column if not exists done boolean not null default false;
+
+-- Archiv für Schüler/innen ohne App: aus der aktiven Liste raus; 1 Jahr nach dem Archivieren automatisch gelöscht
+alter table public.own_entries add column if not exists archived_at timestamptz;
+select cron.schedule('fsp-own-archive-cleanup', '30 3 * * *', $cron$
+  delete from public.own_entries where archived_at is not null and archived_at < now() - interval '1 year'
+$cron$);
