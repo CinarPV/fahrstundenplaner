@@ -5234,7 +5234,8 @@ function randomPassword() {
 const appLink = () => location.origin + location.pathname;
 
 async function ownerTeachers() {
-  const { data: all, error } = await myProfiles()
+  // Fahrlehrer/innen haben keine Zuordnung zu einem Fahrlehrer – hier NICHT myProfiles() benutzen (die Datenbank zeigt nur, was ich sehen darf)
+  const { data: all, error } = await sb.from("profiles")
     .select("id,first_name,last_name,email,slug,status,is_owner,is_school_admin,school_id,valid_until,created_at").eq("role", "teacher").order("last_name");
   if (error) throw error;
   const owner = isOwner(), me = state.profile.id;
