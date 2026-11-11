@@ -6419,8 +6419,13 @@ function monthOverview(d) {
   };
   const fields = [field("Fahrstunde und Theorie, brutto je 45 Min. (€)", "lesson_rate"), field("Zuschlag Theorie je 45 Min. (€)", "theory_bonus"),
     field("Zuschlag je Prüfung (€)", "exam_bonus"), field("Zuschlag Nachtfahrt je 45 Min. (€)", "night_bonus"),
-    field("Urlaubstage pro Jahr", "vacation_days")];
+    field("Urlaubstage pro Jahr", "vacation_days"), field(`Urlaubstage ${d.year} schon genommen (selbst eingetragen, z. B. vor der App)`, "vacation_taken")];
   fields[4].input.step = "1"; fields[4].input.placeholder = "z. B. 25";
+  fields[5].input.step = "1"; fields[5].input.placeholder = "z. B. 5";
+  // Selbst eingetragene Tage gelten nur für ihr Jahr
+  const manualTaken = +pay.vacation_taken_year === d.year ? +pay.vacation_taken || 0 : 0;
+  fields[5].input.value = manualTaken || "";
+  const takenYear = d.vacYear + manualTaken;
   const save = el("button", { class: "btn small" }, "Speichern");
   save.onclick = () => busy(save, async () => {
     const row = { teacher_id: state.profile.id, updated_at: new Date().toISOString() };
@@ -6429,6 +6434,7 @@ function monthOverview(d) {
       if (v !== null && (isNaN(v) || v < 0 || v > 100000)) throw new Error("Bitte gültige Beträge eintragen");
       row[f.key] = v;
     }
+    row.vacation_taken_year = d.year;
     const { error } = await sb.from("teacher_pay").upsert(row);
     if (error) throw error;
     toast("Lohnangaben gespeichert.");
@@ -6444,8 +6450,8 @@ function monthOverview(d) {
     el("div", { class: "cl-totals", style: "margin-top:8px" },
       el("div", {}, el("b", {}, String(d.vacMonth)), el("span", {}, "Urlaubstage im Monat")),
       d.sickMonth ? el("div", {}, el("b", {}, String(d.sickMonth)), el("span", {}, "Krankheitstage im Monat")) : null,
-      el("div", {}, el("b", {}, String(d.vacYear)), el("span", {}, `Urlaubstage ${d.year}`)),
-      +pay.vacation_days > 0 ? el("div", { class: +pay.vacation_days - d.vacYear < 0 ? "warn" : "" }, el("b", {}, String(+pay.vacation_days - d.vacYear)), el("span", {}, `noch übrig von ${+pay.vacation_days}`)) : null),
+      el("div", {}, el("b", {}, String(takenYear)), el("span", {}, `Urlaubstage ${d.year} genommen` + (manualTaken ? ` (davon ${manualTaken} selbst eingetragen)` : ""))),
+      +pay.vacation_days > 0 ? el("div", { class: +pay.vacation_days - takenYear < 0 ? "warn" : "" }, el("b", {}, String(+pay.vacation_days - takenYear)), el("span", {}, `noch übrig von ${+pay.vacation_days}`)) : null),
     +pay.vacation_days > 0 ? null : el("p", { class: "muted small", style: "margin:6px 0" }, "Trag unten deine Urlaubstage pro Jahr ein, dann siehst du, wie viele noch übrig sind."),
     el("div", { class: "actions", style: "margin:0" }, addTheory),
     theoryList,

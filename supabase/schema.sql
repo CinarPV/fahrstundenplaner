@@ -1754,3 +1754,7 @@ select cron.schedule('fsp-hour-reminder', '*/10 * * * *', $cron$
 $cron$);
 -- Alte Wartelisten-Einträge täglich aufräumen
 select cron.schedule('fsp-waitlist-cleanup', '15 3 * * *', $cron$ delete from public.waitlist where day < current_date $cron$);
+
+-- Schon genommene Urlaubstage selbst eintragen (z. B. vor der App), gilt für das angegebene Jahr
+alter table public.teacher_pay add column if not exists vacation_taken int check (vacation_taken between 0 and 366);
+alter table public.teacher_pay add column if not exists vacation_taken_year int;
