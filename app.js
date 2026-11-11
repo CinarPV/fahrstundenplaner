@@ -625,7 +625,6 @@ const FEATURES = [
     ["hour_reminder", "🔔 Erinnerung 1 Stunde vorher", "Schüler/innen bekommen ca. 1 Std. vor der Fahrstunde eine Mitteilung", false],
     ["calendar_export", "📅 „In meinen Kalender“", "Schüler/innen übernehmen die Fahrstunde mit einem Tipp in ihren Handy-Kalender"],
     ["waitlist", "⏳ Warteliste", "Schüler/innen werden benachrichtigt, sobald an ihrem Wunschtag etwas frei wird"],
-    ["attest_upload", "📷 Attest-Foto hochladen", "Schüler/innen können bei kurzfristiger Krankmeldung ein Attest fotografieren – du speicherst es aufs Handy, danach wird es gelöscht"],
     ["feedback", "👍 Schüler/innen bewerten die Fahrstunde", "👍 Gut · 👌 Mittel · 👎 Nicht so gut – nur du siehst es"],
     ["progress", "📊 Sonderfahrten: gefahren und noch offen", "Überland 5, Autobahn 4, Nacht 3 Fahrstunden (nicht bei Umschreibern)"],
   ]],
@@ -4004,66 +4003,7 @@ function lateFix(b, after) {
   const no = b.late_cancel ? el("button", { class: "btn small ok", onclick: set({ late_cancel: false },
     "Keine Fehlstunde mehr.", sickish ? "Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen." : "Fehlstunde streichen (nicht kostenpflichtig)?") }, sickish ? "📄 Attest liegt vor – keine Fehlstunde" : "✓ Keine Fehlstunde") : null;
   const yes = !b.late_cancel ? el("button", { class: "btn small ghost danger-text", onclick: set({ late_cancel: true }, "Als Fehlstunde gespeichert.", "Doch als Fehlstunde (kostenpflichtig) werten?") }, "⚠️ Doch Fehlstunde") : null;
-  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, attestTeacher(b, after), sickButton(b, after), no, yes);
-}
-// ===== Attest-Foto =====
-// Schüler/in lädt hoch → liegt nur vorübergehend im Speicher. Fahrlehrer/in speichert es aufs Handy → danach wird es gelöscht.
-async function shrinkImage(file) {
-  if (!/^image\//.test(file.type) || file.size < 400 * 1024) return file;
-  try {
-    const img = await createImageBitmap(file);
-    const k = Math.min(1, 1600 / Math.max(img.width, img.height));
-    const c = el("canvas", { width: Math.round(img.width * k), height: Math.round(img.height * k) });
-    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-    const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.75));
-    return blob ? new File([blob], "attest.jpg", { type: "image/jpeg" }) : file;
-  } catch { return file; }
-}
-function attestStudent(b) {
-  if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
-  if (b.attest_saved_at) return el("div", { class: "small", style: "margin:6px 0 0" }, "✓ Dein Attest liegt deinem Fahrlehrer vor.");
-  const file = el("input", { type: "file", accept: "image/*,application/pdf", hidden: true });
-  const btn = el("button", { class: "btn small ok", onclick: () => file.click() }, b.attest_path ? "📷 Anderes Attest hochladen" : "📷 Attest fotografieren / hochladen");
-  file.addEventListener("change", () => { const f0 = file.files[0]; file.value = ""; if (!f0) return; busy(btn, async () => {
-    const f = await shrinkImage(f0);
-    if (f.size > 3 * 1024 * 1024) throw new Error("Die Datei ist zu groß (höchstens 3 MB).");
-    const ext = f.type === "application/pdf" ? "pdf" : f.type === "image/png" ? "png" : f.type === "image/webp" ? "webp" : "jpg";
-    const path = `${state.profile.teacher_id}/${state.profile.id}/${b.id}-${Date.now()}.${ext}`;
-    const { error } = await sb.storage.from("atteste").upload(path, f, { contentType: f.type || "image/jpeg" });
-    if (error) throw error;
-    if (b.attest_path) sb.storage.from("atteste").remove([b.attest_path]).catch(() => {});
-    const { error: e2 } = await sb.rpc("set_attest", { p_booking: b.id, p_path: path });
-    if (e2) throw e2;
-    pushNotify("booking", b.id, "attest");
-    toast("📄 Attest hochgeladen – dein Fahrlehrer bekommt Bescheid."); render();
-  }); });
-  return el("div", { style: "margin:6px 0 0" }, file, btn,
-    b.attest_path ? el("div", { class: "small muted" }, `Hochgeladen am ${fmtDay(b.attest_at)} – dein Fahrlehrer prüft es.`) : null);
-}
-function attestTeacher(b, after) {
-  if (b.attest_saved_at && !b.attest_path) return el("span", { class: "small muted" }, `📄 Attest gespeichert am ${fmtDay(b.attest_saved_at)}`);
-  if (!b.attest_path) return null;
-  const done = async () => {
-    await sb.storage.from("atteste").remove([b.attest_path]).catch(() => {});
-    const { error } = await sb.from("bookings").update({ attest_path: null, attest_saved_at: new Date().toISOString() }).eq("id", b.id);
-    if (error) throw error;
-  };
-  const dl = el("button", { class: "btn small ok" }, "📄 Attest speichern");
-  dl.onclick = (e) => { e.stopPropagation(); busy(dl, async () => {
-    const { data, error } = await sb.storage.from("atteste").download(b.attest_path);
-    if (error) throw error;
-    const name = `Attest_${fullName(b.profiles || {}).replace(/\s+/g, "_")}_${dateInput((b.slots && b.slots.starts_at) || b.attest_at)}.${b.attest_path.split(".").pop()}`;
-    const f = new File([data], name, { type: data.type });
-    if (navigator.canShare && navigator.canShare({ files: [f] })) { try { await navigator.share({ files: [f], title: name }); } catch { return; } }
-    else downloadFile(data, name);
-    if (confirm("Hast du das Attest auf deinem Handy gespeichert?\n\nDann wird es jetzt aus dem System gelöscht (spart Speicherplatz).")) { await done(); toast("📄 Gespeichert und aus dem System gelöscht."); after && after(); }
-  }); };
-  const del = el("button", { class: "btn small ghost danger-text" }, "🗑 Attest löschen");
-  del.onclick = (e) => { e.stopPropagation(); busy(del, async () => {
-    if (!confirm("Attest-Bild endgültig löschen?")) return;
-    await done(); toast("Attest gelöscht."); after && after();
-  }); };
-  return el("span", { class: "done-row", style: "margin:0;flex-wrap:wrap" }, el("b", { class: "small" }, `📄 Attest da (${fmtDay(b.attest_at)})`), dl, del);
+  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, sickButton(b, after), no, yes);
 }
 function attestButton(b, onDone) {
   if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
@@ -4167,7 +4107,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,lesson_topics,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -4856,13 +4796,13 @@ async function adminRequests(opts = {}) {
   const [req, open, cancels, offers] = await Promise.all([
     sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,wish_start,wish_meeting,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,student_id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
-    sb.from("bookings").select("id,status,cancel_reason,late_cancel,decided_at,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
+    sb.from("bookings").select("id,status,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
     sb.from("bookings").select("id,admin_reply,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
       .eq("status", "offered"),
   ]);
   // Antworten der Schüler/innen, die der Fahrlehrer noch nicht abgehakt hat (fehlt die Spalte noch: einfach leer)
-  const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
+  const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
     .eq("answer_seen", false).order("answer_at", { ascending: false });
   const unseen = answers.error ? [] : (answers.data || []).filter((b) => b.slots && b.answer);
   const unseenIds = new Set(unseen.map((b) => b.id));
@@ -4953,7 +4893,6 @@ async function adminRequests(opts = {}) {
           el("span", { class: "badge " + (b.late_cancel ? "late" : "rejected") }, b.late_cancel ? "🙋 Kurzfristig abgesagt" : "🙋 Rechtzeitig abgesagt"),
           el("span", { class: "small muted" }, "Termin ist wieder frei")),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
-        attestTeacher(b, () => render()),
         !sick ? el("div", { class: "actions", style: "margin-top:8px" }, sickButton(b, () => render())) : null,
         b.late_cancel ? el("div", { class: "actions", style: "margin-top:8px" },
           sick ? btn("ok", "📄 Attest liegt vor – keine Fehlstunde", { late_cancel: false }, "Gespeichert: keine Fehlstunde.") : btn("ok", "Keine Fehlstunde (Kulanz)", { late_cancel: false }, "Gespeichert: keine Fehlstunde."),
@@ -4970,16 +4909,12 @@ async function adminRequests(opts = {}) {
   };
 
   // Kurzfassung für „Heute“: nur was jetzt zu tun ist, alles direkt erledigen
-  // Neu hochgeladene Atteste (noch nicht gespeichert)
-  const att = await sb.from("bookings").select("id,status,cancel_reason,late_cancel,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)").not("attest_path", "is", null);
-  const attests = att.error ? [] : (att.data || []).filter((b) => b.slots && b.attest_path && !unseenIds.has(b.id));
-  const attestItems = attests.map((b) => item(b, [el("div", { style: "margin:6px 0 0" }, attestTeacher(b, () => render())), lateFix(b, () => render())]));
   const transfers = await incomingTransfersBox(!opts.compact).catch(() => null);
   if (opts.compact) {
     const pend = await myProfiles().select("id", { count: "exact", head: true }).eq("status", "pending").eq("role", "student");
     const nPend = pend.count || 0;
     const reqs = req.data.filter((b) => b.slots);
-    const n = unseen.length + reqs.length + missing.length + nPend + attests.length + (transfers ? transfers[1].length : 0);
+    const n = unseen.length + reqs.length + missing.length + nPend + (transfers ? transfers[1].length : 0);
     const small = (b, text) => el("button", { type: "button", class: "todo-row", onclick: () => openAdminSlot(b.slots.id) },
       el("span", {}, el("b", {}, fullName(b.profiles)), " · ", `${fmtDay(b.slots.starts_at)} ${fmtTime(b.slots.starts_at)}`), el("span", { class: "todo-go" }, text + " ›"));
     if (!n) return el("div", { class: "todo-box done" }, "✓ Alles erledigt – keine offenen Anfragen, nichts abzuhaken.");
@@ -4989,7 +4924,6 @@ async function adminRequests(opts = {}) {
         el("span", {}, el("b", {}, `👤 ${nPend} neue Registrierung${nPend === 1 ? "" : "en"}`)), el("span", { class: "todo-go" }, "Freischalten ›")) : null,
       unseen.length ? [el("div", { class: "todo-sec" }, "Antworten von Schüler/innen"), unseen.map(answerItem)] : null,
       transfers,
-      attests.length ? [el("div", { class: "todo-sec" }, "📄 Neue Atteste"), attestItems] : null,
       reqs.length ? [el("div", { class: "todo-sec" }, "Neue Anfragen"), reqs.map((b) => item(b, [
         b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
         b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
@@ -5009,7 +4943,6 @@ async function adminRequests(opts = {}) {
   return el("div", {},
     unseen.length ? [el("h2", {}, "Antworten von Schüler/innen"), unseen.map(answerItem), el("div", { style: "height:14px" })] : null,
     transfers ? [transfers, el("div", { style: "height:14px" })] : null,
-    attests.length ? [el("h2", {}, "📄 Neue Atteste"), attestItems, el("div", { style: "height:14px" })] : null,
     el("h2", {}, "Offene Anfragen"),
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
       b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
@@ -5450,7 +5383,7 @@ function examSummary(exams) {
 
 async function openStudent(st) {
   const [{ data, error }, { data: stExams }] = await Promise.all([
-    sb.from("bookings").select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,lesson_topics,student_feedback,attest_path,attest_at,attest_saved_at,slots(id,starts_at,duration_min)").eq("student_id", st.id),
+    sb.from("bookings").select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,lesson_topics,student_feedback,slots(id,starts_at,duration_min)").eq("student_id", st.id),
     sb.from("exams").select("id,kind,exam_at,result").eq("student_id", st.id).order("exam_at"),
   ]);
   if (error) return fail(error);
@@ -7157,12 +7090,11 @@ function openStudentCancel(b) {
 
 // Kurzfristig krank abgesagt, Attest noch nicht bestätigt → deutlicher Vermerk (verschwindet, sobald der Fahrlehrer bestätigt)
 const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || "")
-  ? el("div", { class: "notice danger", style: "margin:6px 0 0;padding:8px 10px" }, el("b", {}, "⚠️ Attest noch nicht bestätigt: "), "Zählt als Fehlstunde und ist kostenpflichtig.",
-      feat("attest_upload") ? attestStudent(b) : null) : null;
+  ? el("div", { class: "notice danger", style: "margin:6px 0 0;padding:8px 10px" }, el("b", {}, "⚠️ Attest noch nicht bestätigt: "), "Zählt als Fehlstunde und ist kostenpflichtig.") : null;
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,attest_path,attest_at,attest_saved_at,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));

@@ -33,7 +33,6 @@ const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   decline: (c) => ["🚫 Angebot abgelehnt", `${c.name} kann ${c.when} leider nicht.`],
   change_ok: (c) => ["✅ Änderung angenommen", `${c.name} ist mit der neuen Zeit für ${c.when} einverstanden.`],
   change_no: (c) => ["🚫 Änderung abgelehnt", `${c.name} bleibt bei der bisherigen Zeit (${c.when}).`],
-  attest: (c) => ["📄 Attest hochgeladen", `${c.name} hat ein Attest für die Fahrstunde am ${c.when} hochgeladen – bitte in der App speichern.`],
   late: (c) => (c.lateS ? ["⏰ Verspätung", `${c.name} kommt ca. ${c.lateS} Min. später (Fahrstunde ${c.when}).`]
     : ["⏰ Doch pünktlich", `${c.name} kommt doch pünktlich (${c.when}).`]),
 };

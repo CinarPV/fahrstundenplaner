@@ -1990,35 +1990,6 @@ on conflict (id) do update set stage = excluded.stage, sort = excluded.sort, tit
 -- 3) Was in einer Fahrstunde gemacht wurde (Technik, Grundfahraufgaben) – Themen-Kürzel, z. B. {t01,f02}
 alter table public.bookings add column if not exists lesson_topics text[];
 
--- 4) Attest-Foto der Schülerin / des Schülers (liegt nur vorübergehend im Speicher – nach dem Herunterladen wird es gelöscht)
-alter table public.bookings add column if not exists attest_path text;
-alter table public.bookings add column if not exists attest_at timestamptz;
-alter table public.bookings add column if not exists attest_saved_at timestamptz;
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('atteste', 'atteste', false, 3145728, array['image/jpeg','image/png','image/webp','application/pdf'])
-on conflict (id) do nothing;
-drop policy if exists atteste_insert on storage.objects;
-create policy atteste_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'atteste' and (storage.foldername(name))[1] = public.my_teacher_id()::text
-              and (storage.foldername(name))[2] = auth.uid()::text);
-drop policy if exists atteste_read on storage.objects;
-create policy atteste_read on storage.objects for select to authenticated
-  using (bucket_id = 'atteste' and ((storage.foldername(name))[2] = auth.uid()::text
-         or ((storage.foldername(name))[1] = auth.uid()::text and public.is_teacher())));
-drop policy if exists atteste_delete on storage.objects;
-create policy atteste_delete on storage.objects for delete to authenticated
-  using (bucket_id = 'atteste' and ((storage.foldername(name))[2] = auth.uid()::text
-         or ((storage.foldername(name))[1] = auth.uid()::text and public.is_teacher())));
-create or replace function public.set_attest(p_booking uuid, p_path text)
-returns void language plpgsql security definer set search_path = public as $$
-begin
-  if p_path is not null and p_path not like public.my_teacher_id()::text || '/' || auth.uid()::text || '/%' then raise exception 'Ungültiger Speicherort'; end if;
-  update bookings set attest_path = p_path, attest_at = case when p_path is null then null else now() end
-   where id = p_booking and student_id = auth.uid();
-  if not found then raise exception 'Fahrstunde nicht gefunden'; end if;
-end $$;
-grant execute on function public.set_attest(uuid, text) to authenticated;
-
 -- 5) Übergabe nur mit Bestätigung der neuen Fahrlehrerin / des neuen Fahrlehrers
 alter table public.profiles add column if not exists transfer_request_to uuid references public.profiles(id) on delete set null;
 alter table public.profiles add column if not exists transfer_request_at timestamptz;
