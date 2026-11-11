@@ -161,6 +161,10 @@ const RATINGS = [[1, "👍", "Sehr gut"], [0, "👌", "Mittel"], [-1, "👎", "S
 const RATING_ICON = { 1: "👍", 0: "👌", "-1": "👎" };
 const TRAITS = ["hat Spaß gemacht", "selbstsicher", "konzentriert", "entspannt", "motiviert", "macht Fortschritte",
   "unsicher", "angespannt", "gestresst", "unkonzentriert", "verwirrt", "überfordert", "müde", "zu schnell", "zu zögerlich"];
+// „Daran müssen wir noch arbeiten“ – wird bei den Eigenschaften mit „🛠 “ gespeichert
+const WORK_ON = ["Fahrzeugbedienung", "Verkehrsbeobachtung", "Vorfahrt", "Links abbiegen an großen Kreuzungen", "Abknickende Vorfahrtstraße",
+  "Geschwindigkeit anpassen", "Fahrstreifenwechsel", "Kreisverkehr", "Abstand halten"];
+const WORK_PREFIX = "🛠 ";
 const HEX_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M12 1.8l8.9 5.1v10.2L12 22.2l-8.9-5.1V6.9zM12 8.2l-3.3 1.9v3.8l3.3 1.9 3.3-1.9v-3.8z"/></svg>';
 function hexIcon() { const x = el("span", { class: "hex-icon", title: "Technik besprochen" }); x.innerHTML = HEX_SVG; return x; }
 // Kleine Symbole: 🔧-Sechskantschlüssel = Technik, P = Einparken
@@ -175,7 +179,11 @@ const topicsText = (list) => {
   const tech = TECH_TOPICS.filter(([k]) => l.includes(k)).map(([, n]) => n), gfa = GFA_TOPICS.filter(([k]) => l.includes(k)).map(([, n]) => n);
   return [tech.length ? "Technik: " + tech.join(", ") : "", gfa.length ? "Grundfahraufgaben: " + gfa.join(", ") : ""].filter(Boolean);
 };
-const reviewText = (r) => r ? [r.rating != null ? `${RATING_ICON[r.rating]} ${RATINGS.find((x) => x[0] === r.rating)[2]}` : "", (r.traits || []).join(", ")].filter(Boolean).join(" · ") : "";
+const reviewText = (r) => {
+  if (!r) return "";
+  const tr = r.traits || [], work = tr.filter((t) => t.startsWith(WORK_PREFIX)).map((t) => t.slice(WORK_PREFIX.length)), other = tr.filter((t) => !t.startsWith(WORK_PREFIX));
+  return [r.rating != null ? `${RATING_ICON[r.rating]} ${RATINGS.find((x) => x[0] === r.rating)[2]}` : "", other.join(", "), work.length ? "🛠 Noch üben: " + work.join(", ") : ""].filter(Boolean).join(" · ");
+};
 // Bereich „Nach der Fahrstunde“ – b = Buchung (App-Schüler/in). save() speichert alles.
 function afterLessonBox(b) {
   const fT = feat("lesson_tech"), fG = feat("lesson_gfa"), fR = feat("teacher_review");
@@ -189,8 +197,12 @@ function afterLessonBox(b) {
   const paintRating = () => ratingRow.replaceChildren(...RATINGS.map(([v, ic, t]) => { const x = el("button", { type: "button", class: "chip rate" + (rating === v ? " on" : "") }, `${ic} ${t}`);
     x.onclick = () => { rating = rating === v ? null : v; paintRating(); }; return x; }));
   paintRating();
-  const traitRow = el("div", { class: "reply-chips" });
-  const paintTraits = () => traitRow.replaceChildren(...TRAITS.map((t) => chip(traits.has(t), t, () => (traits.has(t) ? (traits.delete(t), false) : (traits.add(t), true)))));
+  const traitRow = el("div", { class: "reply-chips" }), workRow = el("div", { class: "reply-chips" });
+  const tog = (t) => () => (traits.has(t) ? (traits.delete(t), false) : (traits.add(t), true));
+  const paintTraits = () => {
+    traitRow.replaceChildren(...TRAITS.map((t) => chip(traits.has(t), t, tog(t))));
+    workRow.replaceChildren(...WORK_ON.map((w) => chip(traits.has(WORK_PREFIX + w), w, tog(WORK_PREFIX + w))));
+  };
   paintTraits();
   if (b.id && fR) sb.from("lesson_reviews").select("rating,traits").eq("booking_id", b.id).maybeSingle().then(({ data }) => {
     if (!data) return; hadReview = true; rating = data.rating; (data.traits || []).forEach((t) => traits.add(t)); paintRating(); paintTraits();
@@ -201,6 +213,7 @@ function afterLessonBox(b) {
     fG ? el("div", { class: "al-sec" }, el("b", {}, "🅿️ Grundfahraufgaben"), topicChips(GFA_TOPICS)) : null,
     fR ? el("div", { class: "al-sec" }, el("b", {}, "⭐ Deine Bewertung"), ratingRow) : null,
     fR ? el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow) : null,
+    fR ? el("div", { class: "al-sec" }, el("b", {}, "🛠 Daran müssen wir noch arbeiten"), workRow) : null,
     el("p", { class: "small muted", style: "margin:4px 0 0" }, [fR ? "Nur du siehst die Bewertung." : "", fT || fG ? "Angekreuztes wird im Ausbildungsstand als „eingeführt“ markiert." : ""].filter(Boolean).join(" ")));
   async function save() {
     const topics = [...chosen];
