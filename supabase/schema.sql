@@ -1758,3 +1758,45 @@ select cron.schedule('fsp-waitlist-cleanup', '15 3 * * *', $cron$ delete from pu
 -- Schon genommene Urlaubstage selbst eintragen (z. B. vor der App), gilt für das angegebene Jahr
 alter table public.teacher_pay add column if not exists vacation_taken int check (vacation_taken between 0 and 366);
 alter table public.teacher_pay add column if not exists vacation_taken_year int;
+
+-- Übergabe nur innerhalb derselben Fahrschule
+-- Fahrschule eines Fahrlehrers: Fahrschul-Admin = eigene id, sonst school_id (leer = Fahrschule des Haupt-Admins)
+create or replace function public.school_key(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select case when p.is_school_admin then p.id else p.school_id end from profiles p where p.id = p_id;
+$$;
+create or replace function public.transfer_targets()
+returns table (id uuid, display_name text)
+language sql stable security definer set search_path = public as $$
+  select p.id, coalesce(nullif(s.display_name, ''), trim(p.first_name || ' ' || p.last_name))
+  from profiles p left join settings s on s.teacher_id = p.id
+  where p.role = 'teacher' and p.status = 'active' and p.id <> auth.uid() and public.teacher_valid(p.id) and public.is_teacher()
+    and public.school_key(p.id) is not distinct from public.school_key(auth.uid())
+  order by 2;
+$$;
+grant execute on function public.transfer_targets() to authenticated;
+-- Übergabe selbst ebenfalls nur innerhalb derselben Fahrschule
+create or replace function public.transfer_student(p_student uuid, p_teacher uuid)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_name text; v_n int;
+begin
+  if not is_teacher() then raise exception 'Nur Fahrlehrer'; end if;
+  if not exists (select 1 from profiles where id = p_student and role = 'student' and teacher_id = auth.uid()) then
+    raise exception 'Diese/r Schüler/in gehört nicht zu dir';
+  end if;
+  if p_teacher = auth.uid() or not teacher_valid(p_teacher) then raise exception 'Bitte einen gültigen Fahrlehrer wählen'; end if;
+  if public.school_key(p_teacher) is distinct from public.school_key(auth.uid()) then
+    raise exception 'Übergabe nur an Kollegen/Kolleginnen derselben Fahrschule';
+  end if;
+  select coalesce(nullif(s.display_name, ''), trim(p.first_name || ' ' || p.last_name)) into v_name
+  from profiles p left join settings s on s.teacher_id = p.id where p.id = p_teacher;
+  update bookings b set status = 'cancelled_teacher', cancel_reason = 'Fahrlehrerwechsel', late_cancel = false, decided_at = now()
+  from slots s where s.id = b.slot_id and b.student_id = p_student and s.teacher_id = auth.uid()
+    and b.status in ('requested', 'offered', 'confirmed') and b.actual_minutes is null and s.starts_at > now();
+  get diagnostics v_n = row_count;
+  delete from student_limits where student_id = p_student;
+  update profiles set teacher_id = p_teacher, transferred_from = auth.uid(), transfer_to_name = v_name,
+    transferred_at = now(), transfer_ack = false, max_open = null
+  where id = p_student;
+  return v_n;
+end $$;

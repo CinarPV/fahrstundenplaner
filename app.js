@@ -5257,6 +5257,8 @@ async function ownerTeachers() {
   updatePreview();
 
   const asSchool = el("input", { type: "checkbox" });
+  // Nutzungsdauer gleich beim Anlegen (später jederzeit über „⏳“ änderbar)
+  const validFor = el("select", {}, [["12", "1 Jahr"], ["6", "6 Monate"], ["3", "3 Monate"], ["1", "1 Monat"], ["0", "♾️ Unbegrenzt"]].map(([v, t]) => el("option", { value: v }, t)));
   const btn = el("button", { class: "btn ok" }, "Fahrlehrer anlegen");
   asSchool.addEventListener("change", () => (btn.textContent = asSchool.checked ? "Fahrschul-Admin anlegen" : "Fahrlehrer anlegen"));
   btn.onclick = () => busy(btn, async () => {
@@ -5274,6 +5276,10 @@ async function ownerTeachers() {
     if (!su.user || (su.user.identities && su.user.identities.length === 0)) throw new Error("Mit dieser E-Mail gibt es schon ein Konto.");
     const { error: e2 } = await sb.rpc("create_teacher", { p_id: su.user.id, p_slug: v.slug, p_first: v.first, p_last: v.last, p_school_admin: v.school });
     if (e2) throw e2;
+    if (+validFor.value > 0) {
+      const { error: e3 } = await sb.rpc("set_teacher_valid", { p_id: su.user.id, p_until: addMonths(dateInput(new Date()), +validFor.value) });
+      if (e3) toast("Angelegt – die Nutzungsdauer bitte in der Liste über ⏳ eintragen.", true);
+    }
     showTeacherCredentials(v, !su.session);
   });
 
@@ -5326,6 +5332,7 @@ async function ownerTeachers() {
           el("div", { class: "linkbox" }, pw, el("button", { type: "button", class: "btn ghost", title: "Neues Passwort erzeugen", onclick: () => (pw.value = randomPassword()) }, "🎲"))),
         el("div", {}, el("label", {}, "Kürzel (intern)"), slug)),
       linkPreview,
+      el("label", {}, "⏳ Nutzungsdauer (später jederzeit änderbar)"), validFor,
       owner ? el("label", { class: "check", style: "margin-top:12px" }, asSchool,
         el("span", {}, el("b", {}, "Als Fahrschul-Admin anlegen"), " – für eine andere Fahrschule. Darf eigene Fahrlehrer anlegen, sperren und löschen, sieht aber nichts von dir oder anderen Fahrschulen.")) : null,
       el("div", { class: "actions" }, btn)),
