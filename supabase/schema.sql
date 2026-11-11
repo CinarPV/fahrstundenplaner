@@ -2164,3 +2164,64 @@ language sql stable security definer set search_path = public as $$
   order by s.starts_at;
 $$;
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
+
+-- ===== Selbsteinschätzung der Schüler/innen (freiwillig) + Bewertung des Fahrlehrers für Schüler/innen immer aufbauend =====
+create table if not exists public.student_reflections (
+  booking_id  uuid primary key references public.bookings(id) on delete cascade,
+  student_id  uuid not null references public.profiles(id) on delete cascade,
+  feeling     smallint check (feeling in (-1, 0, 1)),          -- 😟 unsicher · 😐 geht so · 😊 sicher
+  feelings    text[],                                           -- angeklickte Gefühle
+  hard        text[],                                           -- „Was war schwierig?“
+  wish        text[],                                           -- „Was möchtest du nächstes Mal üben?“
+  note        text check (char_length(note) <= 500),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists student_reflections_student_idx on public.student_reflections (student_id, updated_at desc);
+alter table public.student_reflections enable row level security;
+drop policy if exists reflections_own on public.student_reflections;
+create policy reflections_own on public.student_reflections for select using (student_id = auth.uid());
+drop policy if exists reflections_teacher on public.student_reflections;
+create policy reflections_teacher on public.student_reflections for select
+  using (public.is_teacher() and public.student_teacher(student_id) = auth.uid());
+grant select on public.student_reflections to authenticated;
+
+create or replace function public.set_reflection(p_booking uuid, p_feeling smallint, p_feelings text[], p_hard text[], p_wish text[], p_note text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_feeling is not null and p_feeling not in (-1, 0, 1) then raise exception 'Ungültig'; end if;
+  if not exists (select 1 from bookings where id = p_booking and student_id = auth.uid() and status = 'confirmed' and actual_minutes is not null) then
+    raise exception 'Fahrstunde nicht gefunden';
+  end if;
+  insert into student_reflections (booking_id, student_id, feeling, feelings, hard, wish, note, updated_at)
+  values (p_booking, auth.uid(), p_feeling, p_feelings, p_hard, p_wish, nullif(left(trim(coalesce(p_note, '')), 500), ''), now())
+  on conflict (booking_id) do update set feeling = excluded.feeling, feelings = excluded.feelings, hard = excluded.hard,
+    wish = excluded.wish, note = excluded.note, updated_at = now();
+  update bookings set student_feedback = p_feeling where id = p_booking;   -- für die Symbole in Heute/Kalender
+end $$;
+grant execute on function public.set_reflection(uuid, smallint, text[], text[], text[], text) to authenticated;
+
+-- Bewertung des Fahrlehrers für Schüler/innen: Eigenschaften IMMER aufbauend formuliert (auch bei 👌),
+-- 👎 sehen sie nie (die App zeigt dann eine aufmunternde Überschrift). Die echte Bewertung bleibt beim Fahrlehrer.
+create or replace function public.my_lesson_reviews()
+returns table (booking_id uuid, rating smallint, traits text[])
+language sql stable security definer set search_path = public as $$
+  select r.booking_id, r.rating,
+    array(
+      select coalesce(m.nice, t) from unnest(r.traits) with ordinality u(t, n)
+      left join (values
+        ('unsicher', 'Sicherheit kommt mit jeder Fahrstunde'),
+        ('angespannt', 'Locker bleiben – du schaffst das'),
+        ('gestresst', 'Ruhig atmen, Schritt für Schritt'),
+        ('unkonzentriert', 'Nächstes Mal voll konzentriert'),
+        ('verwirrt', 'Wir gehen es nochmal in Ruhe durch'),
+        ('überfordert', 'Wir machen es Schritt für Schritt'),
+        ('müde', 'Ausgeschlafen fährt es sich leichter'),
+        ('zu schnell', 'Etwas mehr Ruhe beim Tempo'),
+        ('zu zögerlich', 'Mehr Mut – du kannst das')
+      ) m(raw, nice) on m.raw = u.t
+      order by u.n)
+  from lesson_reviews r join bookings b on b.id = r.booking_id
+  where b.student_id = auth.uid()
+    and coalesce((select (s.features->>'review_to_student')::boolean from settings s where s.teacher_id = r.teacher_id), true);
+$$;
+grant execute on function public.my_lesson_reviews() to authenticated;

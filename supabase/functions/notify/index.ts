@@ -43,6 +43,7 @@ const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   offered: (c) => ["📨 Neues Angebot", `${c.t.Dein} bietet dir ${c.when} an – bitte zusagen oder absagen.`],
   assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
   cancelled_teacher: (c) => ["❌ Fahrstunde abgesagt", `${c.t.Dein} hat die Fahrstunde am ${c.when} abgesagt.${reasonText(c)}`],
+  reflect: (c) => ["📝 Wie war deine Fahrstunde?", `Du kannst deine Fahrstunde vom ${c.when} kurz einschätzen – freiwillig, dauert nur ein paar Sekunden.`],
   moved: (c) => ["🔄 Fahrstunde geändert", `${c.t.Dein} hat deine Fahrstunde geändert. Neu: ${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
   note: (c) => ["📝 Hinweis zu deiner Fahrstunde", `${c.when}: ${c.reply}`],
   late_teacher: (c) => (c.lateT ? ["⏰ Kleine Verspätung", `${c.t.Dein} kommt ca. ${c.lateT} Min. später zur Fahrstunde am ${c.when}.`]

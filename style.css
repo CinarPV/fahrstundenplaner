@@ -1032,3 +1032,6 @@ html.dark .hex-icon { color: #cbd5e1; }
 .rev-item + .rev-item { border-top: 1px solid var(--border); }
 .rev-item .reply-chips .chip { cursor: default; }
 .slot-note { font-size: 12px; color: var(--muted, #667085); margin-top: 2px; white-space: normal; }
+.refl-h { font-weight: 700; margin: 12px 0 2px; }
+.reply-chips .chip.big { font-size: 16px; padding: 8px 14px; }
+.refl-note { border-left: 3px solid #f5a623; }

@@ -214,7 +214,7 @@ function afterLessonBox(b) {
     el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow),
     el("div", { class: "al-sec" }, el("b", {}, "🛠 Daran müssen wir noch arbeiten"), workRow),
     el("p", { class: "small muted", style: "margin:4px 0 0" }, feat("review_to_student")
-      ? "👍 und 👌 sieht auch der/die Schüler/in (mit Eigenschaften). 👎 siehst nur du – er/sie bekommt stattdessen eine aufmunternde Nachricht."
+      ? "Der/die Schüler/in sieht deine Bewertung immer aufbauend formuliert (z. B. „unsicher“ → „Sicherheit kommt mit jeder Fahrstunde“). 👎 und die echten Worte siehst nur du."
       : "Nur du siehst die Bewertung."),
     // Auch später (schon abgehakte Fahrstunde): Bewertung allein speichern
     (() => { const sv = el("button", { type: "button", class: "btn small ok" }, "💾 Bewertung speichern");
@@ -245,6 +245,42 @@ function afterLessonBox(b) {
   }
   return { node, save };
 }
+// Nach dem Abhaken: Schüler/in freundlich an die (freiwillige) Selbsteinschätzung erinnern
+const tickPush = (id) => { if (id && feat("feedback") && feat("reflect_push")) pushNotify("booking", id, "reflect"); };
+// Selbsteinschätzung der Schüler/in zu einer Fahrstunde (für den Fahrlehrer), mit Vergleich zur eigenen Bewertung
+function reflectionNote(b) {
+  if (!feat("feedback") || !b || !b.id || b.actual_minutes === null || b.actual_minutes === undefined) return null;
+  const box = el("div", { class: "note refl-note", hidden: true });
+  Promise.all([sb.from("student_reflections").select("*").eq("booking_id", b.id).maybeSingle(),
+    sb.from("lesson_reviews").select("rating").eq("booking_id", b.id).maybeSingle()]).then(([r, rv]) => {
+    const x = r.data; if (!x) return;
+    const parts = [x.feeling != null ? `${FEEL_ICON[x.feeling]} ${FEELINGS.find((f) => f[0] === x.feeling)[2]}` : "", (x.feelings || []).join(", ")].filter(Boolean).join(" · ");
+    const mine = rv.data ? rv.data.rating : null;
+    const differs = mine != null && x.feeling != null && Math.abs(mine - x.feeling) >= 2;
+    box.replaceChildren(el("b", {}, "🙋 Selbsteinschätzung: "), parts || "–",
+      (x.hard || []).length ? el("div", { class: "small" }, "Schwierig: " + x.hard.join(", ")) : null,
+      (x.wish || []).length ? el("div", { class: "small" }, "Möchte üben: " + x.wish.join(", ")) : null,
+      x.note ? el("div", { class: "small" }, "„" + x.note + "“") : null,
+      differs ? el("div", { class: "small", style: "color:#b45309;margin-top:4px" }, "⚠️ Ihr habt die Fahrstunde unterschiedlich erlebt – kurz ansprechen?") : null);
+    box.hidden = false;
+  });
+  return box;
+}
+// Schüler-Karte: Verlauf der Selbsteinschätzungen (älteste links)
+function feelHistory(st) {
+  if (!feat("feedback")) return null;
+  const box = el("div", { class: "note", hidden: true });
+  sb.from("student_reflections").select("feeling,updated_at,hard").eq("student_id", st.id).order("updated_at", { ascending: false }).limit(8).then(({ data }) => {
+    const list = (data || []).filter((x) => x.feeling != null).reverse();
+    if (!list.length) return;
+    const hard = [...new Set((data || []).flatMap((x) => x.hard || []))].slice(0, 5);
+    box.replaceChildren(el("b", {}, "🙋 Gefühl in den letzten Fahrstunden: "),
+      ...list.map((x) => el("span", { title: fmtDay(x.updated_at), style: "font-size:18px;margin-right:2px" }, FEEL_ICON[x.feeling])),
+      hard.length ? el("div", { class: "small" }, "Fand zuletzt schwierig: " + hard.join(", ")) : null);
+    box.hidden = false;
+  });
+  return box;
+}
 // Vor einer Fahrstunde: wie war die letzte? (eigene Bewertung, damit man darauf aufbauen kann)
 function lastReviewNote(b) {
   if (!feat("teacher_review") || !b || !b.student_id || b.actual_minutes !== null || b.status !== "confirmed") return null;
@@ -264,6 +300,7 @@ async function openTrainingTick(b, studentId, minutes, type, box, after) {
     const { error } = await sb.from("bookings").update({ actual_minutes: minutes, lesson_type: type || b.lesson_type || "normal" }).eq("id", b.id);
     if (error) throw error;
     if (box) await box.save();
+    if (b.actual_minutes == null) tickPush(b.id);
     closeModal();
     after(`✓ Abgehakt: ${minutes} Min. – Ausbildungsstand gespeichert`);
   });
@@ -613,7 +650,7 @@ const FEATURES = [
     ["lesson_gfa", "🅿️ Grundfahraufgaben beim Abhaken ankreuzen", "Einparken, Umkehren, Gefahrbremsung … – mit P-Symbol beim Einparken"],
     ["training_tick", "📈 Knopf „Ausbildungsstand eingeben und abhaken“", "beim Abhaken direkt zur Ausbildung"],
     ["teacher_review", "⭐ Fahrstunde bewerten", "👍 / 👌 / 👎 und Eigenschaften wie angespannt, selbstsicher …"],
-    ["review_to_student", "🌟 Bewertung auch für Schüler/innen sichtbar (Motivation)", "👍 und 👌 mit Eigenschaften sehen sie wie eingetragen; 👎 sehen sie nie – stattdessen eine aufmunternde Nachricht"],
+    ["review_to_student", "🌟 Bewertung auch für Schüler/innen sichtbar (Motivation)", "immer aufbauend formuliert – 👎 und die echten Worte bleiben bei dir"],
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
@@ -629,7 +666,8 @@ const FEATURES = [
     ["hour_reminder", "🔔 Erinnerung 1 Stunde vorher", "Schüler/innen bekommen ca. 1 Std. vor der Fahrstunde eine Mitteilung", false],
     ["calendar_export", "📅 „In meinen Kalender“", "Schüler/innen übernehmen die Fahrstunde mit einem Tipp in ihren Handy-Kalender"],
     ["waitlist", "⏳ Warteliste", "Schüler/innen werden benachrichtigt, sobald an ihrem Wunschtag etwas frei wird"],
-    ["feedback", "👍 Schüler/innen bewerten die Fahrstunde", "👍 Gut · 👌 Mittel · 👎 Nicht so gut – nur du siehst es"],
+    ["feedback", "📝 Selbsteinschätzung der Schüler/innen", "freiwillig: Gefühl (😊/😐/😟), Gefühle, Schwieriges und Übungswünsche antippen – nur du siehst es"],
+    ["reflect_push", "🔔 Nach dem Abhaken an die Selbsteinschätzung erinnern", "Schüler/innen bekommen eine kurze Mitteilung, dass sie die Fahrstunde einschätzen können"],
     ["progress", "📊 Sonderfahrten: gefahren und noch offen", "Überland 5, Autobahn 4, Nacht 3 Fahrstunden (nicht bei Umschreibern)"],
   ]],
   ["Kontrolle", [
@@ -1626,6 +1664,7 @@ async function askFinishedLessons() {
         : await sb.from("bookings").update({ actual_minutes: dur.value, lesson_type: kind ? kind.value : it.b.lesson_type || "normal" }).eq("id", it.id);
       if (error) throw error;
       if (box) await box.save();
+      if (!it.own) tickPush(it.id);
       toast(`${it.name}: ${dur.value} Min. gefahren`);
       closeModal(); render();
       setTimeout(askFinishedLessons, 1200);   // gleich die nächste, falls noch eine offen ist
@@ -2828,6 +2867,7 @@ async function adminToday() {
   const save = async (b, patch, msg) => {
     const { error } = b._own ? await sb.from("own_entries").update({ done: true }).eq("id", b.id) : await sb.from("bookings").update(patch).eq("id", b.id);
     if (error) throw error;
+    if (!b._own && patch.actual_minutes) tickPush(b.id);
     toast(msg);
     render();
   };
@@ -2922,7 +2962,7 @@ async function adminToday() {
       feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       held && !done && b.late_student ? el("span", { class: "tr-pill late" }, `⏰ +${b.late_student}`) : null,
       topicIcons(b.lesson_topics),
-      done && b.student_feedback != null ? el("span", { class: "tr-fb", title: "Rückmeldung von Schüler/in" }, RATING_ICON[b.student_feedback]) : null,
+      done && b.student_feedback != null ? el("span", { class: "tr-fb", title: "Selbsteinschätzung der Schüler/in" }, FEEL_ICON[b.student_feedback]) : null,
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -4226,7 +4266,7 @@ async function openAdminSlot(slotId) {
         callButton(b.profiles && b.profiles.phone)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
       b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "notice wish" }, `⏰ ${fullName(b.profiles)} kommt ca. ${b.late_student} Min. später.`) : null,
-      b.student_feedback != null ? el("p", { class: "small" }, "Rückmeldung von Schüler/in: ", { 1: "👍 hat gut gefallen", 0: "👌 war mittel", "-1": "👎 war nicht so gut" }[b.student_feedback]) : null,
+      reflectionNote(b),
       (b.lesson_topics || []).length ? el("div", { class: "note topics-note" }, topicIcons(b.lesson_topics), " ", topicsText(b.lesson_topics).join(" · ")) : null,
       lastReviewNote(b),
       feat("late") && b.status === "confirmed" && b.actual_minutes === null && lateWindowT(slot.starts_at, slot.duration_min)
@@ -4554,6 +4594,7 @@ function doneControls(slot, b, after, opts = {}) {
     const { error } = await sb.from("bookings").update({ actual_minutes: mins.value, lesson_type: type }).eq("id", b.id);
     if (error) throw error;
     if (box) await box.save();
+    if (!isDone) tickPush(b.id);
     after(`✓ Abgehakt: ${fmtMinutes(mins.value)} ${LESSON_TYPES[type]}`);
   });
   const trainBtn = canTrain && b.student_id ? el("button", { class: "btn" }, isDone ? "📈 Ausbildungsstand eingeben" : "📈 Ausbildungsstand eingeben und abhaken") : null;
@@ -4955,6 +4996,7 @@ async function adminRequests(opts = {}) {
         tick.onclick = () => busy(tick, async () => {
           const { error } = await sb.from("bookings").update({ actual_minutes: b.slots.duration_min, lesson_type: b.lesson_type || "normal" }).eq("id", b.id);
           if (error) throw error;
+          tickPush(b.id);
           toast(`✓ ${fullName(b.profiles)}: ${b.slots.duration_min} Min. gefahren`); render();
         });
         return el("div", { class: "todo-line" }, small(b, "Öffnen"), tick);
@@ -5448,7 +5490,7 @@ async function openStudent(st) {
     : el("p", { class: "muted" }, "Noch keine Fahrstunden.");
   const examNode = await examCard(st, true);
   const tabs = paneTabs([
-    ["Übersicht", [el("h3", { class: "sec-title" }, "🚗 Fahrstunden-Übersicht"), lessonOverview(st, data, stExams || []), studentProfileCard(st, rows),
+    ["Übersicht", [el("h3", { class: "sec-title" }, "🚗 Fahrstunden-Übersicht"), feelHistory(st), lessonOverview(st, data, stExams || []), studentProfileCard(st, rows),
       el("div", { class: "done-row" }, exportButtons(st, data))]],
     [`Fahrstunden (${rows.length})`, [lessonList]],
     ["Prüfungen", [examSummary(stExams || []), examNode]],
@@ -6465,6 +6507,7 @@ async function adminControl() {
   const saveTick = async (b, patch, msg) => {
     const { error } = b._own ? await sb.from("own_entries").update({ done: true }).eq("id", b.id) : await sb.from("bookings").update(patch).eq("id", b.id);
     if (error) throw error;
+    if (!b._own && patch.actual_minutes) tickPush(b.id);
     toast(msg);
     render();
   };
@@ -7114,6 +7157,39 @@ function openStudentCancel(b) {
 const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || "")
   ? el("div", { class: "notice danger", style: "margin:6px 0 0;padding:8px 10px" }, el("b", {}, "⚠️ Attest noch nicht bestätigt: "), "Zählt als Fehlstunde und ist kostenpflichtig.") : null;
 
+// ===== Selbsteinschätzung der Schüler/innen =====
+const FEELINGS = [[1, "😊", "sicher"], [0, "😐", "geht so"], [-1, "😟", "unsicher"]];
+const FEEL_ICON = { 1: "😊", 0: "😐", "-1": "😟" };
+const FEEL_CHIPS = ["hat Spaß gemacht", "stolz", "entspannt", "konzentriert", "motiviert", "aufgeregt", "nervös", "gestresst", "überfordert", "müde", "verunsichert"];
+const HARD_CHIPS = ["Anfahren / Schalten", "Lenken", "Bremsen", "Spiegel & Schulterblick", "Vorfahrt", "Abbiegen", "Links abbiegen an großen Kreuzungen",
+  "Abknickende Vorfahrtstraße", "Kreisverkehr", "Fahrstreifenwechsel", "Einparken", "Autobahn", "Geschwindigkeit", "Viel Verkehr"];
+async function openReflection(b) {
+  const { data: cur } = await sb.from("student_reflections").select("*").eq("booking_id", b.id).maybeSingle();
+  let feeling = cur ? cur.feeling : null;
+  const sets = { feelings: new Set((cur && cur.feelings) || []), hard: new Set((cur && cur.hard) || []), wish: new Set((cur && cur.wish) || []) };
+  const chips = (list, set) => el("div", { class: "reply-chips" }, list.map((t) => { const x = el("button", { type: "button", class: "chip" + (set.has(t) ? " on" : "") }, t);
+    x.onclick = () => { set.has(t) ? set.delete(t) : set.add(t); x.classList.toggle("on", set.has(t)); }; return x; }));
+  const feelRow = el("div", { class: "reply-chips" });
+  const paint = () => feelRow.replaceChildren(...FEELINGS.map(([v, ic, t]) => { const x = el("button", { type: "button", class: "chip rate big" + (feeling === v ? " on" : "") }, `${ic} ${t}`);
+    x.onclick = () => { feeling = feeling === v ? null : v; paint(); }; return x; }));
+  paint();
+  const note = el("textarea", { maxlength: 500, rows: 2, placeholder: "Möchtest du noch etwas sagen? (freiwillig)" }, (cur && cur.note) || "");
+  const save = el("button", { class: "btn ok" }, "💾 Speichern");
+  save.onclick = () => busy(save, async () => {
+    const arr = (x) => (x.size ? [...x] : null);
+    const { error } = await sb.rpc("set_reflection", { p_booking: b.id, p_feeling: feeling, p_feelings: arr(sets.feelings), p_hard: arr(sets.hard), p_wish: arr(sets.wish), p_note: note.value });
+    if (error) throw error;
+    closeModal(); toast("Danke! Dein Fahrlehrer sieht deine Einschätzung."); render();
+  });
+  openModal(`📝 Selbsteinschätzung · ${fmtDay(b.slots.starts_at)}`,
+    el("p", { class: "small muted" }, "Alles freiwillig – tipp an, was passt. Nur dein Fahrlehrer sieht es."),
+    el("div", { class: "refl-h" }, "Wie hast du dich gefühlt?"), feelRow,
+    el("div", { class: "refl-h" }, "Was trifft auf dich zu?"), chips(FEEL_CHIPS, sets.feelings),
+    el("div", { class: "refl-h" }, "Was war schwierig?"), chips(HARD_CHIPS, sets.hard),
+    el("div", { class: "refl-h" }, "Was möchtest du nächstes Mal üben?"), chips(HARD_CHIPS, sets.wish),
+    note, el("div", { class: "actions" }, save, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
     .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point,note)")
@@ -7200,22 +7276,27 @@ async function studentMine() {
       el("div", { class: "next-line" }, el("b", {}, `${fmtDay(n.slots.starts_at)}, ${fmtTime(n.slots.starts_at)} Uhr`)),
       el("div", { class: "next-line muted" }, `${n.slots.duration_min} Min.`, meet ? [" · ", el("a", { href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet)] : null));
   };
-  // 👍/👎 zur letzten gefahrenen Fahrstunde (letzte 14 Tage, noch ohne Rückmeldung)
-  const fbB = feat("feedback") ? rows.find((b) => b.status === "confirmed" && b.actual_minutes !== null && b.student_feedback == null
-    && new Date(b.slots.starts_at).getTime() > now - 14 * 86400000 && !state.fbSkip?.[b.id]) : null;
-  const fbSend = (v) => async (ev) => busy(ev.currentTarget, async () => {
-    const { error } = await sb.rpc("set_feedback", { p_booking: fbB.id, p_val: v });
-    if (error) throw error;
-    toast("Danke für deine Rückmeldung!"); render();
-  });
-  const fbCard = fbB ? el("div", { class: "card fb-card" },
-    el("b", {}, `Wie war deine Fahrstunde am ${fmtDay(fbB.slots.starts_at)}?`),
-    el("div", { class: "small muted" }, "Nur dein Fahrlehrer sieht deine Antwort."),
-    el("div", { class: "actions" },
-      el("button", { class: "btn ok", onclick: fbSend(1) }, "👍 Gut"),
-      el("button", { class: "btn", onclick: fbSend(0) }, "👌 Mittel"),
-      el("button", { class: "btn", onclick: fbSend(-1) }, "👎 Nicht so gut"),
-      el("button", { class: "btn ghost small", onclick: () => { state.fbSkip = { ...(state.fbSkip || {}), [fbB.id]: true }; render(); } }, "Später"))) : null;
+  // 📝 Selbsteinschätzung (freiwillig): kleiner Hinweis nach jeder Fahrstunde, Formular nur auf Wunsch
+  let fbCard = null, reflList = null;
+  if (feat("feedback")) {
+    const { data: refl } = await sb.from("student_reflections").select("booking_id,feeling").eq("student_id", state.profile.id);
+    const done = new Map((refl || []).map((r) => [r.booking_id, r]));
+    const recent = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null && new Date(b.slots.starts_at).getTime() > now - 21 * 86400000);
+    let dismissed = {}; try { dismissed = JSON.parse(localStorage.getItem("fsp_refl_skip") || "{}"); } catch { /* egal */ }
+    const fbB = recent.find((b) => !done.has(b.id) && !dismissed[b.id]);
+    if (fbB) fbCard = el("div", { class: "card fb-card" },
+      el("b", {}, `📝 Wie hast du dich in der Fahrstunde am ${fmtDay(fbB.slots.starts_at)} gefühlt?`),
+      el("div", { class: "small muted" }, "Freiwillig – dauert nur ein paar Sekunden und hilft deinem Fahrlehrer, die nächste Fahrstunde auf dich abzustimmen."),
+      el("div", { class: "actions" },
+        el("button", { class: "btn ok", onclick: () => openReflection(fbB) }, "✍️ Selbsteinschätzung ausfüllen"),
+        el("button", { class: "btn ghost small", onclick: () => { dismissed[fbB.id] = 1; try { localStorage.setItem("fsp_refl_skip", JSON.stringify(dismissed)); } catch { /* egal */ } render(); } }, "Nein, danke")));
+    if (recent.length) reflList = el("details", { class: "fold" },
+      el("summary", {}, "📝 Meine Selbsteinschätzungen"),
+      recent.slice(0, 8).map((b) => { const r = done.get(b.id);
+        return el("div", { class: "done-row", style: "justify-content:space-between;margin:4px 0" },
+          el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtTime(b.slots.starts_at)}`, r ? ` · ${FEEL_ICON[r.feeling] || "✓"}` : ""),
+          el("button", { class: "btn small ghost", onclick: () => openReflection(b) }, r ? "✏️ Ändern" : "✍️ Ausfüllen")); }));
+  }
   // 🌟 Rückmeldung des Fahrlehrers (falls freigegeben) – zur Motivation
   let revCard = null;
   if (feat("review_to_student") && feat("teacher_review")) {
@@ -7225,7 +7306,7 @@ async function studentMine() {
     const show = (b) => {
       const r = byId.get(b.id), tr = r.traits || [];
       const work = tr.filter((t) => t.startsWith(WORK_PREFIX)).map((t) => t.slice(WORK_PREFIX.length)), other = tr.filter((t) => !t.startsWith(WORK_PREFIX));
-      const head = r.rating === 1 ? "👍 Sehr gut!" : r.rating === 0 ? "👌 Mittel – es geht voran" : r.rating === -1 ? "💪 Dranbleiben – nächstes Mal klappt's besser!" : "⭐ Rückmeldung";
+      const head = r.rating === 1 ? "👍 Sehr gut gemacht!" : r.rating === 0 ? "👌 Gut dabei – es geht voran!" : r.rating === -1 ? "💪 Dranbleiben – nächstes Mal klappt's besser!" : "⭐ Rückmeldung";
       return el("div", { class: "rev-item" },
         el("div", { class: "small muted" }, `Fahrstunde am ${fmtDay(b.slots.starts_at)}`),
         el("b", {}, head),
@@ -7242,6 +7323,7 @@ async function studentMine() {
   return el("div", {},
     fbCard,
     revCard,
+    reflList,
     // Auf einen Blick: wie viel gefahren, was steht an, ggf. Fehlstunden
     el("div", { class: "stat-row" },
       nextTile(),
