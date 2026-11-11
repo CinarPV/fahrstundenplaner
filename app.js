@@ -214,7 +214,7 @@ function afterLessonBox(b) {
     fR ? el("div", { class: "al-sec" }, el("b", {}, "⭐ Deine Bewertung"), ratingRow) : null,
     fR ? el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow) : null,
     fR ? el("div", { class: "al-sec" }, el("b", {}, "🛠 Daran müssen wir noch arbeiten"), workRow) : null,
-    el("p", { class: "small muted", style: "margin:4px 0 0" }, [fR ? "Nur du siehst die Bewertung." : "", fT || fG ? "Angekreuztes wird im Ausbildungsstand als „eingeführt“ markiert." : ""].filter(Boolean).join(" ")));
+    el("p", { class: "small muted", style: "margin:4px 0 0" }, [fR ? (feat("review_to_student") ? "👍 und 👌 sieht auch der/die Schüler/in (mit Eigenschaften). 👎 siehst nur du – er/sie bekommt stattdessen eine aufmunternde Nachricht." : "Nur du siehst die Bewertung.") : "", fT || fG ? "Angekreuztes wird im Ausbildungsstand als „eingeführt“ markiert." : ""].filter(Boolean).join(" ")));
   async function save() {
     const topics = [...chosen];
     const { error } = await sb.from("bookings").update({ lesson_topics: topics.length ? topics : null }).eq("id", b.id);
@@ -601,7 +601,8 @@ const FEATURES = [
     ["lesson_tech", "🔧 Technik beim Abhaken ankreuzen", "Motorraum, Beleuchtung innen/außen, Reifen – mit Sechskant-Symbol in Heute und Kalender"],
     ["lesson_gfa", "🅿️ Grundfahraufgaben beim Abhaken ankreuzen", "Einparken, Umkehren, Gefahrbremsung … – mit P-Symbol beim Einparken"],
     ["training_tick", "📈 Knopf „Ausbildungsstand eingeben und abhaken“", "beim Abhaken direkt zur Ausbildung"],
-    ["teacher_review", "⭐ Fahrstunde bewerten", "👍 / 👌 / 👎 und Eigenschaften wie angespannt, selbstsicher … – nur für dich"],
+    ["teacher_review", "⭐ Fahrstunde bewerten", "👍 / 👌 / 👎 und Eigenschaften wie angespannt, selbstsicher …"],
+    ["review_to_student", "🌟 Bewertung auch für Schüler/innen sichtbar (Motivation)", "👍 und 👌 mit Eigenschaften sehen sie wie eingetragen; 👎 sehen sie nie – stattdessen eine aufmunternde Nachricht"],
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
@@ -7253,11 +7254,32 @@ async function studentMine() {
       el("button", { class: "btn", onclick: fbSend(0) }, "👌 Mittel"),
       el("button", { class: "btn", onclick: fbSend(-1) }, "👎 Nicht so gut"),
       el("button", { class: "btn ghost small", onclick: () => { state.fbSkip = { ...(state.fbSkip || {}), [fbB.id]: true }; render(); } }, "Später"))) : null;
+  // 🌟 Rückmeldung des Fahrlehrers (falls freigegeben) – zur Motivation
+  let revCard = null;
+  if (feat("review_to_student") && feat("teacher_review")) {
+    const { data: revs } = await sb.rpc("my_lesson_reviews");
+    const byId = new Map((revs || []).map((r) => [r.booking_id, r]));
+    const withRev = rows.filter((b) => byId.has(b.id) && b.actual_minutes !== null);
+    const show = (b) => {
+      const r = byId.get(b.id), tr = r.traits || [];
+      const work = tr.filter((t) => t.startsWith(WORK_PREFIX)).map((t) => t.slice(WORK_PREFIX.length)), other = tr.filter((t) => !t.startsWith(WORK_PREFIX));
+      const head = r.rating === 1 ? "👍 Sehr gut!" : r.rating === 0 ? "👌 Mittel – es geht voran" : r.rating === -1 ? "💪 Dranbleiben – nächstes Mal klappt's besser!" : "⭐ Rückmeldung";
+      return el("div", { class: "rev-item" },
+        el("div", { class: "small muted" }, `Fahrstunde am ${fmtDay(b.slots.starts_at)}`),
+        el("b", {}, head),
+        other.length ? el("div", { class: "reply-chips" }, other.map((t) => el("span", { class: "chip on" }, t))) : null,
+        work.length ? el("div", { class: "small", style: "margin-top:4px" }, "🛠 Nächstes Mal üben wir: ", work.join(", ")) : null);
+    };
+    if (withRev.length) revCard = el("div", { class: "card rev-card" },
+      el("h3", { style: "margin:0 0 6px" }, "🌟 Rückmeldung von deinem Fahrlehrer"), show(withRev[0]),
+      withRev.length > 1 ? el("details", { class: "fold" }, el("summary", {}, `Frühere Rückmeldungen (${withRev.length - 1})`), withRev.slice(1, 10).map(show)) : null);
+  }
   const open15 = specialOpen(state.profile, rows);
   const progressHint = open15.length ? el("button", { type: "button", class: "notice progress-hint", onclick: () => goTab("training") },
     el("b", {}, "📊 Noch offen: "), open15.map((x) => `${LESSON_ICON[x.t]} ${x.need.toLocaleString("de-DE")} FS ${LESSON_TYPES[x.t]}`).join(" · "), " ›") : null;
   return el("div", {},
     fbCard,
+    revCard,
     // Auf einen Blick: wie viel gefahren, was steht an, ggf. Fehlstunden
     el("div", { class: "stat-row" },
       nextTile(),

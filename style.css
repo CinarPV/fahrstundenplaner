@@ -1027,3 +1027,7 @@ html.dark .hex-icon { color: #cbd5e1; }
 .topics-note { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .sticky-actions { position: sticky; bottom: 0; background: var(--card, var(--bg)); padding: 8px 0; margin: 0; }
 .list-item.other-teacher { border-left: 3px solid #a78bfa; opacity: .92; }
+.rev-card { border-left: 4px solid #f5a623; }
+.rev-item { padding: 6px 0; }
+.rev-item + .rev-item { border-top: 1px solid var(--border); }
+.rev-item .reply-chips .chip { cursor: default; }

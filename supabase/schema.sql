@@ -2139,3 +2139,30 @@ begin
   if not found then raise exception 'Fahrstunde nicht gefunden'; end if;
 end $$;
 grant execute on function public.set_feedback(uuid, smallint) to authenticated;
+
+-- 8) Bewertung des Fahrlehrers für Schüler/innen sichtbar (zur Motivation; schaltbar: settings.features.review_to_student)
+--    👍 und 👌 mit Eigenschaften wie eingetragen. 👎 sieht der/die Schüler/in NIE – stattdessen aufmunternde Formulierungen.
+create or replace function public.my_lesson_reviews()
+returns table (booking_id uuid, rating smallint, traits text[])
+language sql stable security definer set search_path = public as $$
+  select r.booking_id, r.rating,
+    case when r.rating = -1 then array(
+      select coalesce(m.nice, t) from unnest(r.traits) with ordinality u(t, n)
+      left join (values
+        ('unsicher', 'Sicherheit kommt mit jeder Fahrstunde'),
+        ('angespannt', 'Locker bleiben – du schaffst das'),
+        ('gestresst', 'Ruhig atmen, Schritt für Schritt'),
+        ('unkonzentriert', 'Nächstes Mal voll konzentriert'),
+        ('verwirrt', 'Wir gehen es nochmal in Ruhe durch'),
+        ('überfordert', 'Wir machen es Schritt für Schritt'),
+        ('müde', 'Ausgeschlafen fährt es sich leichter'),
+        ('zu schnell', 'Etwas mehr Ruhe beim Tempo'),
+        ('zu zögerlich', 'Mehr Mut – du kannst das')
+      ) m(raw, nice) on m.raw = u.t
+      order by u.n)
+    else r.traits end
+  from lesson_reviews r join bookings b on b.id = r.booking_id
+  where b.student_id = auth.uid()
+    and coalesce((select (s.features->>'review_to_student')::boolean from settings s where s.teacher_id = r.teacher_id), true);
+$$;
+grant execute on function public.my_lesson_reviews() to authenticated;
