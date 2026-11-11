@@ -139,22 +139,40 @@ function replyChips(ta, tries = 0) {
 }
 // Verspätung melden (5–25 Min.) – who: "teacher" oder "student"
 const LATE_MIN = [5, 10, 15, 20, 25];
+// Fahrlehrer/in: jede Fahrstunde von heute, solange sie nicht vorbei ist (Verspätung zieht sich oft durch den Tag)
+const lateWindowT = (startIso, dur) => { const st = new Date(startIso).getTime(); return sameDay(new Date(startIso), new Date()) && Date.now() < st + (dur || 60) * 60000; };
 const lateWindow = (startIso, dur) => { const st = new Date(startIso).getTime(), n = Date.now(); return st - n <= 8 * 3600000 && n < st + Math.min(dur || 60, 60) * 60000; };
-function openLate(b, startIso, who) {
+async function openLate(b, startIso, who) {
   const cur = who === "teacher" ? b.late_teacher : b.late_student;
+  // Fahrlehrer/in: auf Wunsch auch alle folgenden Fahrstunden von heute (Kettenreaktion)
+  let later = [];
+  if (who === "teacher") {
+    const end = dayStart(addDays(new Date(startIso), 1)).toISOString();
+    const { data } = await sb.from("slots").select("id,starts_at,duration_min,bookings(id,status,actual_minutes,late_teacher,profiles(first_name,last_name))")
+      .eq("teacher_id", state.profile.id).gt("starts_at", startIso).lt("starts_at", end).order("starts_at");
+    later = (data || []).flatMap((sl) => (sl.bookings || []).filter((x) => x.status === "confirmed" && x.actual_minutes === null && x.id !== b.id)
+      .map((x) => ({ ...x, starts_at: sl.starts_at })));
+  }
+  const all = el("input", { type: "checkbox", checked: true });
   const send = (min) => async (ev) => busy(ev.currentTarget, async () => {
-    const { error } = await sb.rpc("announce_late", { p_booking: b.id, p_min: min });
-    if (error) throw error;
-    pushNotify("booking", b.id, who === "teacher" ? "late_teacher" : "late");
+    const list = [b].concat(later.length && all.checked ? later : []);
+    for (const x of list) {
+      const { error } = await sb.rpc("announce_late", { p_booking: x.id, p_min: min });
+      if (error) throw error;
+    }
+    pushNotify("booking", list.map((x) => x.id), who === "teacher" ? "late_teacher" : "late");
     closeModal();
-    toast(min ? `⏰ Gemeldet: ca. ${min} Min. später` : "⏰ Zurückgenommen: doch pünktlich");
+    toast(min ? `⏰ Gemeldet: ca. ${min} Min. später` + (list.length > 1 ? ` – ${list.length} Fahrstunden` : "") : "⏰ Zurückgenommen: doch pünktlich" + (list.length > 1 ? ` (${list.length} Fahrstunden)` : ""));
     render();
   });
   openModal("⏰ Ich verspäte mich",
     el("p", {}, `Fahrstunde ${fmtDay(startIso)}, ${fmtTime(startIso)} Uhr`, who === "teacher" && b.profiles ? ` · ${fullName(b.profiles)}` : ""),
     el("p", { class: "small muted" }, who === "teacher" ? "Der/die Schüler/in bekommt sofort eine Mitteilung." : "Dein Fahrlehrer bekommt sofort eine Mitteilung."),
+    later.length ? el("label", { class: "check", style: "margin:4px 0 0" }, all,
+      el("span", {}, el("b", {}, later.length === 1 ? "Auch für die nächste Fahrstunde heute" : `Auch für die ${later.length} weiteren Fahrstunden heute`),
+        el("div", { class: "small muted" }, later.map((x) => `${fmtTime(x.starts_at)} ${fullName(x.profiles || {})}`).join(" · ")))) : null,
     el("div", { class: "late-btns" }, LATE_MIN.map((m) => el("button", { type: "button", class: "btn" + (cur === m ? " ok" : ""), onclick: send(m) }, `${m} Min.`))),
-    cur ? el("div", { class: "actions" }, el("button", { type: "button", class: "btn ghost", onclick: send(0) }, "✓ Doch pünktlich")) : null);
+    cur || later.some((x) => x.late_teacher) ? el("div", { class: "actions" }, el("button", { type: "button", class: "btn ghost", onclick: send(0) }, "✓ Doch pünktlich")) : null);
 }
 // Fahrstunde als Kalender-Datei (.ics) – öffnet am Handy „Zum Kalender hinzufügen“
 function icsFor(b) {
@@ -2756,7 +2774,7 @@ async function adminToday() {
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
     const cancelBtn = phase === "next" && !canTick ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "Absagen") : null;
-    const lateBtn = !b._own && feat("late") && held && !done && lateWindow(s.starts_at, s.duration_min)
+    const lateBtn = !b._own && feat("late") && held && !done && lateWindowT(s.starts_at, s.duration_min)
       ? el("button", { type: "button", class: "tr-cancel tr-late", title: "Verspätung melden", onclick: () => openLate(b, s.starts_at, "teacher") }, b.late_teacher ? `⏰ Ich: +${b.late_teacher}` : "⏰ Verspätung") : null;
     return el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openAdminSlot(s.id)) }, head,
       phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, lateBtn, meetLine));
@@ -4027,7 +4045,7 @@ async function openAdminSlot(slotId) {
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
       b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "notice wish" }, `⏰ ${fullName(b.profiles)} kommt ca. ${b.late_student} Min. später.`) : null,
       b.student_feedback ? el("p", { class: "small" }, "Rückmeldung von Schüler/in: ", b.student_feedback > 0 ? "👍 hat gut gefallen" : "👎 war nicht so gut") : null,
-      feat("late") && b.status === "confirmed" && b.actual_minutes === null && lateWindow(slot.starts_at, slot.duration_min)
+      feat("late") && b.status === "confirmed" && b.actual_minutes === null && lateWindowT(slot.starts_at, slot.duration_min)
         ? el("div", { class: "actions", style: "margin-top:0" }, el("button", { class: "btn small ghost", onclick: () => openLate(b, slot.starts_at, "teacher") }, b.late_teacher ? `⏰ Du kommst ${b.late_teacher} Min. später – ändern` : "⏰ Ich verspäte mich")) : null,
     );
     // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
@@ -5052,32 +5070,41 @@ function moreToggle(st) {
 // Höchstzahl Termine PRO WOCHE: null = Standard, 0 = unbegrenzt, sonst Zahl
 const limitLabel = (v) => (v === null || v === undefined ? `Standard (${state.settings.max_open || "∞"})` : v === 0 ? "∞ unbegrenzt" : String(v));
 // Für einen Zeitraum höchstens so viele Fahrstunden anfragen (außerhalb gilt weiter die normale Grenze)
+// Uhrzeit-Grenzen je Schüler/in: in diesen Uhrzeiten höchstens X Fahrstunden pro Woche; außerhalb gelten die allgemeinen Regeln
 function periodLimits(st) {
   const box = el("div", { style: "margin-top:12px" });
+  const hm = (t) => String(t || "").slice(0, 5);
   async function draw() {
-    const { data, error } = await sb.from("student_limits").select("id,from_day,to_day,max_count").eq("student_id", st.id).order("from_day");
-    if (error) return box.replaceChildren(el("p", { class: "muted small" }, "Zeitraum-Grenzen noch nicht verfügbar (Datenbank-Update fehlt)."));
-    const from = el("input", { type: "date", value: dateInput(new Date()) });
-    const to = el("input", { type: "date", value: dateInput(addDays(new Date(), 13)) });
-    const max = el("input", { type: "number", min: 0, max: 50, value: 2, style: "max-width:90px" });
+    const [tl, old] = await Promise.all([
+      sb.from("student_time_limits").select("id,from_time,to_time,max_count").eq("student_id", st.id).order("from_time"),
+      sb.from("student_limits").select("id,from_day,to_day,max_count").eq("student_id", st.id).order("from_day"),
+    ]);
+    if (tl.error) return box.replaceChildren(el("p", { class: "muted small" }, "Uhrzeit-Grenzen noch nicht verfügbar (Datenbank-Update fehlt)."));
+    const from = el("input", { type: "time", step: 900, value: "14:00" });
+    const to = el("input", { type: "time", step: 900, value: "18:00" });
+    const max = el("input", { type: "number", min: 0, max: 50, value: 1, style: "max-width:90px" });
     const add = el("button", { class: "btn small" }, "Hinzufügen");
     add.onclick = () => busy(add, async () => {
-      if (!from.value || !to.value || to.value < from.value) throw new Error("Bitte gültigen Zeitraum wählen (bis ≥ von)");
-      const { error: e } = await sb.from("student_limits").insert({ student_id: st.id, from_day: from.value, to_day: to.value, max_count: Math.max(0, +max.value || 0) });
+      const f = normTime(from.value, true), t = normTime(to.value, true);
+      if (!f || !t || t <= f) throw new Error("Bitte gültige Uhrzeiten wählen (bis später als von)");
+      if ((tl.data || []).some((x) => f < hm(x.to_time) && t > hm(x.from_time))) throw new Error("Überschneidet sich mit einer vorhandenen Uhrzeit-Grenze");
+      const { error: e } = await sb.from("student_time_limits").insert({ student_id: st.id, from_time: f, to_time: t, max_count: Math.max(0, Math.min(50, +max.value || 0)) });
       if (e) throw e;
-      toast("Grenze gespeichert."); draw();
+      toast("Uhrzeit-Grenze gespeichert."); draw();
     });
+    const rm = (table, id) => { const b = el("button", { class: "btn small ghost danger-text" }, "Entfernen");
+      b.onclick = () => busy(b, async () => { const { error: e } = await sb.from(table).delete().eq("id", id); if (e) throw e; draw(); }); return b; };
     box.replaceChildren(
-      el("b", {}, "Für einen Zeitraum begrenzen"),
-      el("p", { class: "muted small", style: "margin:2px 0 6px" }, "Im Zeitraum darf der/die Schüler/in höchstens so viele Fahrstunden anfragen bzw. haben. Außerhalb gilt weiter die normale Grenze."),
-      (data || []).map((x) => {
-        const del = el("button", { class: "btn small ghost danger-text" }, "Entfernen");
-        del.onclick = () => busy(del, async () => { const { error: e } = await sb.from("student_limits").delete().eq("id", x.id); if (e) throw e; draw(); });
-        return el("div", { class: "done-row", style: "justify-content:space-between" },
-          el("span", {}, `${fmtDayStr(x.from_day)} – ${fmtDayStr(x.to_day)}: höchstens ${x.max_count}`), del);
-      }),
-      el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis"), to), el("div", {}, el("label", {}, "Höchstens"), max)),
-      el("div", { class: "actions" }, add));
+      el("b", {}, "🕐 Nach Uhrzeit begrenzen"),
+      el("p", { class: "muted small", style: "margin:2px 0 6px" }, "Zwischen diesen Uhrzeiten darf der/die Schüler/in höchstens so viele Fahrstunden pro Woche anfragen (0 = gar nicht). Außerhalb gelten die allgemeinen Regeln von oben."),
+      (tl.data || []).map((x) => el("div", { class: "done-row", style: "justify-content:space-between" },
+        el("span", {}, `${hm(x.from_time)} – ${hm(x.to_time)} Uhr: ${x.max_count ? `höchstens ${x.max_count} pro Woche` : "gar nicht"}`), rm("student_time_limits", x.id))),
+      el("div", { class: "row" }, el("div", {}, el("label", {}, "Von"), from), el("div", {}, el("label", {}, "Bis"), to), el("div", {}, el("label", {}, "Höchstens / Woche"), max)),
+      el("div", { class: "actions" }, add),
+      // Frühere Grenzen nach Datum (nur noch anzeigen und entfernen)
+      !old.error && (old.data || []).length ? [el("p", { class: "small", style: "margin:10px 0 2px" }, el("b", {}, "Ältere Grenzen nach Datum")),
+        old.data.map((x) => el("div", { class: "done-row", style: "justify-content:space-between" },
+          el("span", {}, `${fmtDayStr(x.from_day)} – ${fmtDayStr(x.to_day)}: höchstens ${x.max_count}`), rm("student_limits", x.id)))] : null);
   }
   draw();
   return box;
