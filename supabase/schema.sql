@@ -1122,6 +1122,30 @@ drop trigger if exists slots_remember_first_time on public.slots;
 create trigger slots_remember_first_time before update of starts_at, duration_min, original_start on public.slots
   for each row execute function public.remember_first_time();
 
+-- Schüler/innen ohne App: eigene Einträge des Fahrlehrers (Fahrstunden und Prüfungen)
+-- (nachträglich ergänzt am 11.11.2026 – die Tabelle wurde früher außerhalb dieser Datei angelegt; im Live-Projekt existiert sie schon)
+create table if not exists public.own_entries (
+  id             uuid primary key default gen_random_uuid(),
+  teacher_id     uuid not null references public.profiles(id) on delete cascade,
+  kind           text not null default 'lesson' check (kind in ('lesson', 'exam')),
+  lesson_type    text,
+  student_name   text not null check (char_length(student_name) <= 80),
+  starts_at      timestamptz not null,
+  duration_min   int not null check (duration_min between 5 and 600),
+  done           boolean not null default false,
+  note           text check (char_length(note) <= 1000),
+  transferred_at timestamptz,
+  created_at     timestamptz not null default now()
+);
+alter table public.own_entries add column if not exists transferred_at timestamptz;
+create index if not exists own_entries_teacher_idx on public.own_entries (teacher_id, starts_at);
+alter table public.own_entries enable row level security;
+drop policy if exists own_entries_teacher on public.own_entries;
+create policy own_entries_teacher on public.own_entries for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+grant select, insert, update, delete on public.own_entries to authenticated;
+
 -- Ist im Zeitraum etwas eingetragen? (gebuchte Fahrstunden, Schüler ohne App, blockierte Zeiten)
 create or replace function public.slot_busy_until(p_teacher uuid, p_slot uuid, p_at timestamptz)
 returns timestamptz language sql stable security definer set search_path = public as $$
