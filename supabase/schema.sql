@@ -1688,3 +1688,69 @@ alter table public.own_entries add column if not exists archived_at timestamptz;
 select cron.schedule('fsp-own-archive-cleanup', '30 3 * * *', $cron$
   delete from public.own_entries where archived_at is not null and archived_at < now() - interval '1 year'
 $cron$);
+
+-- ===== Paket Nov. 2026: Verspätung, Rückmeldung, Warteliste, Erinnerung 1 Std. vorher =====
+alter table public.bookings add column if not exists late_student int;          -- Schüler/in kommt X Min. später
+alter table public.bookings add column if not exists late_teacher int;          -- Fahrlehrer/in kommt X Min. später
+alter table public.bookings add column if not exists student_feedback smallint check (student_feedback in (-1, 1));  -- 👍 / 👎 (nur Fahrlehrer/in sieht es)
+alter table public.bookings add column if not exists hour_reminded boolean not null default false;
+
+-- Verspätung melden (5–25 Min., 0 = zurücknehmen): Schüler/in für die eigene, Fahrlehrer/in für eigene Termine
+create or replace function public.announce_late(p_booking uuid, p_min int)
+returns text language plpgsql security definer set search_path = public as $$
+declare b record;
+begin
+  if p_min not in (0, 5, 10, 15, 20, 25) then raise exception 'Ungültige Minuten'; end if;
+  select bk.id, bk.student_id, bk.status, s.teacher_id, s.starts_at into b
+    from bookings bk join slots s on s.id = bk.slot_id where bk.id = p_booking;
+  if b.id is null or b.status <> 'confirmed' then raise exception 'Fahrstunde nicht gefunden'; end if;
+  if b.starts_at < now() - interval '2 hours' then raise exception 'Die Fahrstunde ist schon vorbei'; end if;
+  if auth.uid() = b.student_id then
+    update bookings set late_student = nullif(p_min, 0) where id = p_booking; return 'student';
+  elsif auth.uid() = b.teacher_id then
+    update bookings set late_teacher = nullif(p_min, 0) where id = p_booking; return 'teacher';
+  end if;
+  raise exception 'Nicht erlaubt';
+end $$;
+grant execute on function public.announce_late(uuid, int) to authenticated;
+
+-- Rückmeldung nach der Fahrstunde (nur der/die Schüler/in selbst, nur gefahrene Fahrstunden)
+create or replace function public.set_feedback(p_booking uuid, p_val smallint)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_val is not null and p_val not in (-1, 1) then raise exception 'Ungültig'; end if;
+  update bookings set student_feedback = p_val
+   where id = p_booking and student_id = auth.uid() and status = 'confirmed' and actual_minutes is not null;
+  if not found then raise exception 'Fahrstunde nicht gefunden'; end if;
+end $$;
+grant execute on function public.set_feedback(uuid, smallint) to authenticated;
+
+-- Warteliste: „Benachrichtige mich, wenn an diesem Tag etwas frei wird“
+create table if not exists public.waitlist (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.profiles(id) on delete cascade default auth.uid(),
+  teacher_id uuid not null references public.profiles(id) on delete cascade,
+  day date not null,
+  created_at timestamptz not null default now(),
+  unique (student_id, day)
+);
+alter table public.waitlist enable row level security;
+drop policy if exists waitlist_student on public.waitlist;
+create policy waitlist_student on public.waitlist for all to authenticated
+  using (student_id = auth.uid())
+  with check (student_id = auth.uid() and day >= current_date
+    and teacher_id = (select p.teacher_id from public.profiles p where p.id = auth.uid()));
+drop policy if exists waitlist_teacher on public.waitlist;
+create policy waitlist_teacher on public.waitlist for select to authenticated using (teacher_id = auth.uid());
+
+-- Erinnerung 1 Std. vorher (je Fahrlehrer/in unter Einstellungen → Funktionen) – alle 10 Minuten prüfen
+select cron.schedule('fsp-hour-reminder', '*/10 * * * *', $cron$
+  select net.http_post(
+    url := 'https://bxyxickwkfzefuixijmt.supabase.co/functions/v1/notify',
+    headers := jsonb_build_object('Content-Type', 'application/json',
+      'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4eXhpY2t3a2Z6ZWZ1aXhpam10Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MDI0NjksImV4cCI6MjEwODk3ODQ2OX0.h78Sm2TqP8zsVt9D61ksN1UbWTXXKfcvtBt3ctxisT4',
+      'x-cron-secret', (select value from public.app_secrets where name = 'cron')),
+    body := '{"kind":"hour"}'::jsonb)
+$cron$);
+-- Alte Wartelisten-Einträge täglich aufräumen
+select cron.schedule('fsp-waitlist-cleanup', '15 3 * * *', $cron$ delete from public.waitlist where day < current_date $cron$);

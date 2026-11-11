@@ -990,3 +990,26 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 .moved-chip.out { background: #f1f2f4; border-color: #cfd3da; color: #555; font-weight: 600; }
 .slot.moved-away, .tr.moved-away { background: transparent; border: 1px dashed #c8ccd4; color: #777; font-size: 12.5px; font-weight: 500; box-shadow: none; }
 .tr.moved-away .tr-name { font-weight: 500; color: #777; }
+
+/* ===== Paket Nov. 2026 ===== */
+/* Antwort-Bausteine */
+.reply-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+.reply-chips .chip { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+.reply-chips .chip:active { transform: scale(.97); }
+/* Rückgängig in der Meldung */
+.toast { display: flex; align-items: center; gap: 10px; }
+.toast[hidden] { display: none; }
+.toast-undo { font: inherit; font-weight: 700; font-size: 14px; padding: 5px 12px; border-radius: 999px; border: 0; background: var(--bg); color: var(--text); cursor: pointer; white-space: nowrap; }
+/* Verspätung */
+.late-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 10px 0; }
+.late-btns .btn { padding-left: 0; padding-right: 0; }
+.tr-pill.late { background: #f5a62333; color: #8a5a00; }
+.tr-fb { font-size: 14px; }
+/* Zu erledigen: direkt abhaken */
+.todo-line { display: flex; gap: 8px; align-items: stretch; }
+.todo-line .todo-row { flex: 1; min-width: 0; }
+.todo-line .todo-tick { flex: none; align-self: center; }
+/* Schüler/in: Rückmeldung + Sonderfahrten */
+.fb-card { border-left: 4px solid #2fb36d; }
+.progress-hint { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; margin: 12px 0 0; }
+.tr-cancel.tr-late { color: #8a5a00; }

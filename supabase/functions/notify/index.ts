@@ -17,7 +17,7 @@ const json = (body: unknown, status = 200) =>
 type Words = { Dein: string; deinem: string };
 const teacherWords = (g?: string | null): Words =>
   g === "w" ? { Dein: "Deine Fahrlehrerin", deinem: "deiner Fahrlehrerin" } : { Dein: "Dein Fahrlehrer", deinem: "deinem Fahrlehrer" };
-type Ctx = { name: string; when: string; meet: string; late: boolean; status: string; reason: string; t: Words };
+type Ctx = { name: string; when: string; meet: string; late: boolean; status: string; reason: string; t: Words; reply: string; lateS: number; lateT: number };
 const reasonText = (c: Ctx) => (c.reason ? ` Grund: ${c.reason}` : "");
 const NOT_HELD_TEXT: Record<string, (c: Ctx) => string> = {
   sick: (c) => `Deine Fahrstunde am ${c.when} ist wegen Krankheit abgesagt.`,
@@ -33,6 +33,8 @@ const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   decline: (c) => ["🚫 Angebot abgelehnt", `${c.name} kann ${c.when} leider nicht.`],
   change_ok: (c) => ["✅ Änderung angenommen", `${c.name} ist mit der neuen Zeit für ${c.when} einverstanden.`],
   change_no: (c) => ["🚫 Änderung abgelehnt", `${c.name} bleibt bei der bisherigen Zeit (${c.when}).`],
+  late: (c) => (c.lateS ? ["⏰ Verspätung", `${c.name} kommt ca. ${c.lateS} Min. später (Fahrstunde ${c.when}).`]
+    : ["⏰ Doch pünktlich", `${c.name} kommt doch pünktlich (${c.when}).`]),
 };
 const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   confirmed: (c) => ["✅ Fahrstunde bestätigt", `${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
@@ -41,6 +43,10 @@ const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   offered: (c) => ["📨 Neues Angebot", `${c.t.Dein} bietet dir ${c.when} an – bitte zusagen oder absagen.`],
   assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
   cancelled_teacher: (c) => ["❌ Fahrstunde abgesagt", `${c.t.Dein} hat die Fahrstunde am ${c.when} abgesagt.${reasonText(c)}`],
+  moved: (c) => ["🔄 Fahrstunde geändert", `${c.t.Dein} hat deine Fahrstunde geändert. Neu: ${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
+  note: (c) => ["📝 Hinweis zu deiner Fahrstunde", `${c.when}: ${c.reply}`],
+  late_teacher: (c) => (c.lateT ? ["⏰ Kleine Verspätung", `${c.t.Dein} kommt ca. ${c.lateT} Min. später zur Fahrstunde am ${c.when}.`]
+    : ["⏰ Doch pünktlich", `${c.t.Dein} ist doch pünktlich zur Fahrstunde am ${c.when}.`]),
   not_held: (c) => ["❌ Fahrstunde abgesagt", `${(NOT_HELD_TEXT[c.status] ?? ((x: Ctx) => `Deine Fahrstunde am ${x.when} findet nicht statt.`))(c)}${c.late ? " Das wird als Fehlstunde berechnet." : ""}${reasonText(c)}`],
 };
 
@@ -63,7 +69,7 @@ Deno.serve(async (req) => {
     const { kind, ids, event, text } = await req.json();
     // „evening“ kommt vom nächtlichen Zeitplan (pg_cron) mit geheimem Schlüssel aus der Datenbank – sonst muss jemand angemeldet sein
     let user: { id: string } = { id: "" };
-    if (kind === "evening") {
+    if (kind === "evening" || kind === "hour") {
       const { data: sec } = await admin.from("app_secrets").select("value").eq("name", "cron").maybeSingle();
       if (!sec || !sec.value || req.headers.get("x-cron-secret") !== sec.value) return json({ error: "Nicht erlaubt" }, 403);
     } else {
@@ -106,11 +112,31 @@ Deno.serve(async (req) => {
           messages.push({ to: b.student_id, title: "🚗 Morgen Fahrstunde", body: `${fmtWhen(sl.starts_at)}${meet ? ` · 📍 ${meet}` : ""} – ${t.Dein} freut sich auf dich.` });
         }
       }
+    } else if (kind === "hour") {
+      // Erinnerung ca. 1 Std. vorher: nur Fahrlehrer, die sie unter Einstellungen → Funktionen eingeschaltet haben
+      const { data: sts } = await admin.from("settings").select("teacher_id,features,meeting_point,teacher_gender");
+      const on = (sts ?? []).filter((x) => (x.features as Record<string, unknown> | null)?.hour_reminder === true);
+      if (on.length) {
+        const { data: bk } = await admin.from("bookings")
+          .select("id,student_id,meeting_point,slots!inner(starts_at,teacher_id,meeting_point)")
+          .eq("status", "confirmed").is("actual_minutes", null).eq("hour_reminded", false)
+          .in("slots.teacher_id", on.map((x) => x.teacher_id))
+          .gte("slots.starts_at", new Date(Date.now() + 40 * 60000).toISOString()).lt("slots.starts_at", new Date(Date.now() + 75 * 60000).toISOString());
+        for (const b of bk ?? []) {
+          // deno-lint-ignore no-explicit-any
+          const sl: any = b.slots;
+          const st = on.find((x) => x.teacher_id === sl.teacher_id);
+          const meet = b.meeting_point || sl.meeting_point || st?.meeting_point || "";
+          const time = new Date(sl.starts_at).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" });
+          messages.push({ to: b.student_id, title: "🚗 Gleich Fahrstunde", body: `Heute um ${time} Uhr${meet ? ` · 📍 ${meet}` : ""}. Bis gleich!` });
+          await admin.from("bookings").update({ hour_reminded: true }).eq("id", b.id);
+        }
+      }
     } else if (kind === "test") {
       messages.push({ to: user.id, title: "🔔 Mitteilungen sind an", body: "So sehen Mitteilungen vom Easy Fahrstundenplaner aus." });
     } else if (kind === "booking" && Array.isArray(ids) && ids.length && ids.length <= 60) {
       const { data: rows } = await admin.from("bookings")
-        .select("id,student_id,status,cancel_reason,late_cancel,meeting_point,profiles(*),slots(starts_at,teacher_id,meeting_point)")
+        .select("id,student_id,status,cancel_reason,late_cancel,meeting_point,admin_reply,late_student,late_teacher,profiles(*),slots(starts_at,teacher_id,meeting_point)")
         .in("id", ids);
       for (const b of rows ?? []) {
         // deno-lint-ignore no-explicit-any
@@ -119,7 +145,9 @@ Deno.serve(async (req) => {
         const st = await teacherSettings(slot.teacher_id);
         const meet = b.meeting_point || slot.meeting_point || st?.meeting_point || "";
         const ctx: Ctx = { name: fullName(student), when: fmtWhen(slot.starts_at), meet, late: !!b.late_cancel, status: b.status ?? "",
-          reason: (b.cancel_reason ?? "").trim(), t: teacherWords(st?.teacher_gender) };
+          reason: (b.cancel_reason ?? "").trim(), t: teacherWords(st?.teacher_gender), reply: (b.admin_reply ?? "").trim(),
+          lateS: b.late_student ?? 0, lateT: b.late_teacher ?? 0 };
+        if (event === "note" && !ctx.reply) continue;
         if (user.id === b.student_id && STUDENT_EVENTS[event]) {
           const [title, body] = STUDENT_EVENTS[event](ctx);
           messages.push({ to: slot.teacher_id, title, body });
@@ -158,7 +186,8 @@ Deno.serve(async (req) => {
       const st = teacherId ? await teacherSettings(teacherId) as Record<string, unknown> | null : null;
       const flag = kind === "slots_new" ? "notify_new_slots" : kind === "slot_freed" ? "notify_freed" : "notify_button";
       // „Alle erinnern“ (slots_remind) drückt der Fahrlehrer selbst – dafür keine Einstellung nötig
-      if (teacherId && st && (kind === "slots_remind" || st[flag]) && !st.booking_closed) {
+      const toAll = kind === "slots_remind" || !!st?.[flag];
+      if (teacherId && st && !st.booking_closed) {
         // wirklich noch frei? (keine offene Anfrage/Buchung) und kein gesperrter Tag
         const { data: act } = await admin.from("bookings").select("slot_id").in("slot_id", slotRows.map((x) => x.id)).in("status", ["requested", "offered", "confirmed"]);
         const taken = new Set((act ?? []).map((x) => x.slot_id));
@@ -172,14 +201,25 @@ Deno.serve(async (req) => {
           const { data: passed } = await admin.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed");
           const passedIds = new Set((passed ?? []).map((x) => x.student_id));
           const cut = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
-          const to = (studs ?? []).filter((x) => !passedIds.has(x.id) && x.id !== skipStudent && !(x.valid_until && x.valid_until < cut)).map((x) => x.id);
+          const okIds = new Set((studs ?? []).filter((x) => !passedIds.has(x.id) && x.id !== skipStudent && !(x.valid_until && x.valid_until < cut)).map((x) => x.id));
+          const to = toAll ? [...okIds] : [];
+          // Warteliste: wer sich für einen dieser Tage eintragen hat, bekommt immer Bescheid (danach wird der Eintrag gelöscht)
+          const freeDays = [...new Set(free.map((x) => day(x.starts_at)))];
+          const { data: wl } = await admin.from("waitlist").select("id,student_id,day").eq("teacher_id", teacherId).in("day", freeDays);
+          for (const w of wl ?? []) {
+            if (!okIds.has(w.student_id)) continue;
+            const f = free.find((x) => day(x.starts_at) === w.day)!;
+            messages.push({ to: w.student_id, title: "⏳ Dein Wartelisten-Tag: Termin frei!", body: `${fmtWhen(f.starts_at)} ist frei – schnell in der App anfragen.` });
+            await admin.from("waitlist").delete().eq("id", w.id);
+          }
+          const wlIds = new Set((wl ?? []).map((w) => w.student_id));
           const [title, body] = kind === "slots_new"
             ? (free.length === 1 ? ["🆕 Neuer Termin frei", `${fmtWhen(free[0].starts_at)} – jetzt in der App anfragen.`]
               : ["🆕 Neue Termine frei", `${free.length} neue Termine (${fmtWhen(free[0].starts_at)} bis ${fmtWhen(free[free.length - 1].starts_at)}) – jetzt in der App anfragen.`])
             : kind === "slot_freed" ? ["🟢 Termin wieder frei", `${fmtWhen(free[0].starts_at)} ist wieder frei – jetzt in der App anfragen.`]
             : free.length === 1 ? ["📣 Noch frei", `${fmtWhen(free[0].starts_at)} ist noch frei – jetzt in der App anfragen.`]
             : ["📣 Noch Fahrstunden frei", `${free.length} freie Termine (${fmtWhen(free[0].starts_at)} bis ${fmtWhen(free[free.length - 1].starts_at)}) – jetzt in der App anfragen.`];
-          for (const id of to) messages.push({ to: id, title, body });
+          for (const id of to) if (!wlIds.has(id)) messages.push({ to: id, title, body });
         }
       }
     } else if (kind === "transferred" && Array.isArray(ids) && ids.length === 1) {
@@ -199,8 +239,13 @@ Deno.serve(async (req) => {
       // deno-lint-ignore no-explicit-any
       if (e && (e.profiles as any)?.teacher_id === user.id) {
         const schalt = e.kind === "schalt";
-        messages.push({ to: e.student_id, title: schalt ? "🏁 Schaltkompetenz-Test" : "🎓 Prüfungstermin",
-          body: `${schalt ? "Schaltkompetenz-Test" : "Praktische Prüfung"}: ${fmtWhen(e.exam_at)}${e.meeting_point ? ` · 📍 ${e.meeting_point}` : ""}` });
+        const what = schalt ? "Schaltkompetenz-Test" : "Praktische Prüfung";
+        if (event === "passed") {
+          messages.push({ to: e.student_id, title: "🎉 Herzlichen Glückwunsch!", body: schalt ? "Du hast den Schaltkompetenz-Test bestanden!" : "Du hast die Führerscheinprüfung bestanden! Allzeit gute Fahrt! 🚗" });
+        } else {
+          messages.push({ to: e.student_id, title: event === "exam_changed" ? (schalt ? "🔄 Schalt-Test geändert" : "🔄 Prüfungstermin geändert") : schalt ? "🏁 Schaltkompetenz-Test" : "🎓 Prüfungstermin",
+            body: `${what}${event === "exam_changed" ? " – neu" : ""}: ${fmtWhen(e.exam_at)}${e.meeting_point ? ` · 📍 ${e.meeting_point}` : ""}` });
+        }
       }
     }
 

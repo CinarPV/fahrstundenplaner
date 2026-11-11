@@ -98,6 +98,95 @@ function toast(msg, isError) {
   toast._t = setTimeout(() => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; }, isError ? 9000 : 2000);
 }
 
+// Meldung mit „↩️ Rückgängig“ (ein paar Sekunden lang)
+function undoToast(msg, onUndo) {
+  const t = document.getElementById("toast");
+  const btn = el("button", { type: "button", class: "toast-undo" }, "↩️ Rückgängig");
+  t.replaceChildren(el("span", {}, msg.replace(/^[✓✔]\s*/, "")), btn);
+  t.className = "toast ok";
+  t.hidden = false;
+  toast._ok = Date.now();   // sonst überschreibt „Erledigt“ die Meldung
+  try { t.setAttribute("popover", "manual"); if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch { /* ältere Browser */ }
+  const hide = () => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; };
+  t.onclick = hide;
+  btn.onclick = (ev) => { ev.stopPropagation(); hide(); onUndo(); };
+  clearTimeout(toast._t);
+  toast._t = setTimeout(hide, 7000);
+}
+// Löschen mit Rückgängig: Zeile vorher merken, bei „Rückgängig“ wieder einfügen
+async function deleteWithUndo(table, id, msg) {
+  let row = null;
+  if (feat("undo")) { const r = await sb.from(table).select("*").eq("id", id).maybeSingle(); row = r.data || null; }
+  const { error } = await sb.from(table).delete().eq("id", id);
+  if (error) throw error;
+  if (!row) return toast(msg);
+  undoToast(msg, async () => {
+    const { error: e2 } = await sb.from(table).insert(row);
+    if (e2) return fail(e2);
+    toast("↩️ Wiederhergestellt."); render();
+  });
+}
+// Antwort-Bausteine unter einem Hinweis-Feld an Schüler/innen (antippen = Text anhängen)
+const REPLY_CHIPS = ["Passt 👍", "Bitte 10 Min. früher da sein.", "Treffpunkt wie immer.", "Bitte Brille mitbringen.", "Ich hole dich ab.", "Leider schon vergeben – ich melde mich."];
+function replyChips(ta, tries = 0) {
+  if (!feat("reply_chips") || !isAdmin()) return ta;
+  if (!ta.isConnected) { if (tries < 20) setTimeout(() => replyChips(ta, tries + 1), 50); return ta; }
+  if (ta.nextElementSibling && ta.nextElementSibling.classList.contains("reply-chips")) return ta;
+  ta.after(el("div", { class: "reply-chips" }, REPLY_CHIPS.map((c) => el("button", { type: "button", class: "chip", onclick: () => {
+    ta.value = (ta.value.trim() ? ta.value.trim() + " " : "") + c; ta.dispatchEvent(new Event("input")); ta.focus();
+  } }, c))));
+  return ta;
+}
+// Verspätung melden (5–25 Min.) – who: "teacher" oder "student"
+const LATE_MIN = [5, 10, 15, 20, 25];
+const lateWindow = (startIso, dur) => { const st = new Date(startIso).getTime(), n = Date.now(); return st - n <= 8 * 3600000 && n < st + Math.min(dur || 60, 60) * 60000; };
+function openLate(b, startIso, who) {
+  const cur = who === "teacher" ? b.late_teacher : b.late_student;
+  const send = (min) => async (ev) => busy(ev.currentTarget, async () => {
+    const { error } = await sb.rpc("announce_late", { p_booking: b.id, p_min: min });
+    if (error) throw error;
+    pushNotify("booking", b.id, who === "teacher" ? "late_teacher" : "late");
+    closeModal();
+    toast(min ? `⏰ Gemeldet: ca. ${min} Min. später` : "⏰ Zurückgenommen: doch pünktlich");
+    render();
+  });
+  openModal("⏰ Ich verspäte mich",
+    el("p", {}, `Fahrstunde ${fmtDay(startIso)}, ${fmtTime(startIso)} Uhr`, who === "teacher" && b.profiles ? ` · ${fullName(b.profiles)}` : ""),
+    el("p", { class: "small muted" }, who === "teacher" ? "Der/die Schüler/in bekommt sofort eine Mitteilung." : "Dein Fahrlehrer bekommt sofort eine Mitteilung."),
+    el("div", { class: "late-btns" }, LATE_MIN.map((m) => el("button", { type: "button", class: "btn" + (cur === m ? " ok" : ""), onclick: send(m) }, `${m} Min.`))),
+    cur ? el("div", { class: "actions" }, el("button", { type: "button", class: "btn ghost", onclick: send(0) }, "✓ Doch pünktlich")) : null);
+}
+// Fahrstunde als Kalender-Datei (.ics) – öffnet am Handy „Zum Kalender hinzufügen“
+function icsFor(b) {
+  const z = (d) => new Date(d).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const esc = (t) => String(t || "").replace(/([,;\\])/g, "\\$1").replace(/\n/g, "\\n");
+  const meet = meetingOf(b);
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Easy Fahrstundenplaner//DE", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "BEGIN:VEVENT",
+    `UID:${b.id}@easy-fahrstundenplaner`, `DTSTAMP:${z(new Date())}`, `DTSTART:${z(b.slots.starts_at)}`, `DTEND:${z(addMin(b.slots.starts_at, b.slots.duration_min))}`,
+    `SUMMARY:${esc("🚗 Fahrstunde")}`, meet ? `LOCATION:${esc(meet)}` : null, `DESCRIPTION:${esc(`${b.slots.duration_min} Min. Fahrstunde${meet ? " · Treffpunkt: " + meet : ""}`)}`,
+    "BEGIN:VALARM", "TRIGGER:-PT60M", "ACTION:DISPLAY", "DESCRIPTION:Fahrstunde", "END:VALARM", "END:VEVENT", "END:VCALENDAR"].filter(Boolean).join("\r\n");
+}
+function calendarButton(b) {
+  if (!feat("calendar_export")) return null;
+  return el("button", { type: "button", class: "btn small ghost", onclick: () => {
+    const ics = icsFor(b);
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) {
+      window.location.href = "data:text/calendar;charset=utf-8," + encodeURIComponent(ics);
+      return;
+    }
+    const a = el("a", { href: URL.createObjectURL(new Blob([ics], { type: "text/calendar" })), download: `fahrstunde-${dateInput(b.slots.starts_at)}.ics` });
+    document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } }, "📅 In meinen Kalender");
+}
+// Pflicht-Sonderfahrten Klasse B (in Fahrstunden à 45 Min.)
+const SPECIAL_REQ = { ueberland: 5, autobahn: 4, nacht: 3 };
+const specialOpen = (p, rows) => {
+  if (!feat("progress") || !p || p.is_conversion) return [];
+  const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null);
+  return SPECIAL_TYPES.map((t) => { const fs = done.filter((b) => b.lesson_type === t).reduce((n, b) => n + b.actual_minutes, 0) / LESSON_MIN;
+    return { t, need: Math.max(0, Math.round((SPECIAL_REQ[t] - fs) * 10) / 10) }; }).filter((x) => x.need > 0);
+};
+
 function fail(error) {
   console.error(error);
   const msg = (error && (error.message || error.error_description)) || String(error);
@@ -354,18 +443,26 @@ const FEATURES = [
     ["remind", "📣 Knopf „Freie Stunden melden“", "alle Schüler/innen per Mitteilung erinnern"],
     ["push_banner", "🔔 Hinweis, wenn Mitteilungen aus sind", "oben auf Heute"],
     ["ask_finished", "🚗 Abfrage „Fahrstunde vorbei“", "nach jeder Fahrstunde: gefahren oder nicht?"],
+    ["late", "⏰ Verspätung melden (5–25 Min.)", "du und deine Schüler/innen können am Tag der Fahrstunde Bescheid geben"],
   ]],
   ["Eintragen", [
     ["notes", "📝 Notizen zu Fahrstunden", "Notizfeld und 📝-Symbol"],
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
+    ["reply_chips", "💬 Antwort-Bausteine", "antippbare Texte beim Hinweis an Schüler/innen"],
+    ["undo", "↩️ „Rückgängig“ nach dem Löschen", "ein paar Sekunden lang (eigene Einträge, Theorie, Privates, freie Termine)"],
     ["moved", "📅 Fahrstunde auf einen anderen Tag legen (Fahrschulsystem)", "z. B. gefahren am 14.01., eingetragen am 10.01. – steht dann am 10.01., lila mit „ursprünglich gefahren 14.01.“", false],
   ]],
   ["Schüler/innen", [
     ["evening_reminder", "🌙 Erinnerung am Vorabend", "Schüler/innen bekommen um 18 Uhr eine Mitteilung: „Morgen 14:00 Uhr Fahrstunde · 📍 Treffpunkt“", false],
     ["wish_time", "🕐 Wunschzeit vorschlagen", "bis zu 1 Stunde früher oder später"],
     ["wish_meeting", "📍 Eigenen Treffpunkt vorschlagen", "bei der Anfrage"],
+    ["hour_reminder", "🔔 Erinnerung 1 Stunde vorher", "Schüler/innen bekommen ca. 1 Std. vor der Fahrstunde eine Mitteilung", false],
+    ["calendar_export", "📅 „In meinen Kalender“", "Schüler/innen übernehmen die Fahrstunde mit einem Tipp in ihren Handy-Kalender"],
+    ["waitlist", "⏳ Warteliste", "Schüler/innen werden benachrichtigt, sobald an ihrem Wunschtag etwas frei wird"],
+    ["feedback", "👍 Rückmeldung nach der Fahrstunde", "Daumen hoch/runter – nur du siehst es"],
+    ["progress", "📊 Sonderfahrten: gefahren und noch offen", "Überland 5, Autobahn 4, Nacht 3 Fahrstunden (nicht bei Umschreibern)"],
   ]],
   ["Kontrolle", [
     ["pay_estimate", "💶 Lohnschätzung anzeigen", "unverbindliche Brutto-Schätzung im Monat"],
@@ -782,7 +879,11 @@ function lessonOverview(p, rows, exams = []) {
     tile("🚗", "Gefahren gesamt", `${fs(total)} FS`, `${tn(done.length)} · ${total} Min.`),
     // alles in Fahrstunden (FS à 45 Min.) – wie „Gefahren gesamt“
     tile("🚙", "Übungsfahrten", `${fs(sum(of("normal")))} FS`, `${tn(of("normal").length)} · ${sum(of("normal"))} Min.`),
-    ...SPECIAL_TYPES.map((t) => tile(LESSON_ICON[t], LESSON_TYPES[t], `${fs(sum(of(t)))} FS`, `${tn(of(t).length)} · ${sum(of(t))} Min.`)),
+    ...SPECIAL_TYPES.map((t) => {
+      const req = feat("progress") && !p.is_conversion ? SPECIAL_REQ[t] : 0, have = sum(of(t)) / LESSON_MIN;
+      return tile(LESSON_ICON[t], LESSON_TYPES[t], req ? `${fs(sum(of(t)))} von ${req} FS` : `${fs(sum(of(t)))} FS`,
+        `${tn(of(t).length)} · ${sum(of(t))} Min.` + (req && have < req ? ` · noch ${(Math.round((req - have) * 10) / 10).toLocaleString("de-DE")} FS` : ""), req ? (have >= req ? "ok" : "warn") : "");
+    }),
   ];
   if (isB197(p) || done.some((b) => B197_TYPES.includes(b.lesson_type))) {
     const sm = sum(of("schalt")), n = sm / LESSON_MIN;
@@ -2135,9 +2236,8 @@ function openBlock(x) {
   const del = el("button", { class: "btn danger" }, "🗑 Löschen");
   del.onclick = () => busy(del, async () => {
     if (!confirm("Diesen privaten Termin löschen?")) return;
-    const { error } = await sb.from("time_blocks").delete().eq("id", x.id);
-    if (error) throw error;
-    closeModal(); toast("Privater Termin gelöscht."); render();
+    await deleteWithUndo("time_blocks", x.id, "🗑 Privater Termin gelöscht.");
+    closeModal(); render();
   });
   openModal("📌 " + (x.reason || "Privater Termin"),
     el("label", {}, "Was ist es? (nur du siehst es)"), reason,
@@ -2173,9 +2273,8 @@ function openPlanned(kind, x) {
   const del = el("button", { class: "btn danger" }, "🗑 Löschen");
   del.onclick = () => busy(del, async () => {
     if (!confirm(isT ? "Diese Theoriestunde löschen?" : "Diesen Eintrag löschen? Er verschwindet auch aus Kontrolle und Lohnberechnung.")) return;
-    const { error } = await sb.from(isT ? "theory_lessons" : "own_entries").delete().eq("id", x.id);
-    if (error) throw error;
-    closeModal(); toast("Gelöscht."); render();
+    await deleteWithUndo(isT ? "theory_lessons" : "own_entries", x.id, "🗑 Gelöscht.");
+    closeModal(); render();
   });
   // Prüfung (ohne App): Ergebnis bestanden / nicht bestanden / offen
   let resSec = null;
@@ -2515,7 +2614,7 @@ async function adminToday() {
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
-    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,student_feedback,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
@@ -2639,6 +2738,8 @@ async function adminToday() {
         B197_TYPES.includes(b.lesson_type) ? LESSON_ICON[b.lesson_type] + " " : "", fullName(p), p.needs_glasses ? " 👓" : ""),
       movedChip(b.booked_on, s.starts_at),
       feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
+      held && !done && b.late_student ? el("span", { class: "tr-pill late" }, `⏰ +${b.late_student}`) : null,
+      done && b.student_feedback ? el("span", { class: "tr-fb", title: "Rückmeldung von Schüler/in" }, b.student_feedback > 0 ? "👍" : "👎") : null,
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -2655,8 +2756,10 @@ async function adminToday() {
     const meetLine = phase === "next" || phase === "live" ? el("a", { class: "tr-meet", href: mapsLink(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null;
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
     const cancelBtn = phase === "next" && !canTick ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "Absagen") : null;
+    const lateBtn = !b._own && feat("late") && held && !done && lateWindow(s.starts_at, s.duration_min)
+      ? el("button", { type: "button", class: "tr-cancel tr-late", title: "Verspätung melden", onclick: () => openLate(b, s.starts_at, "teacher") }, b.late_teacher ? `⏰ Ich: +${b.late_teacher}` : "⏰ Verspätung") : null;
     return el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openAdminSlot(s.id)) }, head,
-      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, meetLine));
+      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, lateBtn, meetLine));
   };
   const examRow = (e) => el("div", { class: "tr tap-row exam", onclick: rowTap(() => openExamModal(e.profiles ? { ...e.profiles, id: e.student_id } : { id: e.student_id })) },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
@@ -3001,7 +3104,7 @@ function newSlotForm(opts = {}) {
 
   // Freigeben (für alle) oder direkt einem Schüler zuordnen
   let mode = "free", student = null, students = null;
-  const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den/die Schüler/in (optional), z. B. „Prüfungsvorbereitung – Treffpunkt Fahrschule“" });
+  const reply = replyChips(el("textarea", { maxlength: 1000, placeholder: "Hinweis an den/die Schüler/in (optional), z. B. „Prüfungsvorbereitung – Treffpunkt Fahrschule“" }));
   const meetSlot = meetingPicker(null);
   const search = el("input", { type: "search", placeholder: "Schüler suchen …" });
   const studentList = el("div", { class: "pick-list" });
@@ -3444,7 +3547,7 @@ function newSlotForm(opts = {}) {
     showDate(new Date(list[0].starts_at));
     if (mode === "free") {
       // Neue Termine → (wenn eingeschaltet) alle Schüler benachrichtigen
-      if (state.settings.notify_new_slots && res.rows.length) sb.functions.invoke("notify", { body: { kind: "slots_new", ids: res.rows.map((r) => r.id).slice(0, 300) } }).catch(() => {});
+      if ((state.settings.notify_new_slots || feat("waitlist")) && res.rows.length) sb.functions.invoke("notify", { body: { kind: "slots_new", ids: res.rows.map((r) => r.id).slice(0, 300) } }).catch(() => {});
       toast(insertedMsg(res) + (state.settings.notify_new_slots && res.rows.length ? " Schüler werden benachrichtigt." : "")); closeModal(); render(); return;
     }
     // Zuordnen: dem Schüler anbieten (er sagt zu/ab) oder gleich fest eintragen
@@ -3569,6 +3672,7 @@ async function deleteLessonSlot(slot, b) {
     toast(`Gelöscht. Der Termin ist wieder frei um ${fmtTime(slot.original_start)} Uhr.`);
     return true;
   }
+  if (!b && Array.isArray(slot.bookings) && !slot.bookings.length) { await deleteWithUndo("slots", slot.id, "🗑 Termin gelöscht."); return true; }
   const { error } = await sb.from("slots").delete().eq("id", slot.id);
   if (error) throw error;
   toast("🗑 Termin gelöscht.");
@@ -3739,7 +3843,7 @@ function openCounterOffer(b, slot, preset = null) {
   const origStart = slot.starts_at;   // falls der Schüler ablehnt, zurück zu dieser Zeit
   const date = el("input", { type: "date", value: dateInput(preset || slot.starts_at) });
   const time = el("input", { type: "time", value: timeInput(preset || b.wish_start || slot.starts_at), step: 300 });
-  const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. 10:30 Uhr würde bei mir passen." }, b.admin_reply || "");
+  const reply = replyChips(el("textarea", { maxlength: 1000, placeholder: "z. B. 10:30 Uhr würde bei mir passen." }, b.admin_reply || ""));
   const btn = el("button", { class: "btn ok" }, "📨 Gegenangebot senden");
   btn.onclick = () => busy(btn, async () => {
     const chosen = fromInputs(date.value, time.value);
@@ -3779,7 +3883,7 @@ async function openChangeRequest(slotId) {
   const dur = durationControl(slot.duration_min);
   const curMeet = b.meeting_point || slot.meeting_point || null;
   const meet = meetingPicker(curMeet);
-  const note = el("textarea", { maxlength: 1000, rows: 2, placeholder: "z. B. Ich schaffe es erst 30 Minuten später – passt das?" });
+  const note = replyChips(el("textarea", { maxlength: 1000, rows: 2, placeholder: "z. B. Ich schaffe es erst 30 Minuten später – passt das?" }));
   const send = el("button", { class: "btn ok" }, "📨 Verschiebung anfragen");
   send.onclick = () => busy(send, async () => {
     const chosen = fromInputs(date.value, time.value);
@@ -3824,7 +3928,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -3914,13 +4018,17 @@ async function openAdminSlot(slotId) {
         timeFields, el("div", { class: "actions" }, save, del), el("hr"), bookForm);
     }
   } else {
-    const reply = el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen." }, b.admin_reply || "");
+    const reply = replyChips(el("textarea", { maxlength: 1000, placeholder: "z. B. Bitte Ausweis und Brille mitbringen." }, b.admin_reply || ""));
     parts.push(
       el("p", {}, el("button", { type: "button", class: "name-link", onclick: () => openStudentById(b.student_id) }, el("b", {}, fullName(b.profiles))), " ",
         el("span", { class: "badge " + b.status }, STATUS_TEXT[b.status]), " ", studentTags(b.profiles), " ",
         el("button", { class: "btn small ghost", onclick: () => openStudentById(b.student_id) }, "👤 Schüler-Infos"), " ",
         callButton(b.profiles && b.profiles.phone)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
+      b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "notice wish" }, `⏰ ${fullName(b.profiles)} kommt ca. ${b.late_student} Min. später.`) : null,
+      b.student_feedback ? el("p", { class: "small" }, "Rückmeldung von Schüler/in: ", b.student_feedback > 0 ? "👍 hat gut gefallen" : "👎 war nicht so gut") : null,
+      feat("late") && b.status === "confirmed" && b.actual_minutes === null && lateWindow(slot.starts_at, slot.duration_min)
+        ? el("div", { class: "actions", style: "margin-top:0" }, el("button", { class: "btn small ghost", onclick: () => openLate(b, slot.starts_at, "teacher") }, b.late_teacher ? `⏰ Du kommst ${b.late_teacher} Min. später – ändern` : "⏰ Ich verspäte mich")) : null,
     );
     // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
     if (feat("notes")) {
@@ -4074,7 +4182,23 @@ async function openAdminSlot(slotId) {
       // Speichern = direkt ohne Nachricht; zusätzlicher Knopf schickt die Änderung als Angebot (Schüler/in muss zusagen)
       const offerBtn = el("button", { class: "btn ok", hidden: true }, "📨 Als Angebot an Schüler/in senden");
       offerBtn.onclick = () => busy(offerBtn, proposeChange);
-      const sync = () => { offerBtn.hidden = !timeDiff(); save.textContent = timeDiff() ? "Speichern (ohne Nachricht)" : "Änderungen speichern"; };
+      // Direkt ändern + informieren: gilt sofort (ohne Zusage), Schüler/in bekommt eine Mitteilung
+      const directBtn = el("button", { class: "btn", hidden: true }, "⚡ Direkt ändern + informieren");
+      directBtn.onclick = () => busy(directBtn, async () => {
+        const chosen = fromInputs(date.value, time.value);
+        if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
+        if (chosen.getTime() <= Date.now()) throw new Error("Die neue Zeit liegt in der Vergangenheit");
+        if (!(await confirmClash([{ starts_at: chosen.toISOString(), duration_min: dur.value }], slot.id))) return;
+        await saveTime();
+        const note = reply.value.trim();
+        const { error } = await sb.from("bookings").update({ admin_reply: note || null, change_start: null, change_dur: null, change_meeting: null, change_note: null }).eq("id", b.id);
+        if (error) throw error;
+        pushNotify("booking", b.id, "moved");
+        const m = meet.value();
+        notifyStep("Fahrstunde geändert – Schüler/in wird informiert", b.profiles && b.profiles.phone,
+          `Hallo ${(b.profiles && b.profiles.first_name) || ""}, deine Fahrstunde ist geändert: jetzt ${fmtDate(chosen.toISOString())} um ${fmtTime(chosen.toISOString())} Uhr (${dur.value} Min.)${m ? `\n📍 Treffpunkt: ${m}` : ""}${note ? `\n${note}` : ""}\n\n${teacherSignature()}`);
+      });
+      const sync = () => { offerBtn.hidden = !timeDiff(); directBtn.hidden = !timeDiff(); save.textContent = timeDiff() ? "Speichern (ohne Nachricht)" : "Änderungen speichern"; };
       [date, time].forEach((i) => i.addEventListener("input", sync));
       dur.input.addEventListener("input", sync);
       meet.node.addEventListener("change", sync); meet.node.addEventListener("input", sync);
@@ -4100,8 +4224,14 @@ async function openAdminSlot(slotId) {
       save.onclick = () => busy(save, async () => {
         if (timeDiff() && !confirm("Direkt speichern? Der/die Schüler/in bekommt keine Nachricht und muss nicht zusagen.")) return;
         await saveTime();
-        const { error } = await sb.from("bookings").update({ admin_reply: reply.value.trim() || null }).eq("id", b.id);
+        const newReply = reply.value.trim();
+        const { error } = await sb.from("bookings").update({ admin_reply: newReply || null }).eq("id", b.id);
         if (error) throw error;
+        // Neuer/geänderter Hinweis bei einer kommenden Fahrstunde → Schüler/in bekommt eine Mitteilung
+        if (newReply && newReply !== (b.admin_reply || "").trim() && b.status === "confirmed" && new Date(slot.starts_at).getTime() > Date.now()) {
+          pushNotify("booking", b.id, "note");
+          return done("Gespeichert – Schüler/in bekommt den Hinweis als Mitteilung.");
+        }
         done("Gespeichert.");
       });
       if (askable && b.change_start) {
@@ -4118,7 +4248,7 @@ async function openAdminSlot(slotId) {
       } else if (b.status === "confirmed") {
         parts.push(el("div", { class: "small muted" }, "Schon gefahren oder vorbei: Änderungen werden direkt gespeichert – der/die Schüler/in bekommt keine Nachricht."));
       }
-      parts.push(el("div", { class: "actions" }, offerBtn, save));
+      parts.push(el("div", { class: "actions" }, offerBtn, directBtn, save));
     }
   }
 
@@ -4167,7 +4297,7 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
   const who = el("select", {}, el("option", { value: "" }, "Schüler wählen …"),
     el("optgroup", { label: "Mit App" }, students.map((st) => el("option", { value: st.id }, fullName(st) + (st.license_class ? ` (${st.license_class})` : "")))),
     ownNamesB.length ? el("optgroup", { label: "Ohne App" }, ownNamesB.map((n) => el("option", { value: "own:" + n }, n + " (ohne App)"))) : null);
-  const reply = el("textarea", { maxlength: 1000, placeholder: "Hinweis an den/die Schüler/in (optional)" });
+  const reply = replyChips(el("textarea", { maxlength: 1000, placeholder: "Hinweis an den/die Schüler/in (optional)" }));
   const planType = schaltPicker("normal");
   const how = assignHow();
   const pnBook = payNoteFields();
@@ -4606,7 +4736,16 @@ async function adminRequests(opts = {}) {
         b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
         b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
         b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))] : null,
-      missing.length ? [el("div", { class: "todo-sec" }, "Noch abzuhaken"), missing.map((b) => small(b, "Abhaken"))] : null);
+      missing.length ? [el("div", { class: "todo-sec" }, "Noch abzuhaken"), missing.map((b) => {
+        if (askSchalt(b)) return small(b, "Abhaken");
+        const tick = el("button", { type: "button", class: "btn small ok todo-tick", title: "Mit geplanter Dauer abhaken" }, `✓ ${b.slots.duration_min} Min.`);
+        tick.onclick = () => busy(tick, async () => {
+          const { error } = await sb.from("bookings").update({ actual_minutes: b.slots.duration_min, lesson_type: b.lesson_type || "normal" }).eq("id", b.id);
+          if (error) throw error;
+          toast(`✓ ${fullName(b.profiles)}: ${b.slots.duration_min} Min. gefahren`); render();
+        });
+        return el("div", { class: "todo-line" }, small(b, "Öffnen"), tick);
+      })] : null);
   }
 
   return el("div", {},
@@ -5699,7 +5838,7 @@ async function studentCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
-    sb.from("bookings").select("id,slot_id,status,actual_minutes,meeting_point,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+    sb.from("bookings").select("id,slot_id,status,actual_minutes,meeting_point,late_student,late_teacher,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
     sb.from("exams").select("id,kind,exam_at,duration_min,result,note,meeting_point").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   const exams = myExams.data || [];
@@ -5772,12 +5911,38 @@ async function studentCalendar() {
       el("div", { class: "next-row first", style: "cursor:default" },
         el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`)),
       meetingBox(meetingOf(nextOwn)),
-      new Date(nextOwn.slots.starts_at).getTime() > Date.now()
-        ? el("div", { class: "actions", style: "margin-top:8px" }, el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(nextOwn) }, "✗ Fahrstunde absagen")) : null) : null,
+      nextOwn.late_teacher ? el("div", { class: "note" }, `⏰ Dein Fahrlehrer kommt ca. ${nextOwn.late_teacher} Min. später.`) : null,
+      el("div", { class: "actions", style: "margin-top:8px" },
+        new Date(nextOwn.slots.starts_at).getTime() > Date.now() ? calendarButton(nextOwn) : null,
+        feat("late") && lateWindow(nextOwn.slots.starts_at, nextOwn.slots.duration_min) ? el("button", { class: "btn small", onclick: () => openLate(nextOwn, nextOwn.slots.starts_at, "student") }, nextOwn.late_student ? `⏰ Gemeldet: +${nextOwn.late_student} Min.` : "⏰ Ich komme später") : null,
+        new Date(nextOwn.slots.starts_at).getTime() > Date.now() ? el("button", { class: "btn small cancel-strong", onclick: () => openStudentCancel(nextOwn) }, "✗ Fahrstunde absagen") : null)) : null,
     weekBar(),
     grid,
     slots.length === 0 ? el("p", { class: "muted", style: "margin-top:12px" }, "In dieser Woche gibt es keine freien Termine. Schau in der nächsten Woche (›) nach.") : null,
+    feat("waitlist") && !state.readonly ? await waitlistCard() : null,
   );
+}
+// ⏳ Warteliste: Schüler/in trägt Wunschtage ein und bekommt eine Mitteilung, sobald dort etwas frei wird
+async function waitlistCard() {
+  const today = dateInput(new Date());
+  const { data, error } = await sb.from("waitlist").select("id,day").gte("day", today).order("day");
+  if (error) return null;   // Tabelle fehlt noch → Karte einfach weglassen
+  const day = el("input", { type: "date", min: today, value: dateInput(addDays(new Date(), 1)) });
+  const add = el("button", { class: "btn small ok" }, "🔔 Eintragen");
+  add.onclick = () => busy(add, async () => {
+    if (!day.value || day.value < today) throw new Error("Bitte einen Tag ab heute wählen");
+    if ((data || []).some((x) => x.day === day.value)) throw new Error("Dieser Tag steht schon auf deiner Warteliste");
+    const { error: e } = await sb.from("waitlist").insert({ teacher_id: state.profile.teacher_id, day: day.value });
+    if (e) throw e;
+    toast(`⏳ ${fmtDayStr(day.value)} steht auf deiner Warteliste.`); render();
+  });
+  return el("details", { class: "card fold waitlist", open: !!(data || []).length },
+    el("summary", {}, `⏳ Warteliste${(data || []).length ? ` (${data.length})` : ""}`),
+    el("p", { class: "small muted" }, "Kein passender Termin? Trag dir einen Tag ein – sobald dort etwas frei wird, bekommst du sofort eine Mitteilung (Mitteilungen müssen eingeschaltet sein)."),
+    el("div", { class: "row", style: "align-items:end" }, el("div", {}, el("label", {}, "Tag"), day), el("div", {}, add)),
+    (data || []).map((x) => { const del = el("button", { class: "btn small ghost", "aria-label": "Entfernen" }, "×");
+      del.onclick = () => busy(del, async () => { const { error: e } = await sb.from("waitlist").delete().eq("id", x.id); if (e) throw e; render(); });
+      return el("div", { class: "list-item", style: "display:flex;justify-content:space-between;align-items:center" }, el("span", {}, "🔔 " + fmtDayStr(x.day)), del); }));
 }
 
 // Prüfungs-Kasten für den Schüler: Termin, Treffpunkt, was mitbringen, Motivation
@@ -6389,6 +6554,7 @@ async function examCard(student, editable) {
       const { error } = await sb.from("exams").update({ result }).eq("id", e.id);
       if (error) return fail(error);
       if (result === "passed" && e.kind === "praxis") state.renderOnClose = true;
+      if (result === "passed") pushNotify("exam", [e.id], "passed");
       toast(result === "passed" ? (e.kind === "praxis" ? "🎉 Bestanden! Der Zugang läuft jetzt noch 6 Wochen, danach wird er gesperrt." : "🎉 Bestanden eingetragen!") : result === "failed" ? "Nicht bestanden – trag gleich den nächsten Termin ein." : "Ergebnis zurückgesetzt.");
       draw();
     };
@@ -6430,7 +6596,9 @@ async function examCard(student, editable) {
         if (isNaN(at)) throw new Error("Bitte Datum und Beginn angeben");
         const { error } = await sb.from("exams").update({ exam_at: at.toISOString(), duration_min: du.value, meeting_point: n.value() || null, note: h.value.trim() || null }).eq("id", e.id);
         if (error) throw error;
-        toast("Prüfung geändert.");
+        const changed = at.getTime() !== new Date(e.exam_at).getTime() || (n.value() || null) !== (e.meeting_point || null);
+        if (changed && at.getTime() > Date.now()) { pushNotify("exam", [e.id], "exam_changed"); toast("Prüfung geändert – Schüler/in bekommt eine Mitteilung."); }
+        else toast("Prüfung geändert.");
         state.renderOnClose = true;
         draw();
       });
@@ -6666,7 +6834,7 @@ const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || ""
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -6717,6 +6885,11 @@ async function studentMine() {
         isOffer && b.wish_start ? el("div", { class: "lesson-hint" }, `⏱ Gegenangebot deines Fahrlehrers. Dein Wunsch war ${fmtTime(b.wish_start)} Uhr.`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
+        b.status === "confirmed" && b.actual_minutes === null && b.late_teacher ? el("div", { class: "lesson-hint" }, `⏰ Dein Fahrlehrer kommt ca. ${b.late_teacher} Min. später.`) : null,
+        b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "lesson-hint" }, `⏰ Du hast gemeldet: ca. ${b.late_student} Min. später.`) : null,
+        b.status === "confirmed" && b.actual_minutes === null && (future || lateWindow(b.slots.starts_at, b.slots.duration_min)) ? el("div", { class: "actions" },
+          future ? calendarButton(b) : null,
+          feat("late") && lateWindow(b.slots.starts_at, b.slots.duration_min) ? el("button", { class: "btn small", onclick: () => openLate(b, b.slots.starts_at, "student") }, b.late_student ? "⏰ Verspätung ändern" : "⏰ Ich komme später") : null) : null,
         canCancel ? el("div", { class: "lesson-hint muted" }, isLate(b.slots.starts_at)
           ? "Absagefrist abgelaufen – Absage kostenpflichtig"
           : `Kostenlos absagen bis ${fmtDeadline(b.slots.starts_at)}`) : null,
@@ -6742,14 +6915,34 @@ async function studentMine() {
     return el("div", { class: "stat next" },
       el("span", {}, "Nächste Fahrstunde"),
       el("div", { class: "next-line" }, el("b", {}, `${fmtDay(n.slots.starts_at)}, ${fmtTime(n.slots.starts_at)} Uhr`)),
-      el("div", { class: "next-line muted" }, `${n.slots.duration_min} Min.` + (meet ? ` · 📍 ${meet}` : "")));
+      el("div", { class: "next-line muted" }, `${n.slots.duration_min} Min.`, meet ? [" · ", el("a", { href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet)] : null));
   };
+  // 👍/👎 zur letzten gefahrenen Fahrstunde (letzte 14 Tage, noch ohne Rückmeldung)
+  const fbB = feat("feedback") ? rows.find((b) => b.status === "confirmed" && b.actual_minutes !== null && b.student_feedback == null
+    && new Date(b.slots.starts_at).getTime() > now - 14 * 86400000 && !state.fbSkip?.[b.id]) : null;
+  const fbSend = (v) => async (ev) => busy(ev.currentTarget, async () => {
+    const { error } = await sb.rpc("set_feedback", { p_booking: fbB.id, p_val: v });
+    if (error) throw error;
+    toast("Danke für deine Rückmeldung!"); render();
+  });
+  const fbCard = fbB ? el("div", { class: "card fb-card" },
+    el("b", {}, `Wie war deine Fahrstunde am ${fmtDay(fbB.slots.starts_at)}?`),
+    el("div", { class: "small muted" }, "Nur dein Fahrlehrer sieht deine Antwort."),
+    el("div", { class: "actions" },
+      el("button", { class: "btn ok", onclick: fbSend(1) }, "👍 Gut"),
+      el("button", { class: "btn", onclick: fbSend(-1) }, "👎 Nicht so gut"),
+      el("button", { class: "btn ghost small", onclick: () => { state.fbSkip = { ...(state.fbSkip || {}), [fbB.id]: true }; render(); } }, "Später"))) : null;
+  const open15 = specialOpen(state.profile, rows);
+  const progressHint = open15.length ? el("button", { type: "button", class: "notice progress-hint", onclick: () => goTab("training") },
+    el("b", {}, "📊 Noch offen: "), open15.map((x) => `${LESSON_ICON[x.t]} ${x.need.toLocaleString("de-DE")} FS ${LESSON_TYPES[x.t]}`).join(" · "), " ›") : null;
   return el("div", {},
+    fbCard,
     // Auf einen Blick: wie viel gefahren, was steht an, ggf. Fehlstunden
     el("div", { class: "stat-row" },
       nextTile(),
       stat(fmtLessons(total).replace(/ Fahrstunden?$/, ""), "Fahrstunden gefahren"),
       stat(String(lateRows.length), lateRows.length === 1 ? "Fehlstunde" : "Fehlstunden", "warn")),
+    progressHint,
     !waNumber(state.profile.phone) ? el("div", { class: "notice danger", style: "margin:12px 0 0" },
       "Bitte trage unter „Profil“ deine WhatsApp-Nummer ein, damit dein Fahrlehrer dich erreichen kann.") : null,
     offers.length ? el("h2", { class: "mine-h" }, `📨 Angebote für dich (${offers.length})`) : null,
