@@ -208,14 +208,18 @@ function afterLessonBox(b) {
     if (!data) return; hadReview = true; rating = data.rating; (data.traits || []).forEach((t) => traits.add(t)); paintRating(); paintTraits();
   });
   // Technik und Einparken immer sichtbar zum Ankreuzen; Bewertung freiwillig zum Aufklappen
-  const review = fR ? el("details", { class: "fold al-review" },
+  const review = fR ? el("details", { class: "fold al-review", open: b.actual_minutes != null },
     el("summary", {}, "⭐ Fahrstunde bewerten (freiwillig)"),
     el("div", { class: "al-sec" }, el("b", {}, "⭐ Deine Bewertung"), ratingRow),
     el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow),
     el("div", { class: "al-sec" }, el("b", {}, "🛠 Daran müssen wir noch arbeiten"), workRow),
     el("p", { class: "small muted", style: "margin:4px 0 0" }, feat("review_to_student")
       ? "👍 und 👌 sieht auch der/die Schüler/in (mit Eigenschaften). 👎 siehst nur du – er/sie bekommt stattdessen eine aufmunternde Nachricht."
-      : "Nur du siehst die Bewertung.")) : null;
+      : "Nur du siehst die Bewertung."),
+    // Auch später (schon abgehakte Fahrstunde): Bewertung allein speichern
+    (() => { const sv = el("button", { type: "button", class: "btn small ok" }, "💾 Bewertung speichern");
+      sv.onclick = () => busy(sv, async () => { await save(); toast("⭐ Bewertung gespeichert."); state.renderOnClose = true; });
+      return el("div", { class: "actions", style: "margin:6px 0 0" }, sv); })()) : null;
   const node = el("div", { class: "after-lesson" },
     fT ? el("div", { class: "al-sec" }, el("b", {}, "🔧 Technik besprochen?"), topicChips(TECH_TOPICS)) : null,
     fG ? el("div", { class: "al-sec" }, el("b", {}, "🅿️ Einparken / Grundfahraufgaben?"), topicChips(GFA_TOPICS)) : null,
