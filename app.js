@@ -2790,7 +2790,7 @@ async function adminToday() {
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
-    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,note,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
@@ -2818,6 +2818,7 @@ async function adminToday() {
     return el("button", { type: "button", class: "tr free", onclick: () => openAdminSlot(s.id) },
       el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(s.starts_at)),
         el("span", { class: "tr-name" }, "🟢 Frei"), el("span", { class: "tr-pill" }, `${s.duration_min} Min.`), el("span", { class: "tr-icon" }, "›")),
+      s.note ? el("div", { class: "tr-foot small slot-note" }, "📝 " + s.note) : null,
       // Nur kurzfristige Absagen (Fehlstunde) als Hinweis – rechtzeitige stehen auf der Schüler-Karte und in der Schülerliste
       x && x.late_cancel ? el("div", { class: "tr-foot small muted" }, `${NOT_HELD_ICON[x.status]} ${fullName(x.profiles || {})} – ${STATUS_TEXT[x.status]} · Fehlstunde · wieder frei`) : null);
   };
@@ -2941,7 +2942,8 @@ async function adminToday() {
     const lateBtn = !b._own && feat("late") && held && !done && lateWindowT(s.starts_at, s.duration_min)
       ? el("button", { type: "button", class: "tr-cancel tr-late", title: "Verspätung melden", onclick: () => openLate(b, s.starts_at, "teacher") }, b.late_teacher ? `⏰ Ich: +${b.late_teacher}` : "⏰ Verspätung") : null;
     return el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openAdminSlot(s.id)) }, head,
-      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, lateBtn, meetLine));
+      phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, lateBtn, meetLine),
+      s.note ? el("div", { class: "tr-foot small slot-note" }, "📝 " + s.note) : null);
   };
   const examRow = (e) => el("div", { class: "tr tap-row exam", onclick: rowTap(() => openExamModal(e.profiles ? { ...e.profiles, id: e.student_id } : { id: e.student_id })) },
     el("div", { class: "tr-head" }, el("b", { class: "tr-time" }, fmtTime(e.exam_at)),
@@ -3039,7 +3041,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", 
 async function adminCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,booked_on,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,meeting_point,note,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,booked_on,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
@@ -3078,6 +3080,7 @@ async function adminCalendar() {
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
       b ? topicIcons(b.lesson_topics) : null,
+      s.note ? el("div", { class: "slot-note" }, "📝 " + s.note) : null,
       b ? movedChip(b.booked_on, s.starts_at, true) : null,
       b && b.teacher_note && feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
@@ -3289,6 +3292,9 @@ function newSlotForm(opts = {}) {
   let mode = "free", student = null, students = null;
   const reply = replyChips(el("textarea", { maxlength: 1000, placeholder: "Hinweis an den/die Schüler/in (optional), z. B. „Prüfungsvorbereitung – Treffpunkt Fahrschule“" }));
   const meetSlot = meetingPicker(null);
+  // Hinweis zum Termin – sehen auch Schüler/innen (beim Anfragen und in „Meine Fahrstunden“)
+  const slotNote = el("input", { maxlength: 200, placeholder: "z. B. Fahrstunde endet in Geisweid (danach Theorie)" });
+  const slotNoteBox = el("div", {}, el("label", {}, "📝 Hinweis zum Termin (optional – sehen auch Schüler/innen)"), slotNote);
   const search = el("input", { type: "search", placeholder: "Schüler suchen …" });
   const studentList = el("div", { class: "pick-list" });
   const how = assignHow();
@@ -3542,7 +3548,7 @@ function newSlotForm(opts = {}) {
           const at = fromInputs(key, t);
           if (at.getTime() <= now) continue;
           if (blockAt(at.getTime(), dur.value)) { skippedBlocked++; continue; }   // eigener Eintrag: überspringen
-          list.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value() });
+          list.push({ starts_at: at.toISOString(), duration_min: dur.value, meeting_point: meetSlot.value(), ...(slotNote.value.trim() ? { note: slotNote.value.trim() } : {}) });
         }
       }
     }
@@ -3748,6 +3754,7 @@ function newSlotForm(opts = {}) {
     const n = res.rows.length, pl = n === 1 ? "" : "n";
     const meet = meetingOf({ meeting_point: meetSlot.value() });
     if (meet) lines += `\n📍 Treffpunkt: ${meet}`;
+    if (slotNote.value.trim()) lines += `\n📝 ${slotNote.value.trim()}`;
     const text = kind === "offered"
       ? `Hallo ${student.first_name || ""}, ich biete dir folgende Fahrstunde${pl} an:\n${lines}` + (note ? `\n${note}` : "") +
         `\n\n👉 Bitte öffne die App „Easy Fahrstundenplaner“ und sag unter „Meine Fahrstunden“ zu oder ab.\n\n` + teacherSignature()
@@ -3788,7 +3795,7 @@ function newSlotForm(opts = {}) {
         el("div", {}, el("label", {}, "Termine hintereinander"), count),
         el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause)),
       el("div", { class: "actions" }, makeRow)),
-    meetSlot.node,
+    meetSlot.node, slotNoteBox,
   );
   dayPick.append(
     el("label", { class: "check repeat-toggle" }, multi, el("span", {}, el("b", {}, "📅 Mehrere Tage wählen"), " – einzelne Tage im Kalender antippen, die Uhrzeiten gelten für alle")),
@@ -4111,7 +4118,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,note,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -4124,11 +4131,21 @@ async function openAdminSlot(slotId) {
   const slotMeet = (b0) => (b0 && b0.meeting_point) || slot.meeting_point || null;
   // Anfrage mit Wunsch-Treffpunkt: vorausgewählt – anderen wählen = Gegenvorschlag (Begründung unten im Hinweis)
   const meet = meetingPicker(b && b.status === "requested" && b.wish_meeting ? b.wish_meeting : slotMeet(activeBooking(slot)));
+  const noteIn = el("input", { maxlength: 200, value: slot.note || "", placeholder: "z. B. Fahrstunde endet in Geisweid (danach Theorie)" });
   const timeFields = el("div", {},
     el("div", { class: "row" },
       el("div", {}, el("label", {}, "Datum"), date),
       el("div", {}, el("label", {}, "Beginn"), time)),
-    el("label", {}, "Dauer"), dur.node, meet.node);
+    el("label", {}, "Dauer"), dur.node, meet.node,
+    el("label", {}, "📝 Hinweis zum Termin (sehen auch Schüler/innen)"), noteIn);
+  // Hinweis allein geändert → gleich speichern (ohne Zusage, ohne Zeitänderung)
+  noteIn.addEventListener("change", async () => {
+    const v = noteIn.value.trim() || null;
+    if (v === (slot.note || null)) return;
+    const { error } = await sb.from("slots").update({ note: v }).eq("id", slot.id);
+    if (error) return fail(error);
+    slot.note = v; state.renderOnClose = true; toast(v ? "📝 Hinweis gespeichert." : "Hinweis entfernt.");
+  });
 
   const timeChanged = () => fromInputs(date.value, time.value).getTime() !== new Date(slot.starts_at).getTime() || dur.value !== slot.duration_min
     || meet.value() !== slotMeet(activeBooking(slot));
@@ -6135,7 +6152,7 @@ async function studentCalendar() {
     const slotBtn = el("button", {
       class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
       onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
-    }, slotHead(fmtRange(s.starts_at, s.duration_min), tag), label);
+    }, slotHead(fmtRange(s.starts_at, s.duration_min), tag), label, s.note ? el("div", { class: "slot-note" }, "📝 " + s.note) : null);
     // Jede eigene bestätigte Fahrstunde lässt sich direkt im Kalender absagen
     const ownB = s.mine && s.status === "confirmed" && !past
       ? (own.data || []).find((b) => b.slot_id === s.slot_id && b.actual_minutes === null && b.slots) : null;
@@ -6313,6 +6330,7 @@ function openBooking(s) {
   }
   openModal("Fahrstunde anfragen",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
+    s.note ? el("div", { class: "notice wish" }, "📝 ", el("b", {}, "Hinweis: "), s.note) : null,
     earlyBox,
     !feat("wish_time") ? null : el("div", { class: "wish-box" },
       el("b", { class: "wish-box-title" }, "🕐 Andere Uhrzeit gewünscht?"),
@@ -7098,7 +7116,7 @@ const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || ""
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point,note)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -7149,6 +7167,7 @@ async function studentMine() {
         isOffer && b.wish_start ? el("div", { class: "lesson-hint" }, `⏱ Gegenangebot deines Fahrlehrers. Dein Wunsch war ${fmtTime(b.wish_start)} Uhr.`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
+        b.slots.note ? el("div", { class: "lesson-hint" }, "📝 " + b.slots.note) : null,
         b.status === "confirmed" && b.actual_minutes === null && b.late_teacher ? el("div", { class: "lesson-hint" }, `⏰ Dein Fahrlehrer kommt ca. ${b.late_teacher} Min. später.`) : null,
         b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "lesson-hint" }, `⏰ Du hast gemeldet: ca. ${b.late_student} Min. später.`) : null,
         b.status === "confirmed" && b.actual_minutes === null && (future || lateWindow(b.slots.starts_at, b.slots.duration_min)) ? el("div", { class: "actions" },

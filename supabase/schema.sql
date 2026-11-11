@@ -2137,3 +2137,30 @@ language sql stable security definer set search_path = public as $$
     and coalesce((select (s.features->>'review_to_student')::boolean from settings s where s.teacher_id = r.teacher_id), true);
 $$;
 grant execute on function public.my_lesson_reviews() to authenticated;
+
+-- ===== Hinweis zum Termin (z. B. „Fahrstunde endet in Geisweid – danach Theorie“), sehen auch Schüler/innen =====
+alter table public.slots add column if not exists note text check (char_length(note) <= 200);
+drop function if exists public.get_calendar(timestamptz, timestamptz);
+create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
+returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean, meeting_point text, earlier_from timestamptz, note text)
+language sql stable security definer set search_path = public as $$
+  select s.id, s.starts_at, s.duration_min,
+         coalesce(b.status, 'free'),
+         coalesce(b.student_id = auth.uid(), false),
+         coalesce(b.meeting_point, s.meeting_point),
+         case when b.id is null and s.earlier_from < s.starts_at and not exists (
+           select 1 from slots o join bookings ob on ob.slot_id = o.id and ob.status in ('requested','confirmed','offered')
+           where o.teacher_id = s.teacher_id and o.id <> s.id and o.starts_at < s.starts_at
+             and o.starts_at + make_interval(mins => o.duration_min) > s.earlier_from
+         ) then s.earlier_from end,
+         case when b.id is null or b.student_id = auth.uid() then s.note end
+  from slots s
+  left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed','offered')
+  where s.starts_at >= p_from and s.starts_at < p_to
+    and s.teacher_id = my_teacher_id()
+    and (b.id is null or b.status = 'requested' or b.student_id = auth.uid())
+    and (b.id is not null or not is_time_off(s.teacher_id, s.starts_at))  -- freie Termine an Urlaubstagen ausblenden
+    and is_active()
+  order by s.starts_at;
+$$;
+grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
