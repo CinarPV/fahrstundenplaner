@@ -1917,3 +1917,39 @@ begin
   return v_id;
 end $$;
 grant execute on function public.book_slot(uuid, text, boolean, timestamptz) to authenticated;
+
+-- ===== Automatische Sicherung nach jeder deutlichen Änderung (abhaken, bestätigen, private Termine, Einstellungen …) =====
+-- Art der Sicherung: 'daily' (nachts), 'manual' (von Hand), 'change' (nach Änderung)
+alter table public.cloud_backups add column if not exists kind text not null default 'daily' check (kind in ('daily', 'manual', 'change'));
+update public.cloud_backups set kind = 'manual' where auto = false and kind = 'daily';
+
+-- Nächtliche/manuelle Sicherungen: Aufbewahrung wie bisher, Änderungs-Sicherungen zählen dabei nicht mit
+create or replace function public.store_backup(p_teacher uuid, p_auto boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare d jsonb;
+begin
+  d := build_backup(p_teacher);
+  insert into cloud_backups (teacher_id, auto, counts, data, kind) values (p_teacher, p_auto, d->'counts', d, case when p_auto then 'daily' else 'manual' end);
+  delete from cloud_backups where teacher_id = p_teacher and created_at < now() - interval '14 days';
+  delete from cloud_backups where id in (select id from cloud_backups where teacher_id = p_teacher and kind <> 'change' order by created_at desc offset 30);
+end $$;
+revoke all on function public.store_backup(uuid, boolean) from public, anon, authenticated;
+
+-- Nach einer Änderung (die App ruft das gebündelt ca. 30 Sek. nach der letzten Änderung auf):
+-- innerhalb von 15 Minuten wird die letzte Änderungs-Sicherung aktualisiert, sonst eine neue angelegt; die neuesten 20 bleiben
+create or replace function public.backup_after_change()
+returns void language plpgsql security definer set search_path = public as $$
+declare d jsonb; v_id uuid;
+begin
+  if not is_teacher() then raise exception 'Nur für Fahrlehrer'; end if;
+  d := build_backup(auth.uid());
+  select id into v_id from cloud_backups where teacher_id = auth.uid() and kind = 'change' and created_at > now() - interval '15 minutes'
+    order by created_at desc limit 1;
+  if v_id is not null then
+    update cloud_backups set data = d, counts = d->'counts', created_at = now() where id = v_id;
+  else
+    insert into cloud_backups (teacher_id, auto, counts, data, kind) values (auth.uid(), true, d->'counts', d, 'change');
+  end if;
+  delete from cloud_backups where id in (select id from cloud_backups where teacher_id = auth.uid() and kind = 'change' order by created_at desc offset 20);
+end $$;
+grant execute on function public.backup_after_change() to authenticated;

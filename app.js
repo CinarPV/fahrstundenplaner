@@ -92,11 +92,25 @@ function toast(msg, isError) {
   t.hidden = false;
   // Offene Fenster (Dialoge) liegen sonst VOR der Meldung → in die oberste Schicht holen
   try { t.setAttribute("popover", "manual"); if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch { /* ältere Browser */ }
-  if (!isError) toast._ok = Date.now();   // merkt sich: gerade wurde etwas erfolgreich gespeichert
+  if (!isError) { toast._ok = Date.now(); scheduleBackup(); }   // merkt sich: gerade wurde etwas erfolgreich gespeichert
   t.onclick = () => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; };
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; }, isError ? 9000 : 2000);
 }
+
+// ☁️ Automatische Sicherung nach Änderungen: gebündelt ca. 30 Sek. nach der letzten Änderung (beim Verlassen der App sofort)
+let backupTimer = null;
+function scheduleBackup() {
+  try { if (!state.profile || state.profile.role !== "teacher" || state.readonly || !feat("auto_backup")) return; } catch { return; }
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(runBackup, 30000);
+}
+async function runBackup() {
+  if (!backupTimer) return;
+  clearTimeout(backupTimer); backupTimer = null;
+  try { const { error } = await sb.rpc("backup_after_change"); if (!error) state.lastChangeBackup = Date.now(); } catch { /* nächste Änderung versucht es wieder */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && backupTimer) runBackup(); });
 
 // Meldung mit „↩️ Rückgängig“ (ein paar Sekunden lang)
 function undoToast(msg, onUndo) {
@@ -469,6 +483,7 @@ const FEATURES = [
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
     ["reply_chips", "💬 Antwort-Bausteine", "antippbare Texte beim Hinweis an Schüler/innen"],
+    ["auto_backup", "☁️ Nach jeder Änderung automatisch sichern", "Daten und Einstellungen werden ca. 30 Sek. nach dem Abhaken, Bestätigen, Eintragen usw. in der Cloud gesichert"],
     ["undo", "↩️ „Rückgängig“ nach dem Löschen", "ein paar Sekunden lang (eigene Einträge, Theorie, Privates, freie Termine)"],
     ["moved", "📅 Fahrstunde auf einen anderen Tag legen (Fahrschulsystem)", "z. B. gefahren am 14.01., eingetragen am 10.01. – steht dann am 10.01., lila mit „ursprünglich gefahren 14.01.“", false],
   ]],
@@ -1020,6 +1035,7 @@ async function busy(button, fn) {
   try {
     await fn();
     saved = (toast._ok || 0) >= t0;
+    if (saved || lastConfirm) scheduleBackup();
     // Jeder Knopf bestätigt sich: kam weder eine Meldung noch ein neues Fenster, kurz „Erledigt“ zeigen
     if (!saved && lastConfirm && (openModal._n || 0) === n0) { toast("Erledigt"); saved = true; }
   } catch (e) {
@@ -5603,7 +5619,7 @@ function openRestoreData(data, label) {
 }
 
 // Automatische Sicherungen in der Cloud (jede Nacht, 14 Tage aufgehoben)
-const cloudLabel = (x) => `${new Date(x.created_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}, ${fmtTime(x.created_at)} Uhr${x.auto ? "" : " (von Hand)"}`;
+const cloudLabel = (x) => `${new Date(x.created_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}, ${fmtTime(x.created_at)} Uhr${x.kind === "change" ? " (nach Änderung)" : x.auto ? " (nachts)" : " (von Hand)"}`;
 async function loadCloudBackup(x) {
   const { data, error } = await sb.from("cloud_backups").select("data").eq("id", x.id).single();
   if (error) throw error;
@@ -5613,7 +5629,7 @@ function cloudBackupCard() {
   const list = el("div", {}, el("p", { class: "muted small" }, "Lade …"));
   const now = el("button", { class: "btn small" }, "☁️ Jetzt sichern");
   const fill = async () => {
-    const { data, error } = await sb.from("cloud_backups").select("id,created_at,auto,counts").order("created_at", { ascending: false });
+    const { data, error } = await sb.from("cloud_backups").select("id,created_at,auto,kind,counts").order("created_at", { ascending: false });
     if (error) { list.replaceChildren(el("p", { class: "muted small" }, "Noch nicht eingerichtet.")); now.hidden = true; return; }
     list.replaceChildren(...(data.length ? data.map((x) => {
       const c = x.counts || {};
@@ -5638,7 +5654,7 @@ function cloudBackupCard() {
   fill();
   return el("div", { class: "card" },
     el("h3", {}, "☁️ Automatische Sicherung"),
-    el("p", { class: "muted small" }, "Jede Nacht um 2:30 Uhr werden alle deine Daten automatisch gesichert – ohne dass du etwas tun musst. Die letzten 14 Tage bleiben aufgehoben. Nur du siehst deine Sicherungen."),
+    el("p", { class: "muted small" }, "Jede Nacht um 2:30 Uhr werden alle deine Daten automatisch gesichert – ohne dass du etwas tun musst. Die letzten 14 Tage bleiben aufgehoben. Nur du siehst deine Sicherungen. Zusätzlich wird ca. 30 Sekunden nach jeder Änderung (abhaken, bestätigen, eintragen, Einstellungen …) automatisch gesichert – die letzten 20 davon bleiben aufgehoben."),
     el("div", { class: "actions", style: "margin:0 0 8px" }, now), list);
 }
 
