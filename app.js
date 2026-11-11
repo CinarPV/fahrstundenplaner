@@ -4893,7 +4893,7 @@ function studentSearchCard(students, ownEntries, stats) {
 async function openTransfer(st) {
   const { data, error } = await sb.rpc("transfer_targets");
   if (error) return fail(error);
-  if (!data || !data.length) return toast("Es gibt keine anderen aktiven Fahrlehrer/innen.", true);
+  if (!data || !data.length) return toast("In deiner Fahrschule gibt es keine anderen aktiven Fahrlehrer/innen.", true);
   const sel = el("select", {}, el("option", { value: "" }, "Fahrlehrer/in wählen …"), data.map((t) => el("option", { value: t.id }, t.display_name)));
   const ok = el("button", { class: "btn danger" }, "🔀 Jetzt übergeben");
   ok.onclick = () => busy(ok, async () => {
@@ -5214,7 +5214,8 @@ async function openStudent(st) {
       qb("cal", "📈", "Ausbildung", "Ausbildungsstand", () => { state.trainingStudent = st.id; closeModal(); setTimeout(() => goTab("training"), 50); }),
       wa ? qb("wa", "💬", "WhatsApp", "Nachricht schreiben", () => window.open(`https://wa.me/${wa}?text=${encodeURIComponent(`Hallo ${st.first_name || ""},\n`)}`, "_blank", "noopener"))
          : qb("", "✏️", "Daten", "bearbeiten", () => openEditStudent(st)),
-      wa ? qb("call", "📞", "Anrufen", st.phone || "", () => (location.href = "tel:+" + wa)) : null),
+      wa ? qb("call", "📞", "Anrufen", st.phone || "", () => (location.href = "tel:+" + wa)) : null,
+      st.role === "student" && !state.readonly ? qb("", "🔀", "Übergeben", "an Kollegen/Kollegin", () => openTransfer(st)) : null),
     tabs.node);
   modal.classList.add("full-page");  // Schüler-Seite: ganze Seite statt kleines Fenster
   modal.scrollTop = 0;
