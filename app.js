@@ -127,7 +127,7 @@ async function deleteWithUndo(table, id, msg) {
   });
 }
 // Antwort-Bausteine unter einem Hinweis-Feld an Schüler/innen (antippen = Text anhängen)
-const REPLY_CHIPS = ["Passt 👍", "Bitte 10 Min. früher da sein.", "Treffpunkt wie immer.", "Bitte Brille mitbringen.", "Ich hole dich ab.", "Leider schon vergeben – ich melde mich."];
+const REPLY_CHIPS = ["Passt 👍", "Kannst du bitte 10 Min. später kommen?", "Kannst du bitte 15 Min. später kommen?", "Ich verspäte mich ca. 5 Min.", "Ich verspäte mich ca. 10 Min.", "Bitte 10 Min. früher da sein.", "Treffpunkt wie immer.", "Bitte Brille mitbringen.", "Ich hole dich ab.", "Leider schon vergeben – ich melde mich."];
 function replyChips(ta, tries = 0) {
   if (!feat("reply_chips") || !isAdmin()) return ta;
   if (!ta.isConnected) { if (tries < 20) setTimeout(() => replyChips(ta, tries + 1), 50); return ta; }
