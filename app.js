@@ -207,14 +207,21 @@ function afterLessonBox(b) {
   if (b.id && fR) sb.from("lesson_reviews").select("rating,traits").eq("booking_id", b.id).maybeSingle().then(({ data }) => {
     if (!data) return; hadReview = true; rating = data.rating; (data.traits || []).forEach((t) => traits.add(t)); paintRating(); paintTraits();
   });
-  const node = el("details", { class: "fold after-lesson", open: true },
-    el("summary", {}, fT || fG ? (fR ? "📝 Was wurde gemacht? Wie war's?" : "📝 Was wurde gemacht?") : "⭐ Wie war's?"),
-    fT ? el("div", { class: "al-sec" }, el("b", {}, "🔧 Technik"), topicChips(TECH_TOPICS)) : null,
-    fG ? el("div", { class: "al-sec" }, el("b", {}, "🅿️ Grundfahraufgaben"), topicChips(GFA_TOPICS)) : null,
-    fR ? el("div", { class: "al-sec" }, el("b", {}, "⭐ Deine Bewertung"), ratingRow) : null,
-    fR ? el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow) : null,
-    fR ? el("div", { class: "al-sec" }, el("b", {}, "🛠 Daran müssen wir noch arbeiten"), workRow) : null,
-    el("p", { class: "small muted", style: "margin:4px 0 0" }, [fR ? (feat("review_to_student") ? "👍 und 👌 sieht auch der/die Schüler/in (mit Eigenschaften). 👎 siehst nur du – er/sie bekommt stattdessen eine aufmunternde Nachricht." : "Nur du siehst die Bewertung.") : "", fT || fG ? "Angekreuztes wird im Ausbildungsstand als „eingeführt“ markiert." : ""].filter(Boolean).join(" ")));
+  // Technik und Einparken immer sichtbar zum Ankreuzen; Bewertung freiwillig zum Aufklappen
+  const review = fR ? el("details", { class: "fold al-review" },
+    el("summary", {}, "⭐ Fahrstunde bewerten (freiwillig)"),
+    el("div", { class: "al-sec" }, el("b", {}, "⭐ Deine Bewertung"), ratingRow),
+    el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow),
+    el("div", { class: "al-sec" }, el("b", {}, "🛠 Daran müssen wir noch arbeiten"), workRow),
+    el("p", { class: "small muted", style: "margin:4px 0 0" }, feat("review_to_student")
+      ? "👍 und 👌 sieht auch der/die Schüler/in (mit Eigenschaften). 👎 siehst nur du – er/sie bekommt stattdessen eine aufmunternde Nachricht."
+      : "Nur du siehst die Bewertung.")) : null;
+  const node = el("div", { class: "after-lesson" },
+    fT ? el("div", { class: "al-sec" }, el("b", {}, "🔧 Technik besprochen?"), topicChips(TECH_TOPICS)) : null,
+    fG ? el("div", { class: "al-sec" }, el("b", {}, "🅿️ Einparken / Grundfahraufgaben?"), topicChips(GFA_TOPICS)) : null,
+    fT || fG ? el("p", { class: "small muted", style: "margin:4px 0 0" }, "Antippen = gemacht. Wird im Ausbildungsstand als „eingeführt“ markiert.") : null,
+    review);
+  if (b.id && fR) sb.from("lesson_reviews").select("rating,traits").eq("booking_id", b.id).maybeSingle().then(({ data }) => { if (data && review) review.open = true; });
   async function save() {
     const topics = [...chosen];
     const { error } = await sb.from("bookings").update({ lesson_topics: topics.length ? topics : null }).eq("id", b.id);
@@ -258,7 +265,7 @@ async function openTrainingTick(b, studentId, minutes, type, box, after) {
   });
   openModal(`📈 Ausbildungsstand · ${fullName(b.profiles || {})}`,
     el("p", { class: "small muted" }, "Themen antippen, um die Stufe zu ändern (wird sofort gespeichert). Unten abhaken."),
-    box ? (box.node.open = false, box.node) : null, view, el("div", { class: "actions sticky-actions" }, tick));
+    box ? box.node : null, view, el("div", { class: "actions sticky-actions" }, tick));
 }
 
 // Verspätung melden (5–25 Min.) – who: "teacher" oder "student"
