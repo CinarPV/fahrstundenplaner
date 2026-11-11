@@ -1936,20 +1936,206 @@ end $$;
 revoke all on function public.store_backup(uuid, boolean) from public, anon, authenticated;
 
 -- Nach einer Änderung (die App ruft das gebündelt ca. 30 Sek. nach der letzten Änderung auf):
--- innerhalb von 15 Minuten wird die letzte Änderungs-Sicherung aktualisiert, sonst eine neue angelegt; die neuesten 20 bleiben
+-- es gibt genau EINE Änderungs-Sicherung pro Fahrlehrer – sie wird jedes Mal überschrieben (die nächtlichen bleiben 14 Tage)
 create or replace function public.backup_after_change()
 returns void language plpgsql security definer set search_path = public as $$
 declare d jsonb; v_id uuid;
 begin
   if not is_teacher() then raise exception 'Nur für Fahrlehrer'; end if;
   d := build_backup(auth.uid());
-  select id into v_id from cloud_backups where teacher_id = auth.uid() and kind = 'change' and created_at > now() - interval '15 minutes'
-    order by created_at desc limit 1;
+  select id into v_id from cloud_backups where teacher_id = auth.uid() and kind = 'change' order by created_at desc limit 1;
   if v_id is not null then
     update cloud_backups set data = d, counts = d->'counts', created_at = now() where id = v_id;
   else
     insert into cloud_backups (teacher_id, auto, counts, data, kind) values (auth.uid(), true, d->'counts', d, 'change');
   end if;
-  delete from cloud_backups where id in (select id from cloud_backups where teacher_id = auth.uid() and kind = 'change' order by created_at desc offset 20);
+  delete from cloud_backups where teacher_id = auth.uid() and kind = 'change' and id <> coalesce(v_id, (select id from cloud_backups where teacher_id = auth.uid() and kind = 'change' order by created_at desc limit 1));
 end $$;
 grant execute on function public.backup_after_change() to authenticated;
+
+-- ===== Paket 12.11.2026: Ausbildung in 4 Stufen, Technik/Grundfahraufgaben je Fahrstunde, Attest-Foto, Übergabe mit Bestätigung =====
+
+-- 1) Ausbildungsstand: 4 Stufen (1 eingeführt · 2 geübt, noch unsicher · 3 gute Fortschritte · 4 beherrscht)
+--    Bisher 3 = „sicher“ → wird zu 4 = „beherrscht“ (läuft nur einmal, solange noch die alte 1–3-Regel besteht)
+do $$
+declare c record; v_old boolean := false;
+begin
+  for c in select conname, pg_get_constraintdef(oid) d from pg_constraint
+           where conrelid = 'public.training_progress'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%level%' loop
+    if c.d like '%<= 3%' then v_old := true; end if;
+    execute format('alter table public.training_progress drop constraint %I', c.conname);
+  end loop;
+  if v_old then update public.training_progress set level = 4 where level = 3; end if;
+  alter table public.training_progress add constraint training_progress_level_check check (level between 1 and 4);
+end $$;
+
+-- 2) Neue Stufe „Technik“ mit den Prüfpunkten der Abfahrtkontrolle
+do $$
+declare c record;
+begin
+  for c in select conname from pg_constraint
+           where conrelid = 'public.training_topics'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%stage%' loop
+    execute format('alter table public.training_topics drop constraint %I', c.conname);
+  end loop;
+  alter table public.training_topics add constraint training_topics_stage_check
+    check (stage in ('grund','aufbau','leistung','grundfahr','sonder','technik','reife','eigene'));
+end $$;
+insert into public.training_topics (id, stage, sort, title) values
+  ('t01', 'technik', 41, 'Motorraum (Ölstand, Kühlmittel, Bremsflüssigkeit, Scheibenwaschwasser)'),
+  ('t02', 'technik', 42, 'Beleuchtungseinrichtungen innen einschalten (Schalter, Kontrollleuchten)'),
+  ('t03', 'technik', 43, 'Beleuchtungseinrichtungen außen prüfen'),
+  ('t04', 'technik', 44, 'Reifen (Profil, Luftdruck, Beschädigungen)')
+on conflict (id) do update set stage = excluded.stage, sort = excluded.sort, title = excluded.title;
+
+-- 3) Was in einer Fahrstunde gemacht wurde (Technik, Grundfahraufgaben) – Themen-Kürzel, z. B. {t01,f02}
+alter table public.bookings add column if not exists lesson_topics text[];
+
+-- 4) Attest-Foto der Schülerin / des Schülers (liegt nur vorübergehend im Speicher – nach dem Herunterladen wird es gelöscht)
+alter table public.bookings add column if not exists attest_path text;
+alter table public.bookings add column if not exists attest_at timestamptz;
+alter table public.bookings add column if not exists attest_saved_at timestamptz;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('atteste', 'atteste', false, 3145728, array['image/jpeg','image/png','image/webp','application/pdf'])
+on conflict (id) do nothing;
+drop policy if exists atteste_insert on storage.objects;
+create policy atteste_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'atteste' and (storage.foldername(name))[1] = public.my_teacher_id()::text
+              and (storage.foldername(name))[2] = auth.uid()::text);
+drop policy if exists atteste_read on storage.objects;
+create policy atteste_read on storage.objects for select to authenticated
+  using (bucket_id = 'atteste' and ((storage.foldername(name))[2] = auth.uid()::text
+         or ((storage.foldername(name))[1] = auth.uid()::text and public.is_teacher())));
+drop policy if exists atteste_delete on storage.objects;
+create policy atteste_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'atteste' and ((storage.foldername(name))[2] = auth.uid()::text
+         or ((storage.foldername(name))[1] = auth.uid()::text and public.is_teacher())));
+create or replace function public.set_attest(p_booking uuid, p_path text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_path is not null and p_path not like public.my_teacher_id()::text || '/' || auth.uid()::text || '/%' then raise exception 'Ungültiger Speicherort'; end if;
+  update bookings set attest_path = p_path, attest_at = case when p_path is null then null else now() end
+   where id = p_booking and student_id = auth.uid();
+  if not found then raise exception 'Fahrstunde nicht gefunden'; end if;
+end $$;
+grant execute on function public.set_attest(uuid, text) to authenticated;
+
+-- 5) Übergabe nur mit Bestätigung der neuen Fahrlehrerin / des neuen Fahrlehrers
+alter table public.profiles add column if not exists transfer_request_to uuid references public.profiles(id) on delete set null;
+alter table public.profiles add column if not exists transfer_request_at timestamptz;
+
+-- Übergabe ausführen (intern): künftige Termine beim bisherigen Fahrlehrer absagen, Schüler/in umhängen
+create or replace function public.do_transfer(p_student uuid, p_from uuid, p_to uuid)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_name text; v_n int;
+begin
+  select coalesce(nullif(s.display_name, ''), trim(p.first_name || ' ' || p.last_name)) into v_name
+  from profiles p left join settings s on s.teacher_id = p.id where p.id = p_to;
+  update bookings b set status = 'cancelled_teacher', cancel_reason = 'Fahrlehrerwechsel', late_cancel = false, decided_at = now()
+  from slots s where s.id = b.slot_id and b.student_id = p_student and s.teacher_id = p_from
+    and b.status in ('requested', 'offered', 'confirmed') and b.actual_minutes is null and s.starts_at > now();
+  get diagnostics v_n = row_count;
+  delete from student_limits where student_id = p_student;
+  delete from student_time_limits where student_id = p_student;
+  update profiles set teacher_id = p_to, transferred_from = p_from, transfer_to_name = v_name,
+    transferred_at = now(), transfer_ack = false, max_open = null, transfer_request_to = null, transfer_request_at = null
+  where id = p_student;
+  return v_n;
+end $$;
+revoke all on function public.do_transfer(uuid, uuid, uuid) from public, anon, authenticated;
+
+-- Bisheriger Fahrlehrer: Übergabe anfragen (p_teacher = null → Anfrage zurückziehen)
+create or replace function public.request_transfer(p_student uuid, p_teacher uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_teacher() then raise exception 'Nur Fahrlehrer'; end if;
+  if not exists (select 1 from profiles where id = p_student and role = 'student' and teacher_id = auth.uid()) then
+    raise exception 'Diese/r Schüler/in gehört nicht zu dir';
+  end if;
+  if p_teacher is not null then
+    if p_teacher = auth.uid() or not teacher_valid(p_teacher) then raise exception 'Bitte einen gültigen Fahrlehrer wählen'; end if;
+    if public.school_key(p_teacher) is distinct from public.school_key(auth.uid()) then
+      raise exception 'Übergabe nur an Kollegen/Kolleginnen derselben Fahrschule';
+    end if;
+  end if;
+  update profiles set transfer_request_to = p_teacher, transfer_request_at = case when p_teacher is null then null else now() end
+  where id = p_student;
+end $$;
+grant execute on function public.request_transfer(uuid, uuid) to authenticated;
+
+-- Neuer Fahrlehrer: offene Übergabe-Anfragen an mich
+create or replace function public.incoming_transfers()
+returns table (student_id uuid, first_name text, last_name text, license_class text, from_id uuid, from_name text, requested_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.first_name, p.last_name, p.license_class, p.teacher_id,
+         coalesce(nullif(s.display_name, ''), trim(t.first_name || ' ' || t.last_name)), p.transfer_request_at
+  from profiles p join profiles t on t.id = p.teacher_id left join settings s on s.teacher_id = t.id
+  where p.transfer_request_to = auth.uid() and p.role = 'student' and public.is_teacher()
+  order by p.transfer_request_at;
+$$;
+grant execute on function public.incoming_transfers() to authenticated;
+
+-- Neuer Fahrlehrer: annehmen oder ablehnen
+create or replace function public.answer_transfer(p_student uuid, p_accept boolean)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_from uuid;
+begin
+  if not is_teacher() then raise exception 'Nur Fahrlehrer'; end if;
+  select teacher_id into v_from from profiles where id = p_student and transfer_request_to = auth.uid();
+  if v_from is null then raise exception 'Keine offene Übergabe gefunden'; end if;
+  if not p_accept then
+    update profiles set transfer_request_to = null, transfer_request_at = null where id = p_student;
+    return 0;
+  end if;
+  return public.do_transfer(p_student, v_from, auth.uid());
+end $$;
+grant execute on function public.answer_transfer(uuid, boolean) to authenticated;
+
+-- Alle Fahrstunden einer Schülerin / eines Schülers, auch die bei früheren Fahrlehrern (mit Namen, nur lesen)
+create or replace function public.student_lessons_all(p_student uuid)
+returns table (id uuid, status text, actual_minutes int, lesson_type text, late_cancel boolean, cancel_reason text,
+               starts_at timestamptz, duration_min int, teacher_id uuid, teacher_name text, lesson_topics text[])
+language sql stable security definer set search_path = public as $$
+  select b.id, b.status, b.actual_minutes, b.lesson_type, b.late_cancel, b.cancel_reason, s.starts_at, s.duration_min, s.teacher_id,
+         coalesce(nullif(st.display_name, ''), trim(t.first_name || ' ' || t.last_name)), b.lesson_topics
+  from bookings b join slots s on s.id = b.slot_id join profiles t on t.id = s.teacher_id left join settings st on st.teacher_id = t.id
+  where b.student_id = p_student and public.is_teacher() and public.student_teacher(p_student) = auth.uid()
+  order by s.starts_at desc;
+$$;
+grant execute on function public.student_lessons_all(uuid) to authenticated;
+
+-- 6) Bewertung der Fahrstunde durch den Fahrlehrer (nur für den Fahrlehrer sichtbar – eigene Tabelle, Schüler/innen sehen sie nie)
+create table if not exists public.lesson_reviews (
+  booking_id  uuid primary key references public.bookings(id) on delete cascade,
+  teacher_id  uuid not null references public.profiles(id) on delete cascade,
+  student_id  uuid references public.profiles(id) on delete cascade,
+  rating      smallint check (rating in (-1, 0, 1)),
+  traits      text[],
+  updated_at  timestamptz not null default now()
+);
+create index if not exists lesson_reviews_student_idx on public.lesson_reviews (student_id, updated_at desc);
+alter table public.lesson_reviews enable row level security;
+drop policy if exists lesson_reviews_teacher on public.lesson_reviews;
+create policy lesson_reviews_teacher on public.lesson_reviews for all
+  using (teacher_id = auth.uid() and public.is_teacher())
+  with check (teacher_id = auth.uid() and public.is_teacher());
+grant select, insert, update, delete on public.lesson_reviews to authenticated;
+
+-- 7) Rückmeldung der Schüler/innen: 👍 / 👌 Mittel / 👎
+do $$
+declare c record;
+begin
+  for c in select conname from pg_constraint
+           where conrelid = 'public.bookings'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%student_feedback%' loop
+    execute format('alter table public.bookings drop constraint %I', c.conname);
+  end loop;
+  alter table public.bookings add constraint bookings_student_feedback_check check (student_feedback in (-1, 0, 1));
+end $$;
+create or replace function public.set_feedback(p_booking uuid, p_val smallint)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_val is not null and p_val not in (-1, 0, 1) then raise exception 'Ungültig'; end if;
+  update bookings set student_feedback = p_val
+   where id = p_booking and student_id = auth.uid() and status = 'confirmed' and actual_minutes is not null;
+  if not found then raise exception 'Fahrstunde nicht gefunden'; end if;
+end $$;
+grant execute on function public.set_feedback(uuid, smallint) to authenticated;

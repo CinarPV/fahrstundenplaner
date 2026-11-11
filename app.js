@@ -151,6 +151,103 @@ function replyChips(ta, tries = 0) {
   } }, c))));
   return ta;
 }
+// ===== Nach der Fahrstunde: Technik, Grundfahraufgaben, Bewertung (Fahrlehrer/in) =====
+const TECH_TOPICS = [["t01", "Motorraum"], ["t02", "Beleuchtung innen (einschalten)"], ["t03", "Beleuchtung außen"], ["t04", "Reifen"]];
+const GFA_TOPICS = [["f01", "Rückwärts um eine Ecke"], ["f02", "Rückwärts längs einparken"], ["f03", "Rückwärts quer einparken"],
+  ["f04", "Vorwärts quer einparken"], ["f05", "Umkehren (Wenden)"], ["f06", "Gefahrbremsung"]];
+const PARK_TOPICS = ["f02", "f03", "f04"];
+const TOPIC_NAME = Object.fromEntries(TECH_TOPICS.concat(GFA_TOPICS));
+const RATINGS = [[1, "👍", "Sehr gut"], [0, "👌", "Mittel"], [-1, "👎", "Schwierig"]];
+const RATING_ICON = { 1: "👍", 0: "👌", "-1": "👎" };
+const TRAITS = ["hat Spaß gemacht", "selbstsicher", "konzentriert", "entspannt", "motiviert", "macht Fortschritte",
+  "unsicher", "angespannt", "gestresst", "unkonzentriert", "verwirrt", "überfordert", "müde", "zu schnell", "zu zögerlich"];
+const HEX_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill-rule="evenodd" fill="currentColor" d="M12 1.8l8.9 5.1v10.2L12 22.2l-8.9-5.1V6.9zM12 8.2l-3.3 1.9v3.8l3.3 1.9 3.3-1.9v-3.8z"/></svg>';
+function hexIcon() { const x = el("span", { class: "hex-icon", title: "Technik besprochen" }); x.innerHTML = HEX_SVG; return x; }
+// Kleine Symbole: 🔧-Sechskantschlüssel = Technik, P = Einparken
+function topicIcons(list) {
+  const l = list || [];
+  const t = l.some((x) => /^t\d/.test(x)), pk = l.some((x) => PARK_TOPICS.includes(x));
+  if (!t && !pk) return null;
+  return el("span", { class: "topic-icons" }, t ? hexIcon() : null, pk ? el("span", { class: "park-badge", title: "Einparken geübt" }, "P") : null);
+}
+const topicsText = (list) => {
+  const l = list || [];
+  const tech = TECH_TOPICS.filter(([k]) => l.includes(k)).map(([, n]) => n), gfa = GFA_TOPICS.filter(([k]) => l.includes(k)).map(([, n]) => n);
+  return [tech.length ? "Technik: " + tech.join(", ") : "", gfa.length ? "Grundfahraufgaben: " + gfa.join(", ") : ""].filter(Boolean);
+};
+const reviewText = (r) => r ? [r.rating != null ? `${RATING_ICON[r.rating]} ${RATINGS.find((x) => x[0] === r.rating)[2]}` : "", (r.traits || []).join(", ")].filter(Boolean).join(" · ") : "";
+// Bereich „Nach der Fahrstunde“ – b = Buchung (App-Schüler/in). save() speichert alles.
+function afterLessonBox(b) {
+  const fT = feat("lesson_tech"), fG = feat("lesson_gfa"), fR = feat("teacher_review");
+  if (!fT && !fG && !fR) return null;
+  const chosen = new Set(b.lesson_topics || []);
+  let rating = null; const traits = new Set(); let hadReview = false;
+  const chip = (on, text, toggle) => { const x = el("button", { type: "button", class: "chip" + (on ? " on" : "") }, text);
+    x.onclick = () => { x.classList.toggle("on", toggle()); }; return x; };
+  const topicChips = (list) => el("div", { class: "reply-chips" }, list.map(([k, n]) => chip(chosen.has(k), n, () => (chosen.has(k) ? (chosen.delete(k), false) : (chosen.add(k), true)))));
+  const ratingRow = el("div", { class: "reply-chips" });
+  const paintRating = () => ratingRow.replaceChildren(...RATINGS.map(([v, ic, t]) => { const x = el("button", { type: "button", class: "chip rate" + (rating === v ? " on" : "") }, `${ic} ${t}`);
+    x.onclick = () => { rating = rating === v ? null : v; paintRating(); }; return x; }));
+  paintRating();
+  const traitRow = el("div", { class: "reply-chips" });
+  const paintTraits = () => traitRow.replaceChildren(...TRAITS.map((t) => chip(traits.has(t), t, () => (traits.has(t) ? (traits.delete(t), false) : (traits.add(t), true)))));
+  paintTraits();
+  if (b.id && fR) sb.from("lesson_reviews").select("rating,traits").eq("booking_id", b.id).maybeSingle().then(({ data }) => {
+    if (!data) return; hadReview = true; rating = data.rating; (data.traits || []).forEach((t) => traits.add(t)); paintRating(); paintTraits();
+  });
+  const node = el("details", { class: "fold after-lesson", open: true },
+    el("summary", {}, fT || fG ? (fR ? "📝 Was wurde gemacht? Wie war's?" : "📝 Was wurde gemacht?") : "⭐ Wie war's?"),
+    fT ? el("div", { class: "al-sec" }, el("b", {}, "🔧 Technik"), topicChips(TECH_TOPICS)) : null,
+    fG ? el("div", { class: "al-sec" }, el("b", {}, "🅿️ Grundfahraufgaben"), topicChips(GFA_TOPICS)) : null,
+    fR ? el("div", { class: "al-sec" }, el("b", {}, "⭐ Deine Bewertung"), ratingRow) : null,
+    fR ? el("div", { class: "al-sec" }, el("b", {}, "🧠 Wie war der/die Schüler/in?"), traitRow) : null,
+    el("p", { class: "small muted", style: "margin:4px 0 0" }, [fR ? "Nur du siehst die Bewertung." : "", fT || fG ? "Angekreuztes wird im Ausbildungsstand als „eingeführt“ markiert." : ""].filter(Boolean).join(" ")));
+  async function save() {
+    const topics = [...chosen];
+    const { error } = await sb.from("bookings").update({ lesson_topics: topics.length ? topics : null }).eq("id", b.id);
+    if (error) throw error;
+    b.lesson_topics = topics;
+    const sid = b.student_id;
+    if (sid && topics.length) {
+      const { error: e2 } = await sb.from("training_progress").upsert(topics.map((t) => ({ student_id: sid, topic_id: t, level: 1, updated_at: new Date().toISOString() })),
+        { onConflict: "student_id,topic_id", ignoreDuplicates: true });
+      if (e2) console.warn(e2);
+    }
+    if (!fR) return;
+    if (rating !== null || traits.size) {
+      const { error: e3 } = await sb.from("lesson_reviews").upsert({ booking_id: b.id, teacher_id: state.profile.id, student_id: sid || null, rating, traits: traits.size ? [...traits] : null, updated_at: new Date().toISOString() });
+      if (e3) throw e3;
+    } else if (hadReview) await sb.from("lesson_reviews").delete().eq("booking_id", b.id);
+  }
+  return { node, save };
+}
+// Vor einer Fahrstunde: wie war die letzte? (eigene Bewertung, damit man darauf aufbauen kann)
+function lastReviewNote(b) {
+  if (!feat("teacher_review") || !b || !b.student_id || b.actual_minutes !== null || b.status !== "confirmed") return null;
+  const box = el("div", { class: "note", hidden: true });
+  sb.from("lesson_reviews").select("rating,traits,updated_at,booking_id").eq("student_id", b.student_id).neq("booking_id", b.id)
+    .order("updated_at", { ascending: false }).limit(1).then(({ data }) => {
+      const r = (data || [])[0]; if (!r || !reviewText(r)) return;
+      box.replaceChildren(el("b", {}, "🧠 Letzte Fahrstunde: "), reviewText(r)); box.hidden = false;
+    });
+  return box;
+}
+// „Ausbildungsstand eingeben und abhaken“: Ausbildung öffnen, ankreuzen, unten abhaken
+async function openTrainingTick(b, studentId, minutes, type, box, after) {
+  const view = await trainingView({ id: studentId }, true, null);
+  const tick = el("button", { class: "btn ok inst-big" }, `✓ Fahrstunde abhaken (${minutes} Min.)`);
+  tick.onclick = () => busy(tick, async () => {
+    const { error } = await sb.from("bookings").update({ actual_minutes: minutes, lesson_type: type || b.lesson_type || "normal" }).eq("id", b.id);
+    if (error) throw error;
+    if (box) await box.save();
+    closeModal();
+    after(`✓ Abgehakt: ${minutes} Min. – Ausbildungsstand gespeichert`);
+  });
+  openModal(`📈 Ausbildungsstand · ${fullName(b.profiles || {})}`,
+    el("p", { class: "small muted" }, "Themen antippen, um die Stufe zu ändern (wird sofort gespeichert). Unten abhaken."),
+    box ? (box.node.open = false, box.node) : null, view, el("div", { class: "actions sticky-actions" }, tick));
+}
+
 // Verspätung melden (5–25 Min.) – who: "teacher" oder "student"
 const LATE_MIN = [5, 10, 15, 20, 25];
 // Fahrlehrer/in: jede Fahrstunde von heute, solange sie nicht vorbei ist (Verspätung zieht sich oft durch den Tag)
@@ -167,9 +264,9 @@ async function openLate(b, startIso, who) {
     later = (data || []).flatMap((sl) => (sl.bookings || []).filter((x) => x.status === "confirmed" && x.actual_minutes === null && x.id !== b.id)
       .map((x) => ({ ...x, starts_at: sl.starts_at })));
   }
-  const all = el("input", { type: "checkbox", checked: true });
+  let withLater = false;
   const send = (min) => async (ev) => busy(ev.currentTarget, async () => {
-    const list = [b].concat(later.length && all.checked ? later : []);
+    const list = [b].concat(withLater ? later : []);
     for (const x of list) {
       const { error } = await sb.rpc("announce_late", { p_booking: x.id, p_min: min });
       if (error) throw error;
@@ -179,14 +276,23 @@ async function openLate(b, startIso, who) {
     toast(min ? `⏰ Gemeldet: ca. ${min} Min. später` + (list.length > 1 ? ` – ${list.length} Fahrstunden` : "") : "⏰ Zurückgenommen: doch pünktlich" + (list.length > 1 ? ` (${list.length} Fahrstunden)` : ""));
     render();
   });
-  openModal("⏰ Ich verspäte mich",
-    el("p", {}, `Fahrstunde ${fmtDay(startIso)}, ${fmtTime(startIso)} Uhr`, who === "teacher" && b.profiles ? ` · ${fullName(b.profiles)}` : ""),
-    el("p", { class: "small muted" }, who === "teacher" ? "Der/die Schüler/in bekommt sofort eine Mitteilung." : "Dein Fahrlehrer bekommt sofort eine Mitteilung."),
-    later.length ? el("label", { class: "check", style: "margin:4px 0 0" }, all,
-      el("span", {}, el("b", {}, later.length === 1 ? "Auch für die nächste Fahrstunde heute" : `Auch für die ${later.length} weiteren Fahrstunden heute`),
-        el("div", { class: "small muted" }, later.map((x) => `${fmtTime(x.starts_at)} ${fullName(x.profiles || {})}`).join(" · ")))) : null,
+  const who1 = who === "teacher" && b.profiles ? fullName(b.profiles) : "";
+  // Schritt 2: Minuten wählen
+  const minutes = () => openModal("⏰ Ich verspäte mich",
+    el("p", {}, `Fahrstunde ${fmtDay(startIso)}, ${fmtTime(startIso)} Uhr`, who1 ? ` · ${who1}` : ""),
+    el("p", { class: "small muted" }, who !== "teacher" ? "Dein Fahrlehrer bekommt sofort eine Mitteilung."
+      : withLater ? `${later.length + 1} Schüler/innen bekommen sofort eine Mitteilung und werden mit Verspätung markiert.` : "Der/die Schüler/in bekommt sofort eine Mitteilung."),
     el("div", { class: "late-btns" }, LATE_MIN.map((m) => el("button", { type: "button", class: "btn" + (cur === m ? " ok" : ""), onclick: send(m) }, `${m} Min.`))),
-    cur || later.some((x) => x.late_teacher) ? el("div", { class: "actions" }, el("button", { type: "button", class: "btn ghost", onclick: send(0) }, "✓ Doch pünktlich")) : null);
+    cur || (withLater && later.some((x) => x.late_teacher)) ? el("div", { class: "actions" }, el("button", { type: "button", class: "btn ghost", onclick: send(0) }, "✓ Doch pünktlich")) : null);
+  if (!later.length) return minutes();
+  // Schritt 1 (Fahrlehrer/in, weitere Fahrstunden heute): erst fragen, ob die folgenden Schüler/innen mit verschoben werden
+  openModal("⏰ Ich verspäte mich",
+    el("p", {}, el("b", {}, later.length === 1 ? "Heute kommt danach noch 1 Fahrstunde:" : `Heute kommen danach noch ${later.length} Fahrstunden:`)),
+    el("div", { class: "list-item small" }, later.map((x) => el("div", {}, `${fmtTime(x.starts_at)} Uhr · ${fullName(x.profiles || {})}`))),
+    el("p", {}, "Sollen diese Schüler/innen auch benachrichtigt und mit derselben Verspätung markiert werden?"),
+    el("div", { class: "actions" },
+      el("button", { type: "button", class: "btn ok", onclick: () => { withLater = true; minutes(); } }, `✓ Ja, alle ${later.length + 1} Fahrstunden`),
+      el("button", { type: "button", class: "btn", onclick: () => { withLater = false; minutes(); } }, who1 ? `Nein, nur ${who1}` : "Nein, nur diese")));
 }
 // Fahrstunde als Kalender-Datei (.ics) – öffnet am Handy „Zum Kalender hinzufügen“
 function icsFor(b) {
@@ -479,6 +585,10 @@ const FEATURES = [
   ]],
   ["Eintragen", [
     ["notes", "📝 Notizen zu Fahrstunden", "Notizfeld und 📝-Symbol"],
+    ["lesson_tech", "🔧 Technik beim Abhaken ankreuzen", "Motorraum, Beleuchtung innen/außen, Reifen – mit Sechskant-Symbol in Heute und Kalender"],
+    ["lesson_gfa", "🅿️ Grundfahraufgaben beim Abhaken ankreuzen", "Einparken, Umkehren, Gefahrbremsung … – mit P-Symbol beim Einparken"],
+    ["training_tick", "📈 Knopf „Ausbildungsstand eingeben und abhaken“", "beim Abhaken direkt zur Ausbildung"],
+    ["teacher_review", "⭐ Fahrstunde bewerten", "👍 / 👌 / 👎 und Eigenschaften wie angespannt, selbstsicher … – nur für dich"],
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
     ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
@@ -494,7 +604,8 @@ const FEATURES = [
     ["hour_reminder", "🔔 Erinnerung 1 Stunde vorher", "Schüler/innen bekommen ca. 1 Std. vor der Fahrstunde eine Mitteilung", false],
     ["calendar_export", "📅 „In meinen Kalender“", "Schüler/innen übernehmen die Fahrstunde mit einem Tipp in ihren Handy-Kalender"],
     ["waitlist", "⏳ Warteliste", "Schüler/innen werden benachrichtigt, sobald an ihrem Wunschtag etwas frei wird"],
-    ["feedback", "👍 Rückmeldung nach der Fahrstunde", "Daumen hoch/runter – nur du siehst es"],
+    ["attest_upload", "📷 Attest-Foto hochladen", "Schüler/innen können bei kurzfristiger Krankmeldung ein Attest fotografieren – du speicherst es aufs Handy, danach wird es gelöscht"],
+    ["feedback", "👍 Schüler/innen bewerten die Fahrstunde", "👍 Gut · 👌 Mittel · 👎 Nicht so gut – nur du siehst es"],
     ["progress", "📊 Sonderfahrten: gefahren und noch offen", "Überland 5, Autobahn 4, Nacht 3 Fahrstunden (nicht bei Umschreibern)"],
   ]],
   ["Kontrolle", [
@@ -1463,7 +1574,7 @@ async function askFinishedLessons() {
     if (await askSlotReview()) return;
     const now = Date.now(), since = new Date(now - 7 * 86400000).toISOString(), until = new Date(now).toISOString();
     const [bk, ow] = await Promise.all([
-      sb.from("bookings").select("id,status,actual_minutes,lesson_type,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min,teacher_id)")
+      sb.from("bookings").select("id,status,actual_minutes,lesson_type,student_id,lesson_topics,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min,teacher_id)")
         .eq("status", "confirmed").is("actual_minutes", null).eq("slots.teacher_id", state.profile.id).gte("slots.starts_at", since).lt("slots.starts_at", until),
       sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done").eq("teacher_id", state.profile.id)
         .eq("kind", "lesson").eq("done", false).gte("starts_at", since).lt("starts_at", until),
@@ -1481,11 +1592,16 @@ async function askFinishedLessons() {
     const yes = el("button", { class: "btn ok inst-big" });
     const syncYes = () => (yes.textContent = `✓ Gefahren – ${dur.value} Min. abhaken`);
     dur.input.addEventListener("input", syncYes); syncYes();
+    const box = it.own ? null : afterLessonBox(it.b);
+    const trainBtn = it.own || !feat("training_tick") ? null : el("button", { class: "btn" }, "📈 Ausbildungsstand eingeben und abhaken");
+    if (trainBtn) trainBtn.onclick = () => openTrainingTick(it.b, it.b.student_id, dur.value, kind ? kind.value : it.b.lesson_type, box, (msg) => {
+      toast(msg); render(); setTimeout(askFinishedLessons, 1200); });
     yes.onclick = () => busy(yes, async () => {
       const { error } = it.own
         ? await sb.from("own_entries").update({ done: true, duration_min: dur.value }).eq("id", it.id)
         : await sb.from("bookings").update({ actual_minutes: dur.value, lesson_type: kind ? kind.value : it.b.lesson_type || "normal" }).eq("id", it.id);
       if (error) throw error;
+      if (box) await box.save();
       toast(`${it.name}: ${dur.value} Min. gefahren`);
       closeModal(); render();
       setTimeout(askFinishedLessons, 1200);   // gleich die nächste, falls noch eine offen ist
@@ -1510,7 +1626,9 @@ async function askFinishedLessons() {
       el("p", {}, el("b", {}, it.name), el("br"), `${fmtDate(it.start)}, ${fmtRange(it.start, it.dur)} Uhr`),
       kind ? [el("label", {}, "Was war es?"), kind.node] : null,
       el("label", {}, "Gefahrene Minuten (bei Bedarf ändern)"), dur.node,
+      box ? box.node : null,
       el("div", { class: "actions" }, yes),
+      trainBtn ? el("div", { class: "actions", style: "margin-top:0" }, trainBtn) : null,
       el("div", { class: "actions" }, no, later),
       list.length > 1 ? el("p", { class: "muted small", style: "margin:8px 0 0" }, `Noch ${list.length - 1} weitere nicht abgehakte Fahrstunde${list.length === 2 ? "" : "n"}.`) : null);
   } catch (e) { console.warn(e); }
@@ -2648,7 +2766,7 @@ async function adminToday() {
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
-    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,student_feedback,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
@@ -2696,7 +2814,10 @@ async function adminToday() {
     const ok = el("button", { class: "btn ok inst-big" }, "✓ Gefahren – abhaken");
     const syncOk = () => (ok.textContent = `✓ Gefahren – ${dur.value} Min. abhaken`);
     dur.input.addEventListener("input", syncOk); syncOk();
-    ok.onclick = () => busy(ok, async () => { closeModal(); await save(b, { actual_minutes: dur.value, lesson_type: kind ? kind.value : b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${dur.value} Min. gefahren`); });
+    const box = canTick && !b._own ? afterLessonBox(b) : null;
+    ok.onclick = () => busy(ok, async () => { if (box) await box.save(); closeModal(); await save(b, { actual_minutes: dur.value, lesson_type: kind ? kind.value : b.lesson_type || "normal" }, `✓ ${fullName(p)}: ${dur.value} Min. gefahren`); });
+    const trainBtn = canTick && !b._own && feat("training_tick") ? el("button", { class: "btn" }, "📈 Ausbildungsstand eingeben und abhaken") : null;
+    if (trainBtn) trainBtn.onclick = () => openTrainingTick({ ...b, slots: s }, b.student_id, dur.value, kind ? kind.value : b.lesson_type, box, (msg) => { toast(msg); render(); });
     const keep = el("button", { class: "btn" }, "Dauer speichern");
     keep.onclick = () => busy(keep, async () => {
       const { error } = await sb.from("slots").update({ duration_min: dur.value }).eq("id", s.id);
@@ -2707,7 +2828,9 @@ async function adminToday() {
     openModal(`${fmtTime(s.starts_at)} Uhr · ${fullName(p)}`,
       kind && canTick ? [el("label", {}, "War das eine Schaltstunde?"), kind.node] : null,
       el("label", {}, canTick ? "Wie lange gefahren?" : "Geplante Dauer"), dur.node,
+      box ? box.node : null,
       el("div", { class: "actions" }, canTick ? ok : keep),
+      trainBtn ? el("div", { class: "actions", style: "margin-top:0" }, trainBtn) : null,
       canTick ? null : el("p", { class: "muted small", style: "margin:6px 0 0" }, "Abhaken geht ab 45 Minuten vor Beginn."),
       el("hr"),
       el("p", { class: "small", style: "margin:0 0 6px" }, el("b", {}, "✗ Nicht gefahren?")),
@@ -2773,7 +2896,8 @@ async function adminToday() {
       movedChip(b.booked_on, s.starts_at),
       feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       held && !done && b.late_student ? el("span", { class: "tr-pill late" }, `⏰ +${b.late_student}`) : null,
-      done && b.student_feedback ? el("span", { class: "tr-fb", title: "Rückmeldung von Schüler/in" }, b.student_feedback > 0 ? "👍" : "👎") : null,
+      topicIcons(b.lesson_topics),
+      done && b.student_feedback != null ? el("span", { class: "tr-fb", title: "Rückmeldung von Schüler/in" }, RATING_ICON[b.student_feedback]) : null,
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
         : phase === "nothere" ? el("span", { class: "tr-pill no" }, `${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}${b.late_cancel ? " · Fehlstd." : ""}`)
         : el("button", { type: "button", class: "tr-pill tap" + (phase === "live" ? " live" : phase === "over" ? " over" : ""), title: "Dauer ändern / abhaken",
@@ -2891,7 +3015,7 @@ const activeBooking = (slot) => (slot.bookings || []).find((b) => ["requested", 
 async function adminCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const { data: slots, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,booked_on,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
+    .select("id,starts_at,duration_min,meeting_point,bookings(id,status,over_limit,actual_minutes,late_cancel,lesson_type,wish_start,student_id,teacher_note,booked_on,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion))")
     .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at");
   if (error) throw error;
   await loadTimeOff();
@@ -2929,6 +3053,7 @@ async function adminCalendar() {
     const canMove = feat("move") && b && b.status === "confirmed" && b.actual_minutes === null && !past;
     return el("button", { class: "slot " + cls, onclick: (e) => { e.stopPropagation(); openAdminSlot(s.id); } },
       slotHead(fmtRange(s.starts_at, s.duration_min), tag), nameTap || null,
+      b ? topicIcons(b.lesson_topics) : null,
       b ? movedChip(b.booked_on, s.starts_at, true) : null,
       b && b.teacher_note && feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(b.profiles)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       canMove ? el("span", { class: "slot-move", role: "button", title: "Verschiebung anfragen", onclick: (e) => { e.stopPropagation(); openChangeRequest(s.id); } }, "🔁 Verschieben") : null);
@@ -3858,7 +3983,66 @@ function lateFix(b, after) {
   const no = b.late_cancel ? el("button", { class: "btn small ok", onclick: set({ late_cancel: false },
     "Keine Fehlstunde mehr.", sickish ? "Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen." : "Fehlstunde streichen (nicht kostenpflichtig)?") }, sickish ? "📄 Attest liegt vor – keine Fehlstunde" : "✓ Keine Fehlstunde") : null;
   const yes = !b.late_cancel ? el("button", { class: "btn small ghost danger-text", onclick: set({ late_cancel: true }, "Als Fehlstunde gespeichert.", "Doch als Fehlstunde (kostenpflichtig) werten?") }, "⚠️ Doch Fehlstunde") : null;
-  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, sickButton(b, after), no, yes);
+  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, attestTeacher(b, after), sickButton(b, after), no, yes);
+}
+// ===== Attest-Foto =====
+// Schüler/in lädt hoch → liegt nur vorübergehend im Speicher. Fahrlehrer/in speichert es aufs Handy → danach wird es gelöscht.
+async function shrinkImage(file) {
+  if (!/^image\//.test(file.type) || file.size < 400 * 1024) return file;
+  try {
+    const img = await createImageBitmap(file);
+    const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = el("canvas", { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.75));
+    return blob ? new File([blob], "attest.jpg", { type: "image/jpeg" }) : file;
+  } catch { return file; }
+}
+function attestStudent(b) {
+  if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
+  if (b.attest_saved_at) return el("div", { class: "small", style: "margin:6px 0 0" }, "✓ Dein Attest liegt deinem Fahrlehrer vor.");
+  const file = el("input", { type: "file", accept: "image/*,application/pdf", hidden: true });
+  const btn = el("button", { class: "btn small ok", onclick: () => file.click() }, b.attest_path ? "📷 Anderes Attest hochladen" : "📷 Attest fotografieren / hochladen");
+  file.addEventListener("change", () => { const f0 = file.files[0]; file.value = ""; if (!f0) return; busy(btn, async () => {
+    const f = await shrinkImage(f0);
+    if (f.size > 3 * 1024 * 1024) throw new Error("Die Datei ist zu groß (höchstens 3 MB).");
+    const ext = f.type === "application/pdf" ? "pdf" : f.type === "image/png" ? "png" : f.type === "image/webp" ? "webp" : "jpg";
+    const path = `${state.profile.teacher_id}/${state.profile.id}/${b.id}-${Date.now()}.${ext}`;
+    const { error } = await sb.storage.from("atteste").upload(path, f, { contentType: f.type || "image/jpeg" });
+    if (error) throw error;
+    if (b.attest_path) sb.storage.from("atteste").remove([b.attest_path]).catch(() => {});
+    const { error: e2 } = await sb.rpc("set_attest", { p_booking: b.id, p_path: path });
+    if (e2) throw e2;
+    pushNotify("booking", b.id, "attest");
+    toast("📄 Attest hochgeladen – dein Fahrlehrer bekommt Bescheid."); render();
+  }); });
+  return el("div", { style: "margin:6px 0 0" }, file, btn,
+    b.attest_path ? el("div", { class: "small muted" }, `Hochgeladen am ${fmtDay(b.attest_at)} – dein Fahrlehrer prüft es.`) : null);
+}
+function attestTeacher(b, after) {
+  if (b.attest_saved_at && !b.attest_path) return el("span", { class: "small muted" }, `📄 Attest gespeichert am ${fmtDay(b.attest_saved_at)}`);
+  if (!b.attest_path) return null;
+  const done = async () => {
+    await sb.storage.from("atteste").remove([b.attest_path]).catch(() => {});
+    const { error } = await sb.from("bookings").update({ attest_path: null, attest_saved_at: new Date().toISOString() }).eq("id", b.id);
+    if (error) throw error;
+  };
+  const dl = el("button", { class: "btn small ok" }, "📄 Attest speichern");
+  dl.onclick = (e) => { e.stopPropagation(); busy(dl, async () => {
+    const { data, error } = await sb.storage.from("atteste").download(b.attest_path);
+    if (error) throw error;
+    const name = `Attest_${fullName(b.profiles || {}).replace(/\s+/g, "_")}_${dateInput((b.slots && b.slots.starts_at) || b.attest_at)}.${b.attest_path.split(".").pop()}`;
+    const f = new File([data], name, { type: data.type });
+    if (navigator.canShare && navigator.canShare({ files: [f] })) { try { await navigator.share({ files: [f], title: name }); } catch { return; } }
+    else downloadFile(data, name);
+    if (confirm("Hast du das Attest auf deinem Handy gespeichert?\n\nDann wird es jetzt aus dem System gelöscht (spart Speicherplatz).")) { await done(); toast("📄 Gespeichert und aus dem System gelöscht."); after && after(); }
+  }); };
+  const del = el("button", { class: "btn small ghost danger-text" }, "🗑 Attest löschen");
+  del.onclick = (e) => { e.stopPropagation(); busy(del, async () => {
+    if (!confirm("Attest-Bild endgültig löschen?")) return;
+    await done(); toast("Attest gelöscht."); after && after();
+  }); };
+  return el("span", { class: "done-row", style: "margin:0;flex-wrap:wrap" }, el("b", { class: "small" }, `📄 Attest da (${fmtDay(b.attest_at)})`), dl, del);
 }
 function attestButton(b, onDone) {
   if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
@@ -3962,7 +4146,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,lesson_topics,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -4060,7 +4244,9 @@ async function openAdminSlot(slotId) {
         callButton(b.profiles && b.profiles.phone)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
       b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "notice wish" }, `⏰ ${fullName(b.profiles)} kommt ca. ${b.late_student} Min. später.`) : null,
-      b.student_feedback ? el("p", { class: "small" }, "Rückmeldung von Schüler/in: ", b.student_feedback > 0 ? "👍 hat gut gefallen" : "👎 war nicht so gut") : null,
+      b.student_feedback != null ? el("p", { class: "small" }, "Rückmeldung von Schüler/in: ", { 1: "👍 hat gut gefallen", 0: "👌 war mittel", "-1": "👎 war nicht so gut" }[b.student_feedback]) : null,
+      (b.lesson_topics || []).length ? el("div", { class: "note topics-note" }, topicIcons(b.lesson_topics), " ", topicsText(b.lesson_topics).join(" · ")) : null,
+      lastReviewNote(b),
       feat("late") && b.status === "confirmed" && b.actual_minutes === null && lateWindowT(slot.starts_at, slot.duration_min)
         ? el("div", { class: "actions", style: "margin-top:0" }, el("button", { class: "btn small ghost", onclick: () => openLate(b, slot.starts_at, "teacher") }, b.late_teacher ? `⏰ Du kommst ${b.late_teacher} Min. später – ändern` : "⏰ Ich verspäte mich")) : null,
     );
@@ -4379,12 +4565,17 @@ function doneControls(slot, b, after, opts = {}) {
     },
   }, typeLabel(t)));
   const typeHint = askSchalt(b) ? el("p", { class: "small", style: "margin:8px 0 4px" }, el("b", {}, "War das eine Schaltstunde? "), "Bitte unten die Art antippen.") : null;
+  const box = opts.compact ? null : afterLessonBox(b);
+  const canTrain = !opts.compact && feat("training_tick");
   const check = el("button", { class: "btn ok" }, isDone ? "✓ Speichern" : "✓ Gefahren – abhaken");
   check.onclick = () => busy(check, async () => {
     const { error } = await sb.from("bookings").update({ actual_minutes: mins.value, lesson_type: type }).eq("id", b.id);
     if (error) throw error;
+    if (box) await box.save();
     after(`✓ Abgehakt: ${fmtMinutes(mins.value)} ${LESSON_TYPES[type]}`);
   });
+  const trainBtn = canTrain && b.student_id ? el("button", { class: "btn" }, isDone ? "📈 Ausbildungsstand eingeben" : "📈 Ausbildungsstand eingeben und abhaken") : null;
+  if (trainBtn) trainBtn.onclick = () => openTrainingTick({ ...b, slots: slot }, b.student_id, mins.value, type, box, after);
   const undo = el("button", { class: "btn ghost" }, "Haken entfernen");
   undo.onclick = () => busy(undo, async () => {
     const { error } = await sb.from("bookings").update({ actual_minutes: null }).eq("id", b.id);
@@ -4438,7 +4629,8 @@ function doneControls(slot, b, after, opts = {}) {
       : "Geplant waren " + slot.duration_min + " Min. Kürzer oder länger gefahren? Minuten anpassen, dann abhaken."),
     mins.node,
     typeHint, el("div", { class: "tabs", style: "margin:10px 0 0;flex-wrap:wrap" }, typeBtns),
-    el("div", { class: "actions" }, check, isDone ? undo : null),
+    box ? box.node : null,
+    el("div", { class: "actions" }, check, trainBtn, isDone ? undo : null),
     isDone ? null : notHeld);
 }
 
@@ -4446,10 +4638,13 @@ function doneControls(slot, b, after, opts = {}) {
 
 const STAGES = [
   ["grund", "Grundstufe"], ["aufbau", "Aufbaustufe"], ["leistung", "Leistungsstufe"],
-  ["grundfahr", "Grundfahraufgaben"], ["sonder", "Besondere Ausbildungsfahrten"],
+  ["grundfahr", "Grundfahraufgaben"], ["sonder", "Besondere Ausbildungsfahrten"], ["technik", "🔧 Technik (Abfahrtkontrolle)"],
   ["reife", "Reife- und Teststufe"], ["eigene", "🗺️ Prüfungsstrecken & eigene Themen"],
 ];
-const LEVELS = ["offen", "eingeführt", "geübt", "sicher"];
+// Ausbildungsstufen: kurz in der Zeile, ausführlich in der Legende
+const LEVELS = ["offen", "eingeführt", "noch unsicher", "gute Fortschritte", "beherrscht"];
+const LEVELS_LONG = ["offen", "eingeführt", "geübt – noch unsicher", "gute Fortschritte", "beherrscht"];
+const MAX_LEVEL = 4;
 // Sonderfahrt-Thema ↔ Fahrt-Art beim Abhaken (zeigt, wie oft schon gefahren)
 const TOPIC_LESSON = { s01: "ueberland", s02: "autobahn", s03: "nacht" };
 
@@ -4469,14 +4664,14 @@ async function trainingView(student, editable, lessons) {
 
   function percent(list) {
     if (!list.length) return 0;
-    return Math.round((list.reduce((sum, x) => sum + (level[x.id] || 0), 0) / (list.length * 3)) * 100);
+    return Math.round((list.reduce((sum, x) => sum + (level[x.id] || 0), 0) / (list.length * MAX_LEVEL)) * 100);
   }
   function updateBars() {
     const pc = percent(topics);
     total.replaceChildren(
       el("div", { class: "done-row", style: "justify-content:space-between;margin:0" },
         el("b", {}, `Gesamt: ${pc} %`),
-        el("span", { class: "small muted" }, `${topics.filter((x) => level[x.id] === 3).length} von ${topics.length} Themen sicher`)),
+        el("span", { class: "small muted" }, `${topics.filter((x) => level[x.id] === MAX_LEVEL).length} von ${topics.length} Themen beherrscht`)),
       el("div", { class: "bar" }, el("i", { style: `width:${pc}%` })));
     for (const [stage, node] of Object.entries(stageBars)) {
       const pcs = percent(topics.filter((x) => x.stage === stage));
@@ -4490,7 +4685,7 @@ async function trainingView(student, editable, lessons) {
     const label = el("span", { class: "small muted lv-text" });
     const paint = () => {
       const l = level[topic.id] || 0;
-      dots.replaceChildren(...[1, 2, 3].map((n) => el("i", { class: n <= l ? "on l" + l : "" })));
+      dots.replaceChildren(...[1, 2, 3, 4].map((n) => el("i", { class: n <= l ? "on l" + l : "" })));
       label.textContent = LEVELS[l];
     };
     paint();
@@ -4499,9 +4694,9 @@ async function trainingView(student, editable, lessons) {
     const info = count ? el("span", { class: "small muted" }, ` · ${count.length}× gefahren (${count.reduce((s2, b) => s2 + b.actual_minutes, 0)} Min.)`) : null;
     const attrs = { class: "topic" + (editable ? " editable" : "") };
     if (editable) {
-      attrs.title = "Antippen: offen → eingeführt → geübt → sicher";
+      attrs.title = "Antippen: offen → eingeführt → noch unsicher → gute Fortschritte → beherrscht";
       attrs.onclick = async () => {
-        const old = level[topic.id] || 0, next = (old + 1) % 4;
+        const old = level[topic.id] || 0, next = (old + 1) % (MAX_LEVEL + 1);
         level[topic.id] = next; paint(); updateBars();
         const { error } = next === 0
           ? await sb.from("training_progress").delete().eq("student_id", student.id).eq("topic_id", topic.id)
@@ -4527,7 +4722,7 @@ async function trainingView(student, editable, lessons) {
   return el("div", { class: "training" },
     total,
     el("div", { class: "lv-legend small muted" },
-      [1, 2, 3].map((n) => el("span", {}, el("span", { class: "lv" }, [1, 2, 3].map((k) => el("i", { class: k <= n ? "on l" + n : "" }))), " " + LEVELS[n])),
+      [1, 2, 3, 4].map((n) => el("span", {}, el("span", { class: "lv" }, [1, 2, 3, 4].map((k) => el("i", { class: k <= n ? "on l" + n : "" }))), " " + LEVELS_LONG[n])),
       editable ? el("span", {}, "· Thema antippen, um die Stufe zu ändern") : null),
     sections);
 }
@@ -4640,13 +4835,13 @@ async function adminRequests(opts = {}) {
   const [req, open, cancels, offers] = await Promise.all([
     sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,wish_start,wish_meeting,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,student_id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
-    sb.from("bookings").select("id,status,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
+    sb.from("bookings").select("id,status,cancel_reason,late_cancel,decided_at,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
     sb.from("bookings").select("id,admin_reply,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
       .eq("status", "offered"),
   ]);
   // Antworten der Schüler/innen, die der Fahrlehrer noch nicht abgehakt hat (fehlt die Spalte noch: einfach leer)
-  const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
+  const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
     .eq("answer_seen", false).order("answer_at", { ascending: false });
   const unseen = answers.error ? [] : (answers.data || []).filter((b) => b.slots && b.answer);
   const unseenIds = new Set(unseen.map((b) => b.id));
@@ -4737,6 +4932,7 @@ async function adminRequests(opts = {}) {
           el("span", { class: "badge " + (b.late_cancel ? "late" : "rejected") }, b.late_cancel ? "🙋 Kurzfristig abgesagt" : "🙋 Rechtzeitig abgesagt"),
           el("span", { class: "small muted" }, "Termin ist wieder frei")),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
+        attestTeacher(b, () => render()),
         !sick ? el("div", { class: "actions", style: "margin-top:8px" }, sickButton(b, () => render())) : null,
         b.late_cancel ? el("div", { class: "actions", style: "margin-top:8px" },
           sick ? btn("ok", "📄 Attest liegt vor – keine Fehlstunde", { late_cancel: false }, "Gespeichert: keine Fehlstunde.") : btn("ok", "Keine Fehlstunde (Kulanz)", { late_cancel: false }, "Gespeichert: keine Fehlstunde."),
@@ -4753,11 +4949,16 @@ async function adminRequests(opts = {}) {
   };
 
   // Kurzfassung für „Heute“: nur was jetzt zu tun ist, alles direkt erledigen
+  // Neu hochgeladene Atteste (noch nicht gespeichert)
+  const att = await sb.from("bookings").select("id,status,cancel_reason,late_cancel,attest_path,attest_at,attest_saved_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)").not("attest_path", "is", null);
+  const attests = att.error ? [] : (att.data || []).filter((b) => b.slots && b.attest_path && !unseenIds.has(b.id));
+  const attestItems = attests.map((b) => item(b, [el("div", { style: "margin:6px 0 0" }, attestTeacher(b, () => render())), lateFix(b, () => render())]));
+  const transfers = await incomingTransfersBox(!opts.compact).catch(() => null);
   if (opts.compact) {
     const pend = await myProfiles().select("id", { count: "exact", head: true }).eq("status", "pending").eq("role", "student");
     const nPend = pend.count || 0;
     const reqs = req.data.filter((b) => b.slots);
-    const n = unseen.length + reqs.length + missing.length + nPend;
+    const n = unseen.length + reqs.length + missing.length + nPend + attests.length + (transfers ? transfers[1].length : 0);
     const small = (b, text) => el("button", { type: "button", class: "todo-row", onclick: () => openAdminSlot(b.slots.id) },
       el("span", {}, el("b", {}, fullName(b.profiles)), " · ", `${fmtDay(b.slots.starts_at)} ${fmtTime(b.slots.starts_at)}`), el("span", { class: "todo-go" }, text + " ›"));
     if (!n) return el("div", { class: "todo-box done" }, "✓ Alles erledigt – keine offenen Anfragen, nichts abzuhaken.");
@@ -4766,6 +4967,8 @@ async function adminRequests(opts = {}) {
       nPend ? el("button", { type: "button", class: "todo-row", onclick: () => goTab("students") },
         el("span", {}, el("b", {}, `👤 ${nPend} neue Registrierung${nPend === 1 ? "" : "en"}`)), el("span", { class: "todo-go" }, "Freischalten ›")) : null,
       unseen.length ? [el("div", { class: "todo-sec" }, "Antworten von Schüler/innen"), unseen.map(answerItem)] : null,
+      transfers,
+      attests.length ? [el("div", { class: "todo-sec" }, "📄 Neue Atteste"), attestItems] : null,
       reqs.length ? [el("div", { class: "todo-sec" }, "Neue Anfragen"), reqs.map((b) => item(b, [
         b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
         b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
@@ -4784,6 +4987,8 @@ async function adminRequests(opts = {}) {
 
   return el("div", {},
     unseen.length ? [el("h2", {}, "Antworten von Schüler/innen"), unseen.map(answerItem), el("div", { style: "height:14px" })] : null,
+    transfers ? [transfers, el("div", { style: "height:14px" })] : null,
+    attests.length ? [el("h2", {}, "📄 Neue Atteste"), attestItems, el("div", { style: "height:14px" })] : null,
     el("h2", {}, "Offene Anfragen"),
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
       b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
@@ -4928,24 +5133,61 @@ async function openTransfer(st) {
   const { data, error } = await sb.rpc("transfer_targets");
   if (error) return fail(error);
   if (!data || !data.length) return toast("In deiner Fahrschule gibt es keine anderen aktiven Fahrlehrer/innen.", true);
+  // Schon angefragt? → Stand zeigen, zurückziehen möglich
+  const { data: cur } = await sb.from("profiles").select("transfer_request_to,transfer_request_at").eq("id", st.id).maybeSingle();
+  const pendingTo = cur && cur.transfer_request_to ? data.find((t) => t.id === cur.transfer_request_to) : null;
+  const back = el("button", { class: "btn ghost" }, "Anfrage zurückziehen");
+  back.onclick = () => busy(back, async () => {
+    const { error: e } = await sb.rpc("request_transfer", { p_student: st.id, p_teacher: null });
+    if (e) throw e;
+    closeModal(); toast("Übergabe-Anfrage zurückgezogen.");
+  });
   const sel = el("select", {}, el("option", { value: "" }, "Fahrlehrer/in wählen …"), data.map((t) => el("option", { value: t.id }, t.display_name)));
-  const ok = el("button", { class: "btn danger" }, "🔀 Jetzt übergeben");
+  const ok = el("button", { class: "btn danger" }, "🔀 Übergabe anfragen");
   ok.onclick = () => busy(ok, async () => {
     if (!sel.value) throw new Error("Bitte eine/n Fahrlehrer/in wählen.");
     const to = data.find((t) => t.id === sel.value);
-    if (!confirm(`${fullName(st)} an ${to.display_name} übergeben? Offene Anfragen und künftige Fahrstunden bei dir werden abgesagt. Danach siehst du ${fullName(st)} nicht mehr in deiner Liste.`)) return;
-    const { data: n, error: e2 } = await sb.rpc("transfer_student", { p_student: st.id, p_teacher: sel.value });
+    if (!confirm(`${fullName(st)} an ${to.display_name} übergeben?\n\n${to.display_name} bekommt eine Anfrage und muss bestätigen. Erst dann wird übergeben: Offene Anfragen und künftige Fahrstunden bei dir werden abgesagt, alle bisherigen Fahrstunden, der Ausbildungsstand und die Prüfungen gehen mit.`)) return;
+    const { error: e2 } = await sb.rpc("request_transfer", { p_student: st.id, p_teacher: sel.value });
     if (e2) throw e2;
-    sb.functions.invoke("notify", { body: { kind: "transferred", ids: [st.id] } }).catch(() => {});
+    sb.functions.invoke("notify", { body: { kind: "transfer_request", ids: [st.id] } }).catch(() => {});
     closeModal();
-    notifyStep(`${fullName(st)} an ${to.display_name} übergeben${n ? ` · ${n} künftige Termin${n === 1 ? "" : "e"} abgesagt` : ""}`, st.phone,
-      `Hallo ${st.first_name || ""}, ab sofort ist ${to.display_name} für deine Fahrstunden zuständig. In der App kannst du jetzt nur noch Fahrstunden bei ${to.display_name} anfragen.`);
+    toast(`📨 Anfrage an ${to.display_name} geschickt – sobald bestätigt, wird übergeben.`);
   });
   openModal("🔀 An anderen Fahrlehrer übergeben",
     el("p", {}, el("b", {}, fullName(st))),
-    el("p", { class: "muted small" }, "Zum Beispiel bei Fahrlehrerwechsel oder wenn bei der Anmeldung der falsche Fahrlehrer gewählt wurde. Der/die Schüler/in bekommt eine Mitteilung und sieht beim nächsten Öffnen der App, wer jetzt zuständig ist. Bisherige gefahrene Stunden bleiben bei dir in Kontrolle und Lohn."),
-    el("label", {}, "Neue/r Fahrlehrer/in"), sel,
+    pendingTo ? el("div", { class: "notice wish" }, el("b", {}, `⏳ Wartet auf Bestätigung von ${pendingTo.display_name}`),
+      cur.transfer_request_at ? ` (angefragt am ${fmtDay(cur.transfer_request_at)})` : "", el("div", { class: "actions", style: "margin:6px 0 0" }, back)) : null,
+    el("p", { class: "muted small" }, "Der/die neue Fahrlehrer/in muss die Übergabe bestätigen. Danach gehen alle Daten mit: bisherige Fahrstunden (mit Vermerk, bei wem gefahren), Ausbildungsstand, Schaltkompetenz und Prüfungen. Der/die Schüler/in bekommt eine Mitteilung."),
+    el("label", {}, pendingTo ? "Andere/n Fahrlehrer/in wählen" : "Neue/r Fahrlehrer/in"), sel,
     el("div", { class: "actions" }, ok, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+// Neue/r Fahrlehrer/in: eingehende Übergabe-Anfragen annehmen oder ablehnen
+async function incomingTransfersBox(asList) {
+  const { data, error } = await sb.rpc("incoming_transfers");
+  if (error || !data || !data.length) return null;
+  const item = (x) => {
+    const yes = el("button", { class: "btn small ok" }, "✓ Annehmen");
+    yes.onclick = () => busy(yes, async () => {
+      const { data: n, error: e } = await sb.rpc("answer_transfer", { p_student: x.student_id, p_accept: true });
+      if (e) throw e;
+      sb.functions.invoke("notify", { body: { kind: "transferred", ids: [x.student_id] } }).catch(() => {});
+      toast(`✓ ${x.first_name} ${x.last_name} ist jetzt bei dir${n ? ` · ${n} Termin${n === 1 ? "" : "e"} bei ${x.from_name} abgesagt` : ""}.`);
+      render();
+    });
+    const no = el("button", { class: "btn small ghost danger-text" }, "✗ Ablehnen");
+    no.onclick = () => busy(no, async () => {
+      if (!confirm(`Übergabe von ${x.first_name} ${x.last_name} ablehnen? Er/sie bleibt bei ${x.from_name}.`)) return;
+      const { error: e } = await sb.rpc("answer_transfer", { p_student: x.student_id, p_accept: false });
+      if (e) throw e;
+      toast("Übergabe abgelehnt."); render();
+    });
+    return el("div", { class: "list-item" },
+      el("div", {}, el("b", {}, `${x.first_name} ${x.last_name}`), x.license_class ? ` · Klasse ${x.license_class}` : "",
+        el("div", { class: "small muted" }, `von ${x.from_name}${x.requested_at ? ` · ${fmtDay(x.requested_at)}` : ""}`)),
+      el("div", { class: "actions", style: "margin-top:6px" }, yes, no));
+  };
+  return [el(asList ? "h2" : "div", { class: asList ? "" : "todo-sec" }, "🔀 Übergabe an dich"), data.map(item)];
 }
 // Schüler/in ohne App ins Archiv (raus aus der aktiven Liste und den Namensvorschlägen) bzw. zurückholen.
 // Archivierte Einträge löscht die Datenbank 1 Jahr nach dem Archivieren automatisch.
@@ -5187,10 +5429,15 @@ function examSummary(exams) {
 
 async function openStudent(st) {
   const [{ data, error }, { data: stExams }] = await Promise.all([
-    sb.from("bookings").select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,slots(id,starts_at,duration_min)").eq("student_id", st.id),
+    sb.from("bookings").select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,lesson_topics,student_feedback,attest_path,attest_at,attest_saved_at,slots(id,starts_at,duration_min)").eq("student_id", st.id),
     sb.from("exams").select("id,kind,exam_at,result").eq("student_id", st.id).order("exam_at"),
   ]);
   if (error) return fail(error);
+  // Übergebene Schüler/innen: auch die Fahrstunden bei früheren Fahrlehrer/innen (nur lesen, mit Vermerk „bei …“)
+  const prev = await sb.rpc("student_lessons_all", { p_student: st.id });
+  if (!prev.error) for (const x of prev.data || []) if (x.teacher_id !== state.profile.id && !data.some((y) => y.id === x.id))
+    data.push({ id: x.id, status: x.status, actual_minutes: x.actual_minutes, lesson_type: x.lesson_type, late_cancel: x.late_cancel, cancel_reason: x.cancel_reason,
+      lesson_topics: x.lesson_topics, _teacher: x.teacher_name, slots: { id: null, starts_at: x.starts_at, duration_min: x.duration_min } });
   st.passed = (stExams || []).some((e) => e.kind === "praxis" && e.result === "passed");
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
 
@@ -5214,14 +5461,15 @@ async function openStudent(st) {
   // Große Knöpfe wie in „Heute“
   const qb = quickBtn;
   const wa = waNumber(st.phone);
-  const lessonList = rows.length ? rows.map((b) => el("div", { class: "list-item clickable", onclick: () => openAdminSlot(b.slots.id) },
+  const lessonList = rows.length ? rows.map((b) => el("div", { class: "list-item" + (b._teacher ? " other-teacher" : " clickable"), onclick: b._teacher ? null : () => openAdminSlot(b.slots.id) },
       el("div", { class: "head" },
-        el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
+        el("span", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`, topicIcons(b.lesson_topics)),
         el("span", { class: "badge " + b.status }, b.actual_minutes !== null ? "✓ Gefahren" : STATUS_TEXT[b.status])),
+      b._teacher ? el("div", { class: "small" }, `👤 bei ${b._teacher}`) : null,
       b.actual_minutes !== null ? el("div", { class: "small" }, `Gefahren: ${fmtMinutes(b.actual_minutes)} · ${typeLabel(b.lesson_type)}`) : null,
       b.late_cancel ? el("span", { class: "badge late" }, "Fehlstunde – kostenpflichtig") : null,
       b.cancel_reason ? el("div", { class: "small muted" }, "Grund: ", b.cancel_reason) : null,
-      lateFix(b, () => openStudent(st))))
+      b._teacher ? null : lateFix(b, () => openStudent(st))))
     : el("p", { class: "muted" }, "Noch keine Fahrstunden.");
   const examNode = await examCard(st, true);
   const tabs = paneTabs([
@@ -5654,7 +5902,7 @@ function cloudBackupCard() {
   fill();
   return el("div", { class: "card" },
     el("h3", {}, "☁️ Automatische Sicherung"),
-    el("p", { class: "muted small" }, "Jede Nacht um 2:30 Uhr werden alle deine Daten automatisch gesichert – ohne dass du etwas tun musst. Die letzten 14 Tage bleiben aufgehoben. Nur du siehst deine Sicherungen. Zusätzlich wird ca. 30 Sekunden nach jeder Änderung (abhaken, bestätigen, eintragen, Einstellungen …) automatisch gesichert – die letzten 20 davon bleiben aufgehoben."),
+    el("p", { class: "muted small" }, "Jede Nacht um 2:30 Uhr werden alle deine Daten automatisch gesichert – ohne dass du etwas tun musst. Die letzten 14 Tage bleiben aufgehoben. Nur du siehst deine Sicherungen. Zusätzlich wird ca. 30 Sekunden nach jeder Änderung (abhaken, bestätigen, eintragen, Einstellungen …) automatisch gesichert – diese eine Sicherung wird jedes Mal überschrieben und ist immer auf dem neuesten Stand."),
     el("div", { class: "actions", style: "margin:0 0 8px" }, now), list);
 }
 
@@ -6888,11 +7136,12 @@ function openStudentCancel(b) {
 
 // Kurzfristig krank abgesagt, Attest noch nicht bestätigt → deutlicher Vermerk (verschwindet, sobald der Fahrlehrer bestätigt)
 const sickPending = (b) => b.late_cancel && /^krank/i.test(b.cancel_reason || "")
-  ? el("div", { class: "notice danger", style: "margin:6px 0 0;padding:8px 10px" }, el("b", {}, "⚠️ Attest noch nicht bestätigt: "), "Zählt als Fehlstunde und ist kostenpflichtig.") : null;
+  ? el("div", { class: "notice danger", style: "margin:6px 0 0;padding:8px 10px" }, el("b", {}, "⚠️ Attest noch nicht bestätigt: "), "Zählt als Fehlstunde und ist kostenpflichtig.",
+      feat("attest_upload") ? attestStudent(b) : null) : null;
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point)")
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,attest_path,attest_at,attest_saved_at,slots(starts_at,duration_min,meeting_point)")
     .eq("student_id", state.profile.id);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
@@ -6988,6 +7237,7 @@ async function studentMine() {
     el("div", { class: "small muted" }, "Nur dein Fahrlehrer sieht deine Antwort."),
     el("div", { class: "actions" },
       el("button", { class: "btn ok", onclick: fbSend(1) }, "👍 Gut"),
+      el("button", { class: "btn", onclick: fbSend(0) }, "👌 Mittel"),
       el("button", { class: "btn", onclick: fbSend(-1) }, "👎 Nicht so gut"),
       el("button", { class: "btn ghost small", onclick: () => { state.fbSkip = { ...(state.fbSkip || {}), [fbB.id]: true }; render(); } }, "Später"))) : null;
   const open15 = specialOpen(state.profile, rows);

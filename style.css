@@ -191,12 +191,13 @@ code { font-size: 12px; word-break: break-all; background: var(--bg); padding: 2
 .topic.editable:hover { background: var(--bg); }
 .topic-title { font-size: 14px; }
 .lv-wrap { display: flex; align-items: center; gap: 8px; flex: none; }
-.lv-text { width: 64px; text-align: right; }
+.lv-text { width: 96px; text-align: right; }
 .lv { display: inline-flex; gap: 3px; vertical-align: middle; }
 .lv i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); background: #fff; display: inline-block; }
 .lv i.on.l1 { background: #fde68a; border-color: #f59e0b; }
-.lv i.on.l2 { background: #8fd3d6; border-color: var(--teal); }
-.lv i.on.l3 { background: var(--brand); border-color: var(--brand-dark); }
+.lv i.on.l2 { background: #fdba74; border-color: #ea7a12; }
+.lv i.on.l3 { background: #8fd3d6; border-color: var(--teal); }
+.lv i.on.l4 { background: var(--brand); border-color: var(--brand-dark); }
 .lv-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 4px; }
 
 /* ================= Handy & Tablet ================= */
@@ -1013,3 +1014,16 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: auto; }
 .fb-card { border-left: 4px solid #2fb36d; }
 .progress-hint { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; margin: 12px 0 0; }
 .tr-cancel.tr-late { color: #8a5a00; }
+/* Nach der Fahrstunde: Technik, Grundfahraufgaben, Bewertung */
+.after-lesson { margin: 10px 0; }
+.after-lesson .al-sec { margin: 8px 0 0; }
+.after-lesson .al-sec > b { font-size: 14px; }
+.reply-chips .chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.topic-icons { display: inline-flex; gap: 3px; align-items: center; vertical-align: middle; margin-left: 4px; }
+.hex-icon { display: inline-flex; color: #3f4754; }
+html.dark .hex-icon { color: #cbd5e1; }
+.park-badge { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px;
+  background: #1d5fbf; color: #fff; font: 800 11px/1 system-ui, sans-serif; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #1d5fbf; }
+.topics-note { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sticky-actions { position: sticky; bottom: 0; background: var(--card, var(--bg)); padding: 8px 0; margin: 0; }
+.list-item.other-teacher { border-left: 3px solid #a78bfa; opacity: .92; }

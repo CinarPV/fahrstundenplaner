@@ -33,6 +33,7 @@ const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   decline: (c) => ["🚫 Angebot abgelehnt", `${c.name} kann ${c.when} leider nicht.`],
   change_ok: (c) => ["✅ Änderung angenommen", `${c.name} ist mit der neuen Zeit für ${c.when} einverstanden.`],
   change_no: (c) => ["🚫 Änderung abgelehnt", `${c.name} bleibt bei der bisherigen Zeit (${c.when}).`],
+  attest: (c) => ["📄 Attest hochgeladen", `${c.name} hat ein Attest für die Fahrstunde am ${c.when} hochgeladen – bitte in der App speichern.`],
   late: (c) => (c.lateS ? ["⏰ Verspätung", `${c.name} kommt ca. ${c.lateS} Min. später (Fahrstunde ${c.when}).`]
     : ["⏰ Doch pünktlich", `${c.name} kommt doch pünktlich (${c.when}).`]),
 };
@@ -223,10 +224,20 @@ Deno.serve(async (req) => {
         }
       }
     } else if (kind === "transferred" && Array.isArray(ids) && ids.length === 1) {
-      // Übergabe an andere/n Fahrlehrer/in: nur der bisherige Fahrlehrer darf auslösen
-      const { data: p } = await admin.from("profiles").select("id,role,transferred_from,transfer_to_name").eq("id", ids[0]).maybeSingle();
-      if (p && p.role === "student" && p.transferred_from === user.id) {
+      // Übergabe ausgeführt: auslösen darf der bisherige oder (nach Bestätigung) der neue Fahrlehrer
+      const { data: p } = await admin.from("profiles").select("*").eq("id", ids[0]).maybeSingle();
+      if (p && p.role === "student" && (p.transferred_from === user.id || p.teacher_id === user.id)) {
         messages.push({ to: p.id, title: "🔀 Neue/r Fahrlehrer/in", body: `Ab sofort ist ${p.transfer_to_name || "ein/e neue/r Fahrlehrer/in"} für deine Fahrstunden zuständig. Bitte öffne die App und bestätige es.` });
+        if (p.teacher_id === user.id && p.transferred_from) {
+          messages.push({ to: p.transferred_from, title: "✅ Übergabe bestätigt", body: `${p.transfer_to_name || "Dein/e Kollege/Kollegin"} hat ${fullName(p)} übernommen.` });
+        }
+      }
+    } else if (kind === "transfer_request" && Array.isArray(ids) && ids.length === 1) {
+      // Übergabe-Anfrage: nur der aktuelle Fahrlehrer darf auslösen → Mitteilung an den gewünschten neuen Fahrlehrer
+      const { data: p } = await admin.from("profiles").select("*").eq("id", ids[0]).maybeSingle();
+      if (p && p.role === "student" && p.teacher_id === user.id && p.transfer_request_to) {
+        const from = (await teacherSettings(user.id))?.display_name as string | undefined;
+        messages.push({ to: p.transfer_request_to, title: "🔀 Übergabe-Anfrage", body: `${from || "Ein/e Kollege/Kollegin"} möchte ${fullName(p)} an dich übergeben – bitte in der App unter „Zu erledigen“ bestätigen.` });
       }
     } else if (kind === "registered") {
       // Neue Registrierung: dem Fahrlehrer Bescheid geben (nur solange der Schüler noch auf Freischaltung wartet)
