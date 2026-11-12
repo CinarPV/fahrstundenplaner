@@ -1035,3 +1035,12 @@ html.dark .hex-icon { color: #cbd5e1; }
 .refl-h { font-weight: 700; margin: 12px 0 2px; }
 .reply-chips .chip.big { font-size: 16px; padding: 8px 14px; }
 .refl-note { border-left: 3px solid #f5a623; }
+
+/* Offline-Modus: Taste oben */
+.sync-chip.off { background: #fff3cd; border-color: #e0b100; color: #6b5200; }
+.sync-chip.warn { background: #fde2e1; border-color: #d9534f; }
+/* Lesebestätigung Verspätung */
+.late-seen { font-size: 12px; color: var(--muted, #777); margin-left: 6px; }
+.late-seen.ok { color: #1f8a3b; font-weight: 600; }
+.late-ack { margin-left: 6px; padding: 2px 8px; }
+.last-lesson { border-left: 4px solid #2e7dbd; }

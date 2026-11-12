@@ -2225,3 +2225,70 @@ language sql stable security definer set search_path = public as $$
     and coalesce((select (s.features->>'review_to_student')::boolean from settings s where s.teacher_id = r.teacher_id), true);
 $$;
 grant execute on function public.my_lesson_reviews() to authenticated;
+
+-- ===== Paket 13.11.2026: Schüler/in krank (bezahlt, still), Lesebestätigung Verspätung, Schüler-Bewertung entfernt =====
+-- Krank mit Attest als bezahlte Sondertätigkeit: Haupt-Admin/Fahrschul-Admin immer, Kollegen nur wenn eingeschaltet
+alter table public.profiles add column if not exists sick_pay boolean not null default false;
+alter table public.bookings add column if not exists sick_paid boolean not null default false;     -- zählt in Kontrolle/Abrechnung
+alter table public.bookings add column if not exists sick_hidden boolean not null default false;   -- vom Fahrlehrer still eingetragen: Schüler/in sieht es nicht
+alter table public.bookings add column if not exists late_student_seen timestamptz;   -- Fahrlehrer/in hat die Verspätung der Schüler/in gelesen
+alter table public.bookings add column if not exists late_teacher_seen timestamptz;   -- Schüler/in hat die Verspätung des Fahrlehrers gelesen
+
+-- „Krank bezahlt“ darf nur der Haupt-Admin bzw. der Fahrschul-Admin für seine Kollegen ändern
+create or replace function public.profiles_sick_pay_guard()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.sick_pay is distinct from old.sick_pay and auth.uid() is not null and not public.can_manage_teacher(new.id) then
+    raise exception 'Das darf nur der Haupt-Admin oder der Fahrschul-Admin ändern';
+  end if;
+  return new;
+end $$;
+drop trigger if exists profiles_sick_pay_guard on public.profiles;
+create trigger profiles_sick_pay_guard before update of sick_pay on public.profiles
+  for each row execute function public.profiles_sick_pay_guard();
+
+create or replace function public.set_teacher_sick_pay(p_id uuid, p_on boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not can_manage_teacher(p_id) then raise exception 'Das darfst du nicht ändern'; end if;
+  update profiles set sick_pay = coalesce(p_on, false) where id = p_id and role = 'teacher';
+end $$;
+grant execute on function public.set_teacher_sick_pay(uuid, boolean) to authenticated;
+
+-- Verspätung melden: neue Meldung = noch nicht gelesen
+create or replace function public.announce_late(p_booking uuid, p_min int)
+returns text language plpgsql security definer set search_path = public as $$
+declare b record;
+begin
+  if p_min not in (0, 5, 10, 15, 20, 25) then raise exception 'Ungültige Minuten'; end if;
+  select bk.id, bk.student_id, bk.status, s.teacher_id, s.starts_at into b
+    from bookings bk join slots s on s.id = bk.slot_id where bk.id = p_booking;
+  if b.id is null or b.status <> 'confirmed' then raise exception 'Fahrstunde nicht gefunden'; end if;
+  if b.starts_at < now() - interval '2 hours' then raise exception 'Die Fahrstunde ist schon vorbei'; end if;
+  if auth.uid() = b.student_id then
+    update bookings set late_student = nullif(p_min, 0), late_student_seen = null where id = p_booking; return 'student';
+  elsif auth.uid() = b.teacher_id then
+    update bookings set late_teacher = nullif(p_min, 0), late_teacher_seen = null where id = p_booking; return 'teacher';
+  end if;
+  raise exception 'Nicht erlaubt';
+end $$;
+grant execute on function public.announce_late(uuid, int) to authenticated;
+
+-- Lesebestätigung: die jeweils andere Seite bestätigt die Verspätung
+create or replace function public.ack_late(p_booking uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare b record;
+begin
+  select bk.id, bk.student_id, s.teacher_id into b from bookings bk join slots s on s.id = bk.slot_id where bk.id = p_booking;
+  if b.id is null then raise exception 'Fahrstunde nicht gefunden'; end if;
+  if auth.uid() = b.student_id then
+    update bookings set late_teacher_seen = now() where id = p_booking and late_teacher is not null; return 'student';
+  elsif auth.uid() = b.teacher_id then
+    update bookings set late_student_seen = now() where id = p_booking and late_student is not null; return 'teacher';
+  end if;
+  raise exception 'Nicht erlaubt';
+end $$;
+grant execute on function public.ack_late(uuid) to authenticated;
+
+-- Schüler/innen bewerten die Fahrstunde nicht mehr – nur noch die freiwillige Selbsteinschätzung
+drop function if exists public.set_feedback(uuid, smallint);

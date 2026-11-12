@@ -33,6 +33,7 @@ const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   decline: (c) => ["🚫 Angebot abgelehnt", `${c.name} kann ${c.when} leider nicht.`],
   change_ok: (c) => ["✅ Änderung angenommen", `${c.name} ist mit der neuen Zeit für ${c.when} einverstanden.`],
   change_no: (c) => ["🚫 Änderung abgelehnt", `${c.name} bleibt bei der bisherigen Zeit (${c.when}).`],
+  late_seen: (c) => ["✓ Verspätung gelesen", `${c.name} hat deine Verspätungs-Meldung gelesen (Fahrstunde ${c.when}).`],
   late: (c) => (c.lateS ? ["⏰ Verspätung", `${c.name} kommt ca. ${c.lateS} Min. später (Fahrstunde ${c.when}).`]
     : ["⏰ Doch pünktlich", `${c.name} kommt doch pünktlich (${c.when}).`]),
 };
@@ -43,9 +44,10 @@ const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   offered: (c) => ["📨 Neues Angebot", `${c.t.Dein} bietet dir ${c.when} an – bitte zusagen oder absagen.`],
   assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
   cancelled_teacher: (c) => ["❌ Fahrstunde abgesagt", `${c.t.Dein} hat die Fahrstunde am ${c.when} abgesagt.${reasonText(c)}`],
-  reflect: (c) => ["📝 Wie war deine Fahrstunde?", `Du kannst deine Fahrstunde vom ${c.when} kurz einschätzen – freiwillig, dauert nur ein paar Sekunden.`],
+  reflect: (c) => ["📝 Deine Selbsteinschätzung", `Wie sicher hast du dich in der Fahrstunde am ${c.when} gefühlt? Freiwillig – dauert nur ein paar Sekunden.`],
   moved: (c) => ["🔄 Fahrstunde geändert", `${c.t.Dein} hat deine Fahrstunde geändert. Neu: ${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
   note: (c) => ["📝 Hinweis zu deiner Fahrstunde", `${c.when}: ${c.reply}`],
+  late_seen: (c) => ["✓ Verspätung gelesen", `${c.t.Dein} hat deine Verspätungs-Meldung gelesen (Fahrstunde ${c.when}).`],
   late_teacher: (c) => (c.lateT ? ["⏰ Kleine Verspätung", `${c.t.Dein} kommt ca. ${c.lateT} Min. später zur Fahrstunde am ${c.when}.`]
     : ["⏰ Doch pünktlich", `${c.t.Dein} ist doch pünktlich zur Fahrstunde am ${c.when}.`]),
   not_held: (c) => ["❌ Fahrstunde abgesagt", `${(NOT_HELD_TEXT[c.status] ?? ((x: Ctx) => `Deine Fahrstunde am ${x.when} findet nicht statt.`))(c)}${c.late ? " Das wird als Fehlstunde berechnet." : ""}${reasonText(c)}`],

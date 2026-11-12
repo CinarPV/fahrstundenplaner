@@ -2,9 +2,9 @@
    Macht die App installierbar (iPhone/Android) und startet sie auch bei schlechtem Netz.
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
-   Daten (Supabase) werden NIE zwischengespeichert. */
-const CACHE = "fsp-v125";
-const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "logo.svg", "manifest.webmanifest",
+   Daten (Supabase) werden hier NIE zwischengespeichert – das macht offline.js (nur wenn der Offline-Modus an ist). */
+const CACHE = "fsp-v126";
+const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "offline.js", "logo.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -20,7 +20,15 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   const url = new URL(req.url);
-  if (req.method !== "GET" || url.origin !== self.location.origin) return; // Supabase & CDN: normal laden
+  // Supabase-Bibliothek (feste Version) für den Offline-Modus zwischenspeichern: erst Speicher, sonst Netz
+  if (req.method === "GET" && url.href.startsWith("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@")) {
+    e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok || res.type === "opaque") { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+      return res;
+    })));
+    return;
+  }
+  if (req.method !== "GET" || url.origin !== self.location.origin) return; // Supabase-Daten: normal laden
   // „no-cache“: immer beim Server nachfragen, ob es eine neuere Version gibt (sonst bis zu 10 Min. alt)
   e.respondWith(fetch(req, { cache: "no-cache" }).then((res) => {
     if (res.ok) {

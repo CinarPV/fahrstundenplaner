@@ -314,6 +314,29 @@ const LATE_MIN = [5, 10, 15, 20, 25];
 // Fahrlehrer/in: jede Fahrstunde von heute, solange sie nicht vorbei ist (Verspätung zieht sich oft durch den Tag)
 const lateWindowT = (startIso, dur) => { const st = new Date(startIso).getTime(); return sameDay(new Date(startIso), new Date()) && Date.now() < st + (dur || 60) * 60000; };
 const lateWindow = (startIso, dur) => { const st = new Date(startIso).getTime(), n = Date.now(); return st - n <= 8 * 3600000 && n < st + Math.min(dur || 60, 60) * 60000; };
+// Lesebestätigung bei Verspätung: die andere Seite tippt „✓ Gelesen“, wer gemeldet hat, sieht „✓ gelesen“
+function lateAckBtn(b, viewer) {
+  const other = viewer === "teacher" ? b.late_student : b.late_teacher;
+  const seen = viewer === "teacher" ? b.late_student_seen : b.late_teacher_seen;
+  if (!feat("late_ack") || !other) return null;
+  if (seen) return el("span", { class: "late-seen ok" }, "✓ gelesen");
+  const btn = el("button", { type: "button", class: "btn small ok late-ack", title: "Bestätigen, dass du die Verspätung gelesen hast" }, "✓ Gelesen");
+  btn.onclick = (e) => { e.stopPropagation(); return busy(btn, async () => {
+    const { error } = await sb.rpc("ack_late", { p_booking: b.id });
+    if (error) throw error;
+    pushNotify("booking", b.id, "late_seen");
+    if (viewer === "teacher") b.late_student_seen = new Date().toISOString(); else b.late_teacher_seen = new Date().toISOString();
+    render();
+  }); };
+  return btn;
+}
+// Status der eigenen Meldung: von der anderen Seite gelesen oder noch nicht
+function lateSeenTag(b, viewer) {
+  const mine = viewer === "teacher" ? b.late_teacher : b.late_student;
+  if (!feat("late_ack") || !mine) return null;
+  const seen = viewer === "teacher" ? b.late_teacher_seen : b.late_student_seen;
+  return el("span", { class: "late-seen" + (seen ? " ok" : "") }, seen ? " ✓ gelesen" : " · noch nicht gelesen");
+}
 async function openLate(b, startIso, who) {
   const cur = who === "teacher" ? b.late_teacher : b.late_student;
   // Fahrlehrer/in: auf Wunsch auch alle folgenden Fahrstunden von heute (Kettenreaktion)
@@ -643,6 +666,7 @@ const FEATURES = [
     ["push_banner", "🔔 Hinweis, wenn Mitteilungen aus sind", "oben auf Heute"],
     ["ask_finished", "🚗 Abfrage „Fahrstunde vorbei“", "nach jeder Fahrstunde: gefahren oder nicht?"],
     ["late", "⏰ Verspätung melden (5–25 Min.)", "du und deine Schüler/innen können am Tag der Fahrstunde Bescheid geben"],
+    ["late_ack", "✓ Lesebestätigung bei Verspätung", "die andere Seite tippt „✓ Gelesen“ – wer gemeldet hat, bekommt eine Mitteilung und sieht „✓ gelesen“"],
   ]],
   ["Eintragen", [
     ["notes", "📝 Notizen zu Fahrstunden", "Notizfeld und 📝-Symbol"],
@@ -668,7 +692,11 @@ const FEATURES = [
     ["waitlist", "⏳ Warteliste", "Schüler/innen werden benachrichtigt, sobald an ihrem Wunschtag etwas frei wird"],
     ["feedback", "📝 Selbsteinschätzung der Schüler/innen", "freiwillig: Gefühl (😊/😐/😟), Gefühle, Schwieriges und Übungswünsche antippen – nur du siehst es"],
     ["reflect_push", "🔔 Nach dem Abhaken an die Selbsteinschätzung erinnern", "Schüler/innen bekommen eine kurze Mitteilung, dass sie die Fahrstunde einschätzen können"],
+    ["recent", "🕘 „Zuletzt gefahren“ oben in der Schüler/innen-Liste", "wer in den letzten 14 Tagen abgehakt wurde, neueste zuerst"],
     ["progress", "📊 Sonderfahrten: gefahren und noch offen", "Überland 5, Autobahn 4, Nacht 3 Fahrstunden (nicht bei Umschreibern)"],
+  ]],
+  ["Offline", [
+    ["offline", "📴 Offline arbeiten (nur auf deinen Geräten)", "alles geht auch ohne Internet – auf iPhone und Android. Sobald wieder Internet da ist, wird automatisch synchronisiert; Mitteilungen an Schüler/innen gehen erst dann raus. Oben erscheint die Taste 🔄 zum Synchronisieren.", false],
   ]],
   ["Kontrolle", [
     ["pay_estimate", "💶 Lohnschätzung anzeigen", "unverbindliche Brutto-Schätzung im Monat"],
@@ -810,6 +838,20 @@ function afterNotHeld(slot, old, status, late, res, note = "") {
 }
 // Mitteilung an den Schüler, dessen Fahrstunde nicht stattfindet (Text und Grund baut der Server)
 const pushNotHeld = (id, status) => pushNotify("booking", id, status === "cancelled_teacher" ? "cancelled_teacher" : "not_held");
+// Krank (Schüler/in) mit Attest: als bezahlte Sondertätigkeit in Kontrolle und Abrechnung.
+// Haupt-Admin und Fahrschul-Admins immer, Kollegen nur, wenn der Admin es für sie eingeschaltet hat.
+const sickPayOn = () => isOwner() || isSchoolAdmin() || !!(state.profile && state.profile.sick_pay);
+const isSickish = (b) => b.status === "sick" || /^krank/i.test(b.cancel_reason || "");
+const attestPatch = (b) => ({ late_cancel: false, sick_paid: isSickish(b) && sickPayOn() });
+const isSickPaid = (b) => b.status !== "confirmed" && !b.late_cancel && !!b.sick_paid;
+// Fahrlehrer trägt eine bestätigte Fahrstunde als krank ein: keine Mitteilung, Schüler/in sieht es nicht
+function sickSilentBox() {
+  const attest = el("input", { type: "checkbox", checked: true });
+  const node = el("div", { class: "notice", style: "margin:8px 0;padding:8px 10px" },
+    el("div", { class: "small" }, "🤫 Der/die Schüler/in bekommt ", el("b", {}, "keine Mitteilung"), " und sieht diesen Eintrag nicht – nur du."),
+    el("label", { class: "check", style: "margin:6px 0 0" }, attest, el("span", {}, "📄 Attest liegt vor – keine Fehlstunde" + (sickPayOn() ? " (zählt als bezahlte Sondertätigkeit)" : ""))));
+  return { node, attest: () => attest.checked };
+}
 
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
 function notifyStep(msg, phone, text, who = "den/die Schüler/in", extraBtn = null) {
@@ -1255,6 +1297,7 @@ async function init() {
     return;
   }
   sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+  if (window.fspOffline) sb = window.fspOffline.wrap(sb);   // Offline-Modus (nur Fahrlehrer/innen, wenn eingeschaltet)
 
   sb.auth.onAuthStateChange((event, session) => {
     if (event === "PASSWORD_RECOVERY") { state.session = session; renderNewPassword(); return; }
@@ -1287,6 +1330,7 @@ async function loadUserAndRender() {
       const { data: settings } = await sb.from("settings").select("*").eq("teacher_id", teacherId).maybeSingle();
       if (settings) state.settings = settings;
     }
+    if (window.fspOffline) await window.fspOffline.configure(profile.id, profile.role === "teacher" && feat("offline"));
     // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
     state.active = !!(await sb.rpc(profile.role === "teacher" ? "is_teacher" : "is_active")).data;
     // Gesperrt / abgeschlossen / abgelaufen: noch 3 Monate die eigenen Fahrstunden ansehen (nichts buchen)
@@ -1400,11 +1444,50 @@ function renderWaiting() {
   ));
 }
 
+// 🔄 Offline-Modus: Anzeige oben (online/offline, wartende Änderungen) – antippen = jetzt synchronisieren
+const syncBtn = el("button", { class: "btn small sync-chip", hidden: true, title: "Synchronisieren" });
+function paintSync(st) {
+  st = st || (window.fspOffline ? window.fspOffline.status() : { enabled: false });
+  syncBtn.hidden = !st.enabled;
+  if (!st.enabled) return;
+  syncBtn.classList.toggle("off", !!st.offline);
+  syncBtn.classList.toggle("warn", !!(st.failed && st.failed.length));
+  syncBtn.textContent = st.syncing ? "🔄 …" : st.offline ? `📴 Offline${st.pending ? ` · ${st.pending}` : ""}` : st.pending ? `🔄 ${st.pending}` : "🔄";
+  syncBtn.title = st.offline ? `Offline – ${st.pending} Änderung(en) warten aufs Hochladen` : st.pending ? `${st.pending} Änderung(en) warten – antippen zum Synchronisieren` : "Alles synchronisiert – antippen zum Synchronisieren";
+}
+syncBtn.onclick = () => openSyncModal();
+const syncChip = () => (paintSync(), syncBtn);
+window.addEventListener("fsp-offline", (e) => paintSync(e.detail));
+window.addEventListener("fsp-synced", (e) => {
+  const d = e.detail || {};
+  if (d.done) toast(`🔄 Synchronisiert: ${d.done} Änderung${d.done === 1 ? "" : "en"} hochgeladen.`);
+  else if (d.manual) toast("🔄 Alles ist synchronisiert.");
+  if (d.failed && d.failed.length) toast(`⚠️ ${d.failed.length} Änderung(en) konnten nicht übernommen werden – oben auf 🔄 tippen.`, true);
+  if (state.profile && !modal.open && !state.dirty) render();
+});
+function openSyncModal() {
+  const st = window.fspOffline.status();
+  const go = el("button", { class: "btn ok" }, "🔄 Jetzt synchronisieren");
+  go.onclick = () => busy(go, async () => { await window.fspOffline.sync(); closeModal(); });
+  const when = (x) => (x ? `${fmtDay(x)} ${fmtTime(x)} Uhr` : "–");
+  openModal("🔄 Synchronisieren",
+    el("p", {}, st.offline ? "📴 Gerade kein Internet. Du kannst normal weiterarbeiten – alles wird gespeichert und hochgeladen, sobald wieder eine Verbindung da ist." : "🟢 Online."),
+    el("p", { class: "small" }, st.pending ? `⏳ ${st.pending} Änderung(en) warten aufs Hochladen.` : "✓ Keine wartenden Änderungen."),
+    el("p", { class: "small muted" }, `Zuletzt synchronisiert: ${when(st.lastSync)} · Daten auf dem Gerät vom: ${when(st.refreshedAt)}`),
+    el("p", { class: "small muted" }, "Mitteilungen an Schüler/innen gehen erst raus, wenn hochgeladen ist."),
+    st.failed.length ? el("div", { class: "notice danger" },
+      el("b", {}, `⚠️ ${st.failed.length} Änderung(en) konnten nicht übernommen werden`),
+      el("div", { class: "small" }, "Meist hat sich in der Zwischenzeit online etwas geändert (z. B. Termin schon vergeben). Bitte kurz prüfen und neu eintragen."),
+      st.failed.slice(-10).map((f) => el("div", { class: "small" }, `• ${when(f.at)}: ${f.what} – ${f.msg}`)),
+      el("button", { class: "btn small ghost", onclick: () => { window.fspOffline.clearFailed(); closeModal(); } }, "Gelesen – Liste leeren")) : null,
+    el("div", { class: "actions" }, st.offline ? null : go, el("button", { class: "btn ghost", onclick: closeModal }, "Schließen")));
+}
 function renderUserbox() {
   if (!state.profile) { userbox.replaceChildren(); return; }
   userbox.replaceChildren(...[
     el("span", {}, fullName(state.profile)),
     isAdmin() ? el("span", { class: "badge admin" }, isOwner() ? "Haupt-Admin" : isSchoolAdmin() ? "Fahrschul-Admin" : "Fahrlehrer") : null,
+    isAdmin() ? syncChip() : null,
     isAdmin() ? el("button", { class: "btn small", onclick: openLinkModal, "aria-label": "Schüler-Link", title: "Schüler-Link" }, "🔗", el("span", { class: "hide-sm" }, " Schüler-Link")) : null,
     !isAdmin() && state.settings.display_name ? el("span", { class: "small muted" }, "· Fahrlehrer " + state.settings.display_name) : null,
     el("button", { class: "btn small ghost", onclick: (e) => logout(e.currentTarget) }, "Abmelden"),
@@ -1414,6 +1497,8 @@ function renderUserbox() {
 // Abmelden – klappt immer, auch ohne Netz oder mit abgelaufener Anmeldung:
 // erst auf diesem Gerät abmelden, die Sitzung beim Server nur nebenbei beenden.
 async function logout(btn) {
+  const waiting = window.fspOffline ? window.fspOffline.pendingCount() : 0;
+  if (waiting && !confirm(`⚠️ ${waiting} Änderung(en) sind noch nicht hochgeladen (offline gespeichert). Sie bleiben auf diesem Gerät und werden nach dem nächsten Anmelden hochgeladen. Trotzdem abmelden?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = "Abmelden …"; }
   if (modal.open) modal.close();
   // Mitteilungen für dieses Gerät abmelden (sonst bekäme der nächste Nutzer am Gerät fremde Mitteilungen)
@@ -2159,7 +2244,7 @@ async function render() {
 async function updateStudentNews(tabbar) {
   if (state.tab === "mine") return;
   const { count } = await sb.from("bookings").select("id", { count: "exact", head: true })
-    .eq("student_id", state.profile.id).gt("decided_at", getSeen("mine"));
+    .eq("student_id", state.profile.id).eq("sick_hidden", false).gt("decided_at", getSeen("mine"));
   const btn = tabbar.querySelector('[data-tab="mine"]');
   if (btn && count) btn.append(el("span", { class: "count" }, count));
 }
@@ -2829,7 +2914,7 @@ async function adminToday() {
   for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
   const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
-    sb.from("slots").select("id,starts_at,duration_min,meeting_point,note,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
+    sb.from("slots").select("id,starts_at,duration_min,meeting_point,note,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,lesson_topics,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
     sb.from("exams").select("id,kind,exam_at,duration_min,meeting_point,result,student_id,profiles(first_name,last_name,phone)")
       .gte("exam_at", from.toISOString()).lt("exam_at", to.toISOString()).order("exam_at"),
@@ -2912,7 +2997,9 @@ async function adminToday() {
     const reasonText = el("textarea", { maxlength: 300, rows: 2, placeholder: "z. B. Auto ist in der Werkstatt" });
     // Begründung nur bei „Ich habe abgesagt“ – bei den anderen Gründen ist sie schon klar
     const reasonWrap = el("div", { hidden: true }, el("label", {}, "Begründung (optional) – der/die Schüler/in sieht sie"), reasonText);
-    const noBox = el("div", { hidden: true }, reasonWrap, lateWrap, repl.node,
+    const silent = sickSilentBox();
+    silent.node.hidden = true;
+    const noBox = el("div", { hidden: true }, reasonWrap, silent.node, lateWrap, repl.node,
       el("p", { class: "muted small", style: "margin:6px 0 0" }, "Der/die Schüler/in bekommt eine Mitteilung, danach kannst du ihm auch per WhatsApp schreiben."),
       el("div", { class: "actions" }, noBtn));
     const syncNo = () => (noBtn.textContent = repl.student ? `Speichern & ${fullName(repl.student)} eintragen` : "Speichern – Fahrstunde fällt aus");
@@ -2923,14 +3010,18 @@ async function adminToday() {
       late.checked = v === "no_show" || (v !== "cancelled_teacher" && isLate(s.starts_at));
       lateWrap.hidden = v === "cancelled_teacher";
       reasonWrap.hidden = v !== "cancelled_teacher";
+      silent.node.hidden = v !== "sick";
       noBox.hidden = false;
     } }, t));
     noBtn.onclick = () => busy(noBtn, async () => {
       if (!why) throw new Error("Bitte einen Grund antippen");
-      const isLateCancel = why !== "cancelled_teacher" && late.checked;
+      const quiet = why === "sick";
+      const isLateCancel = why !== "cancelled_teacher" && (quiet ? !silent.attest() : late.checked);
       const note = why === "cancelled_teacher" ? reasonText.value.trim() : "";
-      const { error } = await sb.from("bookings").update({ status: why, cancel_reason: note || null, late_cancel: isLateCancel, actual_minutes: null, decided_at: new Date().toISOString() }).eq("id", b.id);
+      const { error } = await sb.from("bookings").update({ status: why, cancel_reason: quiet ? "Krank" : note || null, late_cancel: isLateCancel, actual_minutes: null, decided_at: new Date().toISOString(),
+        ...(quiet ? { sick_hidden: true, sick_paid: !isLateCancel && sickPayOn() } : {}) }).eq("id", b.id);
       if (error) throw error;
+      if (quiet) { const r = await repl.apply(s); closeModal(); toast(`🤒 ${fullName(p)}: krank eingetragen` + (isLateCancel ? " (Fehlstunde)" : "") + (r ? ` · ${fullName(r.st)} eingetragen` : "")); return render(); }
       pushNotHeld(b.id, why);
       afterNotHeld(s, p, why, isLateCancel, await repl.apply(s), note);
     });
@@ -2961,6 +3052,7 @@ async function adminToday() {
       movedChip(b.booked_on, s.starts_at),
       feat("notes") ? noteIcon(b.teacher_note, `📝 ${fullName(p)} · ${fmtTime(s.starts_at)} Uhr`, () => openAdminSlot(s.id)) : null,
       held && !done && b.late_student ? el("span", { class: "tr-pill late" }, `⏰ +${b.late_student}`) : null,
+      held && !done && b.late_student ? lateAckBtn(b, "teacher") : null,
       topicIcons(b.lesson_topics),
       done && b.student_feedback != null ? el("span", { class: "tr-fb", title: "Selbsteinschätzung der Schüler/in" }, FEEL_ICON[b.student_feedback]) : null,
       phase === "done" ? el("span", { class: "tr-pill ok" }, `✓ ${b.actual_minutes} Min.`)
@@ -2980,7 +3072,7 @@ async function adminToday() {
     // Absagen klein und links, weit weg von Minuten und Haken. Ab 45 Min. vor Beginn nur noch über die Minuten („Nicht gefahren?“)
     const cancelBtn = phase === "next" && !canTick ? el("button", { type: "button", class: "tr-cancel", title: "Fahrstunde absagen", onclick: () => openCancel(s, b) }, "Absagen") : null;
     const lateBtn = !b._own && feat("late") && held && !done && lateWindowT(s.starts_at, s.duration_min)
-      ? el("button", { type: "button", class: "tr-cancel tr-late", title: "Verspätung melden", onclick: () => openLate(b, s.starts_at, "teacher") }, b.late_teacher ? `⏰ Ich: +${b.late_teacher}` : "⏰ Verspätung") : null;
+      ? el("button", { type: "button", class: "tr-cancel tr-late", title: "Verspätung melden", onclick: () => openLate(b, s.starts_at, "teacher") }, b.late_teacher ? `⏰ Ich: +${b.late_teacher}${feat("late_ack") ? (b.late_teacher_seen ? " ✓" : " ·") : ""}` : "⏰ Verspätung") : null;
     return el("div", { class: "tr tap-row " + phase, onclick: rowTap(() => openAdminSlot(s.id)) }, head,
       phase === "done" || phase === "nothere" ? null : el("div", { class: "tr-foot" }, cancelBtn, lateBtn, meetLine),
       s.note ? el("div", { class: "tr-foot small slot-note" }, "📝 " + s.note) : null);
@@ -4024,7 +4116,7 @@ function sickButton(b, after) {
     const free = el("input", { type: "checkbox", checked: true });
     const ok = el("button", { class: "btn ok" }, "🤒 Als krank speichern");
     ok.onclick = () => busy(ok, async () => {
-      const patch = { status: "sick", cancel_reason: why.value.trim() || "Krank", late_cancel: !free.checked };
+      const patch = { status: "sick", cancel_reason: why.value.trim() || "Krank", late_cancel: !free.checked, sick_paid: free.checked && sickPayOn() };
       let { error } = await sb.from("bookings").update({ ...patch, answer_seen: true }).eq("id", b.id);
       if (error && /answer_seen/.test(error.message || "")) ({ error } = await sb.from("bookings").update(patch).eq("id", b.id));
       if (error) throw error;
@@ -4034,7 +4126,7 @@ function sickButton(b, after) {
       el("p", {}, `${fullName(b.profiles || {})} · ${b.slots ? `${fmtDate(b.slots.starts_at)}, ${fmtTime(b.slots.starts_at)} Uhr` : ""}`),
       el("p", { class: "muted small" }, "Für Schüler/innen, die aus Versehen „Absagen“ statt „Ich bin krank“ gedrückt haben. In der Liste steht danach „Krank gemeldet“."),
       el("label", {}, "Grund / Info (optional)"), why,
-      el("label", { class: "check" }, free, el("span", {}, "Keine Fehlstunde (nicht kostenpflichtig)")),
+      el("label", { class: "check" }, free, el("span", {}, "📄 Attest liegt vor – keine Fehlstunde" + (sickPayOn() ? " (zählt als bezahlte Sondertätigkeit)" : ""))),
       el("div", { class: "actions" }, ok, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
   };
   return btn;
@@ -4050,10 +4142,10 @@ function lateFix(b, after) {
     if (error) return fail(error);
     toast(msg); after && after();
   };
-  const sickish = b.status === "sick" || /^krank/i.test(b.cancel_reason || "");
-  const no = b.late_cancel ? el("button", { class: "btn small ok", onclick: set({ late_cancel: false },
+  const sickish = isSickish(b);
+  const no = b.late_cancel ? el("button", { class: "btn small ok", onclick: set(attestPatch(b),
     "Keine Fehlstunde mehr.", sickish ? "Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen." : "Fehlstunde streichen (nicht kostenpflichtig)?") }, sickish ? "📄 Attest liegt vor – keine Fehlstunde" : "✓ Keine Fehlstunde") : null;
-  const yes = !b.late_cancel ? el("button", { class: "btn small ghost danger-text", onclick: set({ late_cancel: true }, "Als Fehlstunde gespeichert.", "Doch als Fehlstunde (kostenpflichtig) werten?") }, "⚠️ Doch Fehlstunde") : null;
+  const yes = !b.late_cancel ? el("button", { class: "btn small ghost danger-text", onclick: set({ late_cancel: true, sick_paid: false }, "Als Fehlstunde gespeichert.", "Doch als Fehlstunde (kostenpflichtig) werten?") }, "⚠️ Doch Fehlstunde") : null;
   return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, sickButton(b, after), no, yes);
 }
 function attestButton(b, onDone) {
@@ -4061,7 +4153,7 @@ function attestButton(b, onDone) {
   const btn = el("button", { class: "btn small ok" }, "📄 Attest liegt vor – Fehlstunde streichen");
   btn.onclick = (e) => { e.stopPropagation(); return busy(btn, async () => {
     if (!confirm("Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen.")) return;
-    const { error } = await sb.from("bookings").update({ late_cancel: false }).eq("id", b.id);
+    const { error } = await sb.from("bookings").update(attestPatch(b)).eq("id", b.id);
     if (error) throw error;
     toast("Fehlstunde gestrichen.");
     onDone();
@@ -4158,7 +4250,7 @@ const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Ter
 
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
-    .select("id,starts_at,duration_min,meeting_point,note,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,student_feedback,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
+    .select("id,starts_at,duration_min,meeting_point,note,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
     .eq("id", slotId).single();
   if (error) return fail(error);
 
@@ -4265,12 +4357,12 @@ async function openAdminSlot(slotId) {
         el("button", { class: "btn small ghost", onclick: () => openStudentById(b.student_id) }, "👤 Schüler-Infos"), " ",
         callButton(b.profiles && b.profiles.phone)),
       b.student_note ? el("div", { class: "note" }, "Nachricht vom Schüler: ", b.student_note) : el("p", { class: "muted small" }, "Keine Nachricht vom Schüler."),
-      b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "notice wish" }, `⏰ ${fullName(b.profiles)} kommt ca. ${b.late_student} Min. später.`) : null,
+      b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "notice wish" }, `⏰ ${fullName(b.profiles)} kommt ca. ${b.late_student} Min. später. `, lateAckBtn(b, "teacher")) : null,
       reflectionNote(b),
       (b.lesson_topics || []).length ? el("div", { class: "note topics-note" }, topicIcons(b.lesson_topics), " ", topicsText(b.lesson_topics).join(" · ")) : null,
       lastReviewNote(b),
       feat("late") && b.status === "confirmed" && b.actual_minutes === null && lateWindowT(slot.starts_at, slot.duration_min)
-        ? el("div", { class: "actions", style: "margin-top:0" }, el("button", { class: "btn small ghost", onclick: () => openLate(b, slot.starts_at, "teacher") }, b.late_teacher ? `⏰ Du kommst ${b.late_teacher} Min. später – ändern` : "⏰ Ich verspäte mich")) : null,
+        ? el("div", { class: "actions", style: "margin-top:0" }, el("button", { class: "btn small ghost", onclick: () => openLate(b, slot.starts_at, "teacher") }, b.late_teacher ? `⏰ Du kommst ${b.late_teacher} Min. später – ändern` : "⏰ Ich verspäte mich"), lateSeenTag(b, "teacher")) : null,
     );
     // 📝 Private Notiz – bei jeder Fahrstunde (angefragt, angeboten, bestätigt, gefahren); nur für dich
     if (feat("notes")) {
@@ -4618,8 +4710,11 @@ function doneControls(slot, b, after, opts = {}) {
   const lateWrap = el("label", { class: "check" }, late, "Fehlstunde – kostenpflichtig",
     el("span", { class: "muted small" }, ` (Frist: ${fmtDeadline(slot.starts_at)})`));
   const chosen = () => (radios.find((x) => x.r.checked) || {}).r;
+  const silent = sickSilentBox();
+  silent.node.hidden = true;
   radios.forEach((x) => x.r.addEventListener("change", () => {
-    lateWrap.hidden = chosen().value === "cancelled_teacher";
+    silent.node.hidden = chosen().value !== "sick";
+    lateWrap.hidden = chosen().value === "cancelled_teacher" || chosen().value === "sick";
     reason.hidden = chosen().value !== "cancelled_teacher";
     if (chosen().value === "no_show") late.checked = true;  // nicht erschienen = Fehlstunde
   }));
@@ -4630,19 +4725,22 @@ function doneControls(slot, b, after, opts = {}) {
   saveNo.onclick = () => busy(saveNo, async () => {
     const r = chosen();
     if (!r) throw new Error("Bitte einen Grund ankreuzen");
-    const isLateCancel = r.value !== "cancelled_teacher" && late.checked;
+    const quiet = r.value === "sick";
+    const isLateCancel = r.value !== "cancelled_teacher" && (quiet ? !silent.attest() : late.checked);
     const note = r.value === "cancelled_teacher" ? reason.value.trim() : "";
     const { error } = await sb.from("bookings").update({
-      status: r.value, cancel_reason: note || null, late_cancel: isLateCancel,
+      status: r.value, cancel_reason: quiet ? "Krank" : note || null, late_cancel: isLateCancel,
       actual_minutes: null, decided_at: new Date().toISOString(),
+      ...(quiet ? { sick_hidden: true, sick_paid: !isLateCancel && sickPayOn() } : {}),
     }).eq("id", b.id);
     if (error) throw error;
+    if (quiet) { const rr = await repl.apply(slot); closeModal(); toast(`🤒 ${fullName(b.profiles || {})}: krank eingetragen` + (isLateCancel ? " (Fehlstunde)" : "") + (rr ? ` · ${fullName(rr.st)} eingetragen` : "")); return render(); }
     pushNotHeld(b.id, r.value);
     afterNotHeld(slot, b.profiles, r.value, isLateCancel, await repl.apply(slot), note);
   });
   const notHeld = el("details", { class: "nothere" },
     el("summary", {}, "✗ Nicht gefahren …"),
-    radios.map((x) => x.node), reason, lateWrap, repl.node,
+    radios.map((x) => x.node), reason, silent.node, lateWrap, repl.node,
     el("div", { class: "actions" }, saveNo));
 
   return el("div", {},
@@ -4957,7 +5055,7 @@ async function adminRequests(opts = {}) {
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
         !sick ? el("div", { class: "actions", style: "margin-top:8px" }, sickButton(b, () => render())) : null,
         b.late_cancel ? el("div", { class: "actions", style: "margin-top:8px" },
-          sick ? btn("ok", "📄 Attest liegt vor – keine Fehlstunde", { late_cancel: false }, "Gespeichert: keine Fehlstunde.") : btn("ok", "Keine Fehlstunde (Kulanz)", { late_cancel: false }, "Gespeichert: keine Fehlstunde."),
+          sick ? btn("ok", "📄 Attest liegt vor – keine Fehlstunde", attestPatch(b), "Gespeichert: keine Fehlstunde.") : btn("ok", "Keine Fehlstunde (Kulanz)", { late_cancel: false }, "Gespeichert: keine Fehlstunde."),
           btn("danger", sick ? "⚠️ Kein Attest – Fehlstunde" : "⚠️ Fehlstunde bestätigen", {}, "Fehlstunde gespeichert."))
           : el("div", { class: "actions", style: "margin-top:8px" }, btn("", "✓ Zur Kenntnis genommen", {})),
       ]);
@@ -5038,7 +5136,7 @@ async function adminRequests(opts = {}) {
 async function adminStudents() {
   const [p, b, ex, own] = await Promise.all([
     myProfiles().select(STUDENT_FIELDS).order("last_name"),
-    sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type"),
+    sb.from("bookings").select("student_id,status,actual_minutes,late_cancel,lesson_type,lesson_topics,slots(starts_at,duration_min)"),
     sb.from("exams").select("student_id").eq("kind", "praxis").eq("result", "passed"),
     sb.from("own_entries").select("id,kind,lesson_type,student_name,starts_at,duration_min,done,note,no_pay,booked_on,exam_result,archived_at").eq("teacher_id", state.profile.id).order("starts_at"),
   ]);
@@ -5053,6 +5151,7 @@ async function adminStudents() {
     const s = (stats[x.student_id] ||= { done: 0, minutes: 0, upcoming: 0, open: 0, notHeld: 0, late: 0, special: {} });
     if (x.status === "confirmed" && x.actual_minutes !== null) {
       s.done++; s.minutes += x.actual_minutes;
+      if (x.slots && (!s.last || x.slots.starts_at > s.last.slots.starts_at)) s.last = x;
       if (SPECIAL_TYPES.includes(x.lesson_type)) s.special[x.lesson_type] = (s.special[x.lesson_type] || 0) + 1;
     }
     else if (x.status === "confirmed") s.upcoming++;
@@ -5099,6 +5198,7 @@ async function adminStudents() {
             el("div", { class: "actions", style: "margin:0" }, ok, el("button", { class: "btn small", onclick: () => openTransfer(st) }, "🔀 Anderer Fahrlehrer"), del)));
       })) : null,
     studentSearchCard(students, own.data || [], stats),
+    feat("recent") ? recentDrivenCard(active, stats) : null,
     el("div", { class: "card" },
       el("h2", {}, `Aktive Schüler/innen (${active.length})`),
       active.length ? table(active) : el("p", { class: "muted" }, "Noch keine freigeschalteten Schüler/innen."),
@@ -5117,6 +5217,32 @@ async function adminStudents() {
       el("p", { class: "muted small" }, "Ausbildung nicht abgeschlossen, z. B. Fahrlehrerwechsel. Antippen → „Wieder aktivieren“ oder „Endgültig löschen“."),
       table(blocked)) : null,
   );
+}
+// „Zuletzt gefahren“: wer in den letzten 14 Tagen abgehakt wurde, neueste zuerst – zum schnellen Wiederfinden
+function recentDrivenCard(active, stats) {
+  const since = addDays(new Date(), -14).toISOString();
+  const list = active.filter((st) => stats[st.id] && stats[st.id].last && stats[st.id].last.slots.starts_at >= since)
+    .sort((a, b) => stats[b.id].last.slots.starts_at.localeCompare(stats[a.id].last.slots.starts_at)).slice(0, 10);
+  if (!list.length) return null;
+  return el("div", { class: "card" },
+    el("h2", {}, "🕘 Zuletzt gefahren"),
+    list.map((st) => {
+      const l = stats[st.id].last;
+      return el("div", { class: "list-item clickable", onclick: () => openStudent(st) },
+        el("div", { class: "head" }, el("b", {}, fullName(st)), el("span", { class: "small muted" }, fmtDay(l.slots.starts_at))),
+        el("div", { class: "small" }, `${fmtMinutes(l.actual_minutes)} · ${typeLabel(l.lesson_type)}`, topicIcons(l.lesson_topics)));
+    }));
+}
+// Letzte gefahrene Fahrstunde ganz oben auf der Schüler-Seite: wann, wie lange, welche Art
+function lastLessonBox(rows) {
+  const now = new Date().toISOString();
+  const done = rows.filter((b) => b.status === "confirmed" && b.actual_minutes !== null && b.slots.starts_at <= now);
+  if (!done.length) return null;
+  const l = done[0], total = done.reduce((n, b) => n + b.actual_minutes, 0);
+  return el("div", { class: "card last-lesson", style: "padding:10px 14px;margin:8px 0" },
+    el("div", {}, el("b", {}, "🕘 Letzte Fahrstunde: "), `${fmtDay(l.slots.starts_at)} ${fmtRange(l.slots.starts_at, l.slots.duration_min)}`, topicIcons(l.lesson_topics)),
+    el("div", {}, `Gefahren: ${fmtMinutes(l.actual_minutes)} · ${typeLabel(l.lesson_type)}`, l._teacher ? ` · bei ${l._teacher}` : ""),
+    el("div", { class: "small muted" }, `Insgesamt: ${done.length} Fahrstunde${done.length === 1 ? "" : "n"} · ${fmtMinutes(total)} (${fmtLessons(total)})`));
 }
 // Suchfeld über ALLE Schüler (aktiv, bestanden, abgelaufen, deaktiviert, ohne App) – nur hier auf der Schülerseite
 function studentStatus(st) {
@@ -5516,6 +5642,7 @@ async function openStudent(st) {
   ]);
   openModal(fullName(st),
     el("div", { class: "done-row" }, studentTags(st)),
+    lastLessonBox(rows),
     el("div", { class: "quick-row" },
       qb("add", "✍️", "Nachtragen", "schon gefahren", () => openBackfill(st)),
       qb("exam", "🎓", "Prüfung", "Termin & Ergebnis", () => revealAndScroll(document.querySelector("dialog .exam-card"), "start")),
@@ -5542,10 +5669,24 @@ function randomPassword() {
 }
 const appLink = () => location.origin + location.pathname;
 
+// Haupt-Admin / Fahrschul-Admin: Werden Krankheitstage von Schüler/innen (mit Attest) für diese/n Kollegen/in bezahlt?
+function sickPayToggle(t) {
+  if (t.is_owner || t.is_school_admin) return el("div", { class: "small muted", style: "margin-top:4px" }, "🤒 Schüler/in krank (mit Attest): immer bezahlt");
+  const cb = el("input", { type: "checkbox", checked: !!t.sick_pay });
+  cb.addEventListener("change", async () => {
+    cb.disabled = true;
+    const { error } = await sb.rpc("set_teacher_sick_pay", { p_id: t.id, p_on: cb.checked });
+    cb.disabled = false;
+    if (error) { cb.checked = !cb.checked; return fail(error); }
+    t.sick_pay = cb.checked;
+    toast(cb.checked ? `${fullName(t)}: Schüler/in krank mit Attest wird bezahlt.` : `${fullName(t)}: Schüler/in krank wird nicht bezahlt.`);
+  });
+  return el("label", { class: "check", style: "margin:6px 0 0" }, cb, el("span", { class: "small" }, "🤒 Schüler/in krank (mit Attest) bezahlt – als Sondertätigkeit in Kontrolle und Abrechnung"));
+}
 async function ownerTeachers() {
   // Fahrlehrer/innen haben keine Zuordnung zu einem Fahrlehrer – hier NICHT myProfiles() benutzen (die Datenbank zeigt nur, was ich sehen darf)
   const { data: all, error } = await sb.from("profiles")
-    .select("id,first_name,last_name,email,slug,status,is_owner,is_school_admin,school_id,valid_until,created_at").eq("role", "teacher").order("last_name");
+    .select("id,first_name,last_name,email,slug,status,is_owner,is_school_admin,school_id,valid_until,created_at,sick_pay").eq("role", "teacher").order("last_name");
   if (error) throw error;
   const owner = isOwner(), me = state.profile.id;
   // Fahrschul-Admin sieht nur die Fahrlehrer seiner eigenen Fahrschule
@@ -5620,7 +5761,8 @@ async function ownerTeachers() {
           t.is_school_admin ? el("span", { class: "badge admin" }, "Fahrschul-Admin") : null,
           t.is_owner ? null : (() => { const i = accessInfo(t.valid_until, false); return el("div", { style: "margin-top:4px" }, el("span", { class: "access-badge " + i.cls }, "⏳ " + i.text)); })(),
           t.status !== "active" ? el("span", { class: "badge rejected" }, "Gesperrt") : null,
-          el("div", { class: "small muted" }, t.email || "")),
+          el("div", { class: "small muted" }, t.email || ""),
+          sickPayToggle(t)),
         t.is_owner ? null : el("div", { class: "actions", style: "margin:0" },
           el("button", { class: "btn small ghost", onclick: () => openTeacherValidity(t) }, "⏳ Laufzeit"), pwBtn, toggle, del)));
   };
@@ -6155,7 +6297,7 @@ async function studentCalendar() {
   const vr = viewRange(), from = vr.from, to = addDays(vr.from, vr.days);
   const [{ data, error }, own, myExams] = await Promise.all([
     sb.rpc("get_calendar", { p_from: from.toISOString(), p_to: to.toISOString() }),
-    sb.from("bookings").select("id,slot_id,status,actual_minutes,meeting_point,late_student,late_teacher,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
+    sb.from("bookings").select("id,slot_id,status,actual_minutes,meeting_point,late_student,late_teacher,late_student_seen,late_teacher_seen,slots(starts_at,duration_min,meeting_point)").eq("student_id", state.profile.id).eq("status", "confirmed"),
     sb.from("exams").select("id,kind,exam_at,duration_min,result,note,meeting_point").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   const exams = myExams.data || [];
@@ -6228,7 +6370,8 @@ async function studentCalendar() {
       el("div", { class: "next-row first", style: "cursor:default" },
         el("span", { class: "next-when" }, `Deine nächste Fahrstunde: ${fmtDay(nextOwn.slots.starts_at)} ${fmtRange(nextOwn.slots.starts_at, nextOwn.slots.duration_min)}`)),
       meetingBox(meetingOf(nextOwn)),
-      nextOwn.late_teacher ? el("div", { class: "note" }, `⏰ Dein Fahrlehrer kommt ca. ${nextOwn.late_teacher} Min. später.`) : null,
+      nextOwn.late_teacher ? el("div", { class: "note" }, `⏰ Dein Fahrlehrer kommt ca. ${nextOwn.late_teacher} Min. später. `, lateAckBtn(nextOwn, "student")) : null,
+      nextOwn.late_student ? el("div", { class: "small muted" }, `⏰ Du hast gemeldet: ca. ${nextOwn.late_student} Min. später`, lateSeenTag(nextOwn, "student")) : null,
       el("div", { class: "actions", style: "margin-top:8px" },
         new Date(nextOwn.slots.starts_at).getTime() > Date.now() ? calendarButton(nextOwn) : null,
         feat("late") && lateWindow(nextOwn.slots.starts_at, nextOwn.slots.duration_min) ? el("button", { class: "btn small", onclick: () => openLate(nextOwn, nextOwn.slots.starts_at, "student") }, nextOwn.late_student ? `⏰ Gemeldet: +${nextOwn.late_student} Min.` : "⏰ Ich komme später") : null,
@@ -6437,7 +6580,7 @@ function isoWeek(d) {
 const monthName = (d) => d.toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 
 async function loadControlRows(from, to) {
-  const cols = "id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,transferred_at,no_pay,teacher_note,booked_on,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min)";
+  const cols = "id,status,actual_minutes,lesson_type,late_cancel,cancel_reason,sick_paid,transferred_at,no_pay,teacher_note,booked_on,profiles(first_name,last_name,license_class,is_conversion),slots!inner(id,starts_at,duration_min)";
   const [r1, r2] = await Promise.all([
     sb.from("bookings").select(cols).gte("slots.starts_at", from.toISOString()).lt("slots.starts_at", to.toISOString()),
     // in diesem Monat eingetragen, aber an einem anderen Tag gefahren
@@ -6447,17 +6590,18 @@ async function loadControlRows(from, to) {
   const seen = new Set(), data = [];
   for (const b of (r1.data || []).concat(r2.error ? [] : r2.data || [])) if (!seen.has(b.id)) { seen.add(b.id); data.push(b); }
   // Alle bestätigten Fahrstunden (abgehakt oder noch nicht) + kostenpflichtige Fehlstunden
-  return data.filter((b) => b.slots && (b.status === "confirmed" || b.late_cancel))
+  return data.filter((b) => b.slots && (b.status === "confirmed" || b.late_cancel || isSickPaid(b)))
     .sort((a, b) => (effDay(a) + a.slots.starts_at).localeCompare(effDay(b) + b.slots.starts_at));
 }
-const controlKind = (b) => (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : "Fehlstunde (kostenpflichtig)");
+const SICK_TEXT = "Sondertätigkeit: Schüler/in krank gemeldet";
+const controlKind = (b) => (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : isSickPaid(b) ? SICK_TEXT : "Fehlstunde (kostenpflichtig)");
 // Zusammenfassung: Anzahl Fahrstunden und Minuten (bewusst nur Minuten, keine Stunden-Umrechnung)
 const sumLine = (list) => {
   const driven = list.filter((b) => b.status === "confirmed");
   const min = driven.reduce((s, b) => s + b.actual_minutes, 0);
-  const late = list.length - driven.length;
+  const sick = list.filter(isSickPaid).length, late = list.length - driven.length - sick;
   return [driven.length ? `${driven.length} Fahrstunde${driven.length === 1 ? "" : "n"} · ${min} Min.` : "",
-    late ? `${late} Fehlstunde${late === 1 ? "" : "n"}` : ""].filter(Boolean).join(" · ");
+    late ? `${late} Fehlstunde${late === 1 ? "" : "n"}` : "", sick ? `${sick}× 🤒 Sondertätigkeit (Schüler/in krank)` : ""].filter(Boolean).join(" · ");
 };
 
 // Kontrolle: schlichte Monatsliste Tag für Tag – wer, wann, wie lange; Tages- und Monatsminuten (für die Abrechnung)
@@ -6536,9 +6680,9 @@ async function adminControl() {
     const row = el("div", { class: "cl-row tap-row" + (ok ? "" : " late") + (b.no_pay ? " unpaid" : "") + (b.transferred_at ? " sent" : ""),
       onclick: rowTap(() => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id))) },
       el("span", { class: "cl-time" }, fmtTime(b.slots.starts_at)),
-      el("span", { class: "cl-name" }, fullName(b.profiles), isMoved(b) ? el("small", { class: "moved-tag" }, `↪ ${drivenOnText(b)}`) : null),
+      el("span", { class: "cl-name" }, isSickPaid(b) ? `🤒 ${fullName(b.profiles)} krank gemeldet` : fullName(b.profiles), isMoved(b) ? el("small", { class: "moved-tag" }, `↪ ${drivenOnText(b)}`) : null),
       feat("notes") ? noteIcon(b._own ? b._src.note : b.teacher_note, `📝 ${fullName(b.profiles)}`) : null,
-      el("b", { class: "cl-min" }, b.no_pay ? el("span", { class: "unpaid-tag" }, `💸 unbezahlt · ${ok ? b.actual_minutes : b.slots.duration_min} Min.`)
+      el("b", { class: "cl-min" }, isSickPaid(b) && !b.no_pay ? `Sondertätigkeit · ${b.slots.duration_min} Min.` : b.no_pay ? el("span", { class: "unpaid-tag" }, `💸 unbezahlt · ${ok ? b.actual_minutes : b.slots.duration_min} Min.`)
         : ok ? `✓ ${b.actual_minutes} Min.` : `Fehlstunde · ${b.slots.duration_min} Min.`),
       el("label", { class: "check cl-box", title: "Ins Fahrschulsystem übertragen" }, box));
     box.addEventListener("change", async () => {
@@ -6551,7 +6695,7 @@ async function adminControl() {
   };
   // Nach Tagen gruppieren (nur Tage mit Fahrstunden)
   // Minuten, die bezahlt werden: gefahrene Minuten + Fehlstunden (geplante Dauer)
-  const paidMin = (b) => (b.no_pay ? 0 : isTicked(b) ? b.actual_minutes : b.status !== "confirmed" && b.late_cancel ? b.slots.duration_min : 0);
+  const paidMin = (b) => (b.no_pay ? 0 : isTicked(b) ? b.actual_minutes : b.status !== "confirmed" && (b.late_cancel || isSickPaid(b)) ? b.slots.duration_min : 0);
   const dayMin = (list) => list.reduce((n, b) => n + paidMin(b), 0);
   // Weitere relevante Einträge des Tages: Prüfungen (auch Schaltkompetenz, auch ohne App) und Theorie – nichts Privates
   const nowMs0 = Date.now();
@@ -6576,7 +6720,8 @@ async function adminControl() {
     dayOf(dateInput(b.slots.starts_at)).extra.push({ at: b.slots.starts_at, min: 0, icon: "→", text: `${fullName(b.profiles)} – im System eingetragen am ${fmtDayStr(b.booked_on)}`, dur: b.slots.duration_min, res: "", ghost: true, open: () => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id)) });
   for (const x of extras) dayOf(dateInput(x.at)).extra.push(x);
   days.sort((a, b) => a.key.localeCompare(b.key));
-  const driven = rows.filter((b) => b.status === "confirmed" && !b.no_pay), totalMin = dayMin(rows), late = rows.filter((b) => b.status !== "confirmed" && !b.no_pay).length;
+  const sickRows = rows.filter((b) => isSickPaid(b) && !b.no_pay);
+  const driven = rows.filter((b) => b.status === "confirmed" && !b.no_pay), totalMin = dayMin(rows), late = rows.filter((b) => b.status !== "confirmed" && !b.no_pay && !isSickPaid(b)).length;
   const unpaid = rows.filter((b) => b.no_pay);
   const lateMin = rows.filter((b) => b.status !== "confirmed").reduce((n, b) => n + paidMin(b), 0);
   const notTicked = allRows.filter((b) => !isFinished(b) && new Date(b.slots.starts_at).getTime() + b.slots.duration_min * 60000 <= Date.now()).length;
@@ -6615,7 +6760,7 @@ async function adminControl() {
     const tr = (cells, cls) => { const r = tag("tr", undefined, cls); cells.forEach(([v, c]) => r.append(tag("td", v, c))); return r; };
     // Einträge je Tag: Fahrstunden (bezahlt), Fehlstunden, Prüfungen, gehaltene Theorie
     const items = rows.filter((b) => !b.no_pay && paidMin(b) > 0).map((b) => ({ at: b.slots.starts_at, day: effDay(b), name: fullName(b.profiles),
-      kind: (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : `Fehlstunde (${STATUS_TEXT[b.status] || "ausgefallen"})`) + (isMoved(b) ? ` – ${drivenOnText(b)}` : ""), min: paidMin(b) }))
+      kind: (b.status === "confirmed" ? LESSON_TYPES[b.lesson_type || "normal"] : isSickPaid(b) ? SICK_TEXT : `Fehlstunde (${STATUS_TEXT[b.status] || "ausgefallen"})`) + (isMoved(b) ? ` – ${drivenOnText(b)}` : ""), min: paidMin(b) }))
       .concat(allExtras.filter((x) => x.min > 0).map((x) => ({ at: x.at, day: dateInput(x.at), name: x.text.replace(/^(Prüfung|Schaltkompetenz|Theorie) · /, ""), kind: x.text.split(" · ")[0], min: x.min })))
       .sort((a, b) => (a.day + a.at).localeCompare(b.day + b.at));
     const table = tag("table");
@@ -6635,7 +6780,7 @@ async function adminControl() {
     const vac = offList(/urlaub/i), sick = offList(/krank/i);
     const sickMonth = countVacation(state.timeOff, dateInput(from), dateInput(addDays(to, -1)), /krank/i);
     const box = tag("div", undefined, "box");
-    [[`${driven.length}`, "Fahrstunden"], [`${totalMin} Min.`, "Fahr- und Fehlstunden"], [String(late), "Fehlstunden"], [String(examsDone.length), "Prüfungen"],
+    [[`${driven.length}`, "Fahrstunden"], [`${totalMin} Min.`, "Fahr- und Fehlstunden"], [String(late), "Fehlstunden"], ...(sickRows.length ? [[String(sickRows.length), "Sondertätigkeit (Schüler/in krank)"]] : []), [String(examsDone.length), "Prüfungen"],
       [`${theoryMin} Min.`, "Theorie"], [String(vacMonth), "Urlaubstage"], [String(sickMonth), "Krankheitstage"], [`${monthMin} Min.`, "Gesamt"]]
       .forEach(([v, l]) => { const x = tag("div"); x.append(tag("b", v), tag("span", l)); box.append(x); });
     const offTable = tag("table");
@@ -6646,7 +6791,7 @@ async function adminControl() {
     d.body.append(tag("h1", `Monatsabschluss – ${monthName(m)}`),
       tag("div", `${state.settings.display_name || fullName(state.profile)} · erstellt am ${new Date().toLocaleDateString("de-DE")}`, "muted"),
       box, tag("h2", "Urlaub und Krankheitstage"), offTable, tag("h2", "Fahrstunden, Fehlstunden, Prüfungen und Theorie nach Tagen"), table,
-      tag("p", "Unbezahlte Fahrstunden sind nicht enthalten. Fehlstunden zählen mit ihrer geplanten Dauer.", "muted"));
+      tag("p", "Unbezahlte Fahrstunden sind nicht enthalten. Fehlstunden und Sondertätigkeiten (Schüler/in krank mit Attest) zählen mit ihrer geplanten Dauer.", "muted"));
     setTimeout(() => w.print(), 300);
   }
   const prev = el("button", { class: "btn small ghost", onclick: () => { state.controlMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); render(); } }, "‹");
@@ -6655,9 +6800,10 @@ async function adminControl() {
   onlyOpen.addEventListener("change", () => { state.controlOpenOnly = onlyOpen.checked; render(); });
   const totals = el("div", { class: "cl-totals" },
     el("div", {}, el("b", {}, String(driven.length)), el("span", {}, "Fahrstunden")),
-    el("div", {}, el("b", {}, String(totalMin)), el("span", {}, lateMin ? "Minuten (inkl. Fehlstd.)" : "Minuten")),
+    el("div", {}, el("b", {}, String(totalMin)), el("span", {}, lateMin ? (late && sickRows.length ? "Minuten (inkl. Fehlstd. und Sondertätigkeit)" : late ? "Minuten (inkl. Fehlstd.)" : "Minuten (inkl. Sondertätigkeit)") : "Minuten")),
     notTicked ? el("div", { class: "warn" }, el("b", {}, String(notTicked)), el("span", {}, "nicht abgehakt")) : null,
     late ? el("div", { class: "warn" }, el("b", {}, String(late)), el("span", {}, late === 1 ? "Fehlstunde" : "Fehlstunden")) : null,
+    sickRows.length ? el("div", {}, el("b", {}, String(sickRows.length)), el("span", {}, "🤒 Sondertätigkeit (Schüler/in krank)")) : null,
     unpaid.length ? el("div", { class: "unpaid" }, el("b", {}, String(unpaid.length)), el("span", {}, "💸 unbezahlt (nicht mitgezählt)")) : null);
 
   return el("div", {},
@@ -6816,7 +6962,7 @@ const controlTable = (rows) => rows.map((b) => {
   const d = new Date(effDay(b) + "T12:00:00");
   return [`KW ${isoWeek(d)}`, d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }),
     fmtRange(b.slots.starts_at, b.slots.duration_min), fullName(b.profiles), (b.profiles && b.profiles.license_class) || "",
-    b.status === "confirmed" ? b.actual_minutes : "", controlKind(b) + (isMoved(b) ? ` (${drivenOnText(b)})` : ""), b.transferred_at ? "ja" : ""];
+    b.status === "confirmed" ? b.actual_minutes : isSickPaid(b) ? b.slots.duration_min : "", controlKind(b) + (isMoved(b) ? ` (${drivenOnText(b)})` : ""), b.transferred_at ? "ja" : ""];
 });
 const CONTROL_HEAD = ["KW", "Datum", "Uhrzeit", "Name", "Klasse", "Minuten", "Art", "Übertragen"];
 function exportControlCsv(m, rows) {
@@ -6989,7 +7135,7 @@ async function adminTraining() {
 
 async function studentTraining() {
   const [{ data, error }, { data: myExams }] = await Promise.all([
-    sb.from("bookings").select("status,actual_minutes,lesson_type,late_cancel,slots(starts_at)").eq("student_id", state.profile.id),
+    sb.from("bookings").select("status,actual_minutes,lesson_type,late_cancel,slots(starts_at)").eq("student_id", state.profile.id).eq("sick_hidden", false),
     sb.from("exams").select("id,kind,exam_at,result").eq("student_id", state.profile.id).order("exam_at"),
   ]);
   if (error) throw error;
@@ -7192,8 +7338,8 @@ async function openReflection(b) {
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,student_feedback,slots(starts_at,duration_min,meeting_point,note)")
-    .eq("student_id", state.profile.id);
+    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,slots(starts_at,duration_min,meeting_point,note)")
+    .eq("student_id", state.profile.id).eq("sick_hidden", false);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
   const now = Date.now();
@@ -7244,8 +7390,8 @@ async function studentMine() {
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
         b.slots.note ? el("div", { class: "lesson-hint" }, "📝 " + b.slots.note) : null,
-        b.status === "confirmed" && b.actual_minutes === null && b.late_teacher ? el("div", { class: "lesson-hint" }, `⏰ Dein Fahrlehrer kommt ca. ${b.late_teacher} Min. später.`) : null,
-        b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "lesson-hint" }, `⏰ Du hast gemeldet: ca. ${b.late_student} Min. später.`) : null,
+        b.status === "confirmed" && b.actual_minutes === null && b.late_teacher ? el("div", { class: "lesson-hint" }, `⏰ Dein Fahrlehrer kommt ca. ${b.late_teacher} Min. später. `, lateAckBtn(b, "student")) : null,
+        b.status === "confirmed" && b.actual_minutes === null && b.late_student ? el("div", { class: "lesson-hint" }, `⏰ Du hast gemeldet: ca. ${b.late_student} Min. später.`, lateSeenTag(b, "student")) : null,
         b.status === "confirmed" && b.actual_minutes === null && (future || lateWindow(b.slots.starts_at, b.slots.duration_min)) ? el("div", { class: "actions" },
           future ? calendarButton(b) : null,
           feat("late") && lateWindow(b.slots.starts_at, b.slots.duration_min) ? el("button", { class: "btn small", onclick: () => openLate(b, b.slots.starts_at, "student") }, b.late_student ? "⏰ Verspätung ändern" : "⏰ Ich komme später") : null) : null,
