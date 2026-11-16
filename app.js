@@ -6435,7 +6435,7 @@ async function studentCalendar() {
       ? (s.status === "confirmed" ? "Deine Fahrstunde"
         : s.status === "offered" ? "📨 Für dich – bitte zusagen" : "Deine Anfrage – wartet")
       : s.my_queue ? el("span", {}, `⏳ Deine Anfrage – Platz ${s.queue_pos || 2}`, el("div", { class: "slot-hint" }, "Du rückst nach, falls die Anfrage vor dir nicht bestätigt wird"))
-      : queueAble ? el("span", {}, "Schon angefragt" + (s.queue_len ? ` (${s.queue_len + 1}×)` : ""), el("div", { class: "slot-hint" }, "✋ Chancen eher gering – aber versuch dein Glück!"))
+      : queueAble ? el("span", {}, "Schon angefragt" + (s.queue_len ? ` (${s.queue_len + 1}×)` : ""), el("div", { class: "slot-hint" }, "✋ Trotzdem anfragen lohnt sich oft – versuch dein Glück!"))
       : s.status === "requested" ? el("span", {}, "Von jemandem angefragt", el("div", { class: "slot-hint" }, "↻ Wird evtl. wieder frei – schau später nochmal rein"))
       : earlyStartMs(s) ? el("span", {}, "Antippen zum Anfragen", el("div", { class: "slot-early" }, `⏰ Auch früher möglich: ab ${fmtTime(new Date(earlyStartMs(s)))} Uhr`))
       : "Antippen zum Anfragen";
@@ -6658,7 +6658,7 @@ function openQueueRequest(s) {
     if (error && /FREE/.test(error.message || "")) { toast("Der Termin ist gerade frei geworden – du kannst ihn normal anfragen."); return openBooking({ ...s, status: "free" }); }
     if (error) throw error;
     pushNotify("booking", newId, "queued");
-    toast(`🍀 Angefragt – du bist auf Platz ${pos}. Die Chancen sind nicht so hoch, aber wird die Anfrage vor dir nicht bestätigt, rückst du automatisch nach. Viel Glück!`);
+    toast(`🍀 Angefragt – du bist auf Platz ${pos}. Wird die Anfrage vor dir nicht bestätigt, rückst du automatisch nach. Viel Glück!`);
     closeModal();
     render();
   });
@@ -6667,8 +6667,10 @@ function openQueueRequest(s) {
     el("div", { class: "notice wish" }, el("b", {}, "ℹ️ Schon angefragt: "),
       s.queue_len ? `Vor dir haben schon ${s.queue_len + 1} Schüler/innen angefragt.` : "Jemand hat diesen Termin schon vor dir angefragt.",
       " Dein Fahrlehrer hat aber noch nicht bestätigt."),
-    el("div", { class: "notice danger" }, el("b", {}, "🍀 Ehrlich gesagt: Die Chancen stehen nicht so gut. "),
-      "Meistens bekommt die Person den Termin, die zuerst angefragt hat. Aber manchmal klappt es doch – nutz deine Chance und versuch dein Glück! ",
+    el("div", { class: "notice" }, el("b", {}, "🍀 Die Chancen sind nicht sehr hoch – aber eine Anfrage lohnt sich oft! "),
+      "Meistens bekommt die Person den Termin, die zuerst angefragt hat. ",
+      "Manchmal fragen Schüler/innen aber dieselbe Uhrzeit an mehreren Tagen an – dann wird einer der Termine wieder frei. ",
+      "Wer schon angefragt hat, rückt dann als Erste/r nach. Also: nutz deine Chance und versuch dein Glück! ",
       "Schau am besten trotzdem auch nach einem freien Termin."),
     el("p", {}, `Du kommst auf `, el("b", {}, `Platz ${pos}`), ". Wird die Anfrage vor dir abgelehnt oder zurückgezogen, rückst du automatisch nach – du bekommst dann eine Mitteilung. Wird sie bestätigt, bekommst du eine Absage."),
     s.note ? el("div", { class: "notice wish" }, "📝 ", el("b", {}, "Hinweis: "), s.note) : null,
@@ -7541,7 +7543,7 @@ async function studentMine() {
           b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null),
         el("span", { class: "badge " + badge[0] }, badge[1]),
         b.status === "requested" && b.wish_start ? el("div", { class: "lesson-hint" }, `⏰ Deine Wunschzeit: ${fmtTime(b.wish_start)} Uhr (ohne Garantie)`) : null,
-        b.status === "queued" ? el("div", { class: "lesson-hint" }, "🍀 Jemand hat vor dir angefragt – die Chancen sind eher gering. Wird diese Anfrage nicht bestätigt, rückst du automatisch nach und bekommst eine Mitteilung. Schau am besten auch nach freien Terminen.") : null,
+        b.status === "queued" ? el("div", { class: "lesson-hint" }, "🍀 Jemand hat vor dir angefragt – die Chancen sind nicht sehr hoch, aber es klappt immer wieder: Wird diese Anfrage nicht bestätigt, rückst du automatisch nach und bekommst eine Mitteilung. Schau am besten auch nach freien Terminen.") : null,
         isOffer && b.wish_start ? el("div", { class: "lesson-hint" }, `⏱ Gegenangebot deines Fahrlehrers. Dein Wunsch war ${fmtTime(b.wish_start)} Uhr.`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
