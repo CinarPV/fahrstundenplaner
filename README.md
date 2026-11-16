@@ -67,7 +67,7 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - Unter „Meine Fahrstunden“ eine **nummerierte Liste aller gefahrenen Fahrstunden** (Datum, Uhrzeit, Minuten, Gesamtsumme) sehen.
 - Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers, die **gefahrenen Minuten** und **„Abgesagt – krank“** sehen.
 - Eine noch unbestätigte Anfrage zurückziehen.
-- **Schon angefragte Termine trotzdem anfragen:** Hat jemand einen Termin angefragt, der noch nicht bestätigt ist, steht dort „Schon angefragt – du kannst trotzdem anfragen“. Man kommt auf **Platz 2, 3 …** und rückt automatisch nach (mit Mitteilung), wenn die Anfrage davor abgelehnt oder zurückgezogen wird. Wird sie bestätigt, gibt es automatisch eine Absage.
+- **Schon angefragte Termine trotzdem anfragen:** Hat jemand einen Termin angefragt, der noch nicht bestätigt ist, steht dort „Schon angefragt – du kannst trotzdem anfragen“. Man kommt auf **Platz 2** (höchstens 2 Anfragen pro Termin) und rückt automatisch nach (mit Mitteilung), wenn die Anfrage davor abgelehnt oder zurückgezogen wird. Wird sie bestätigt, gibt es automatisch eine Absage.
 - Unter „Meine Fahrstunden“ stehen **nicht angenommene Anfragen** der letzten 14 Tage – mit dem Grund des Fahrlehrers.
 - **Angebote vom Fahrlehrer** erscheinen lila und ganz oben. Der Schüler tippt auf **✓ Zusagen** oder **✗ Absagen**, optional mit kurzer Nachricht. Danach erscheint ein Knopf, mit dem er den Fahrlehrer per WhatsApp informiert.
 - Die **WhatsApp-Nummer ist bei der Registrierung Pflicht**, damit der Fahrlehrer den Schüler erreichen kann.

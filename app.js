@@ -689,6 +689,7 @@ const FEATURES = [
     ["wish_meeting", "📍 Eigenen Treffpunkt vorschlagen", "bei der Anfrage"],
     ["hour_reminder", "🔔 Erinnerung 1 Stunde vorher", "Schüler/innen bekommen ca. 1 Std. vor der Fahrstunde eine Mitteilung", false],
     ["calendar_export", "📅 „In meinen Kalender“", "Schüler/innen übernehmen die Fahrstunde mit einem Tipp in ihren Handy-Kalender"],
+    ["queue", "✋ Schon angefragte Termine trotzdem anfragen", "höchstens 2 Anfragen pro Termin – du siehst, wer zuerst angefragt hat (① ②). Uhrzeiten unter Buchungsregeln"],
     ["waitlist", "⏳ Warteliste", "Schüler/innen werden benachrichtigt, sobald an ihrem Wunschtag etwas frei wird"],
     ["feedback", "📝 Selbsteinschätzung der Schüler/innen", "freiwillig: Gefühl (😊/😐/😟), Gefühle, Schwieriges und Übungswünsche antippen – nur du siehst es"],
     ["reflect_push", "🔔 Nach dem Abhaken an die Selbsteinschätzung erinnern", "Schüler/innen bekommen eine kurze Mitteilung, dass sie die Fahrstunde einschätzen können"],
@@ -6265,29 +6266,34 @@ function bookingWindowSettings() {
 // Schon angefragte (noch nicht bestätigte) Termine: dürfen weitere Schüler/innen trotzdem anfragen (Platz 2, 3 …)?
 function queueSettings() {
   const st = state.settings;
-  let mode = st.queue_mode || "day";
+  let mode = st.queue_mode === "times" ? "times" : "day";
+  const on = el("input", { type: "checkbox", checked: feat("queue") && st.queue_mode !== "off" });
   const from = el("input", { type: "time", step: 900, value: (st.queue_from || "14:00").slice(0, 5) });
   const to = el("input", { type: "time", step: 900, value: (st.queue_to || "18:00").slice(0, 5) });
   const timesBox = el("div", { class: "row", style: "max-width:320px" }, el("div", {}, el("label", {}, "von"), from), el("div", {}, el("label", {}, "bis"), to));
-  const MODES = [["day", "✅ Ganzer Tag"], ["times", "🕐 Nur zu bestimmten Uhrzeiten"], ["off", "⛔ Aus"]];
+  const MODES = [["day", "✅ Ganzer Tag"], ["times", "🕐 Nur zu bestimmten Uhrzeiten"]];
   const modeBtns = MODES.map(([m, t]) => el("button", { type: "button", class: "tab", onclick: () => { mode = m; paint(); } }, t));
-  const paint = () => { modeBtns.forEach((b, i) => b.classList.toggle("active", MODES[i][0] === mode)); timesBox.hidden = mode !== "times"; };
+  const modeBox = el("div", {}, el("p", { class: "muted small", style: "margin:8px 0 4px" }, "Gilt für Termine, die in diesem Zeitraum beginnen:"),
+    el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns), timesBox);
+  const paint = () => { modeBtns.forEach((b, i) => b.classList.toggle("active", MODES[i][0] === mode)); timesBox.hidden = mode !== "times"; modeBox.hidden = !on.checked; };
+  on.addEventListener("change", paint);
   const save = el("button", { class: "btn small" }, "Speichern");
   save.onclick = () => busy(save, async () => {
-    if (mode === "times" && !(from.value && to.value && from.value < to.value)) throw new Error("„bis“ muss nach „von“ liegen");
-    const v = { queue_mode: mode, queue_from: mode === "times" ? from.value : null, queue_to: mode === "times" ? to.value : null };
+    if (on.checked && mode === "times" && !(from.value && to.value && from.value < to.value)) throw new Error("„bis“ muss nach „von“ liegen");
+    const features = { ...(st.features || {}), queue: on.checked };
+    const v = { features, queue_mode: mode, queue_from: mode === "times" ? from.value : null, queue_to: mode === "times" ? to.value : null };
     const { error } = await sb.from("settings").update(v).eq("teacher_id", state.profile.id);
     if (error) throw error;
     Object.assign(state.settings, v);
-    toast(mode === "off" ? "Angefragte Termine kann jetzt niemand mehr zusätzlich anfragen."
-      : mode === "times" ? `Zusätzlich anfragen geht jetzt nur für Termine von ${from.value} bis ${to.value} Uhr.` : "Angefragte Termine können jetzt den ganzen Tag zusätzlich angefragt werden.");
+    toast(!on.checked ? "Ausgeschaltet – angefragte Termine kann niemand mehr zusätzlich anfragen."
+      : mode === "times" ? `Eingeschaltet für Termine von ${from.value} bis ${to.value} Uhr.` : "Eingeschaltet für den ganzen Tag.");
   });
   paint();
   return el("div", {},
     el("h3", { style: "margin-top:18px" }, "Schon angefragte Termine trotzdem anfragen?"),
-    el("p", { class: "muted small" }, "Hat jemand einen Termin angefragt und du hast noch nicht bestätigt, sehen die anderen Schüler/innen „Schon angefragt – du kannst trotzdem anfragen“. Du siehst, wer zuerst angefragt hat (① ② ③). Lehnst du die erste Anfrage ab oder wird sie zurückgezogen, rückt die/der Nächste automatisch auf Platz 1. Bestätigst du, bekommen die anderen automatisch eine Absage."),
-    el("p", { class: "muted small" }, "Gilt für Termine, die in diesem Zeitraum beginnen:"),
-    el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns), timesBox,
+    el("p", { class: "muted small" }, "Hat jemand einen Termin angefragt und du hast noch nicht bestätigt, kann eine zweite Person ihn trotzdem anfragen (höchstens 2 Anfragen pro Termin). Du siehst, wer zuerst angefragt hat (① ②). Lehnst du ① ab oder wird sie zurückgezogen, rückt ② automatisch nach. Bestätigst du ①, bekommt ② automatisch eine Absage."),
+    el("label", { class: "check" }, on, el("span", {}, el("b", {}, "Funktion eingeschaltet"))),
+    modeBox,
     el("div", { class: "actions" }, save));
 }
 
@@ -6430,12 +6436,12 @@ async function studentCalendar() {
     const past = new Date(s.starts_at).getTime() < now;
     const cls = s.mine && past ? "past" : s.status;
     // Schon angefragt, aber noch nicht bestätigt: trotzdem anfragen (Platz 2, 3 …), wenn der Fahrlehrer das erlaubt
-    const queueAble = !s.mine && !past && s.status === "requested" && !s.my_queue && !!s.queue_ok;
+    const queueAble = feat("queue") && !s.mine && !past && s.status === "requested" && !s.my_queue && !!s.queue_ok;
     const label = s.mine
       ? (s.status === "confirmed" ? "Deine Fahrstunde"
         : s.status === "offered" ? "📨 Für dich – bitte zusagen" : "Deine Anfrage – wartet")
       : s.my_queue ? el("span", {}, `⏳ Deine Anfrage – Platz ${s.queue_pos || 2}`, el("div", { class: "slot-hint" }, "Du rückst nach, falls die Anfrage vor dir nicht bestätigt wird"))
-      : queueAble ? el("span", {}, "Schon angefragt" + (s.queue_len ? ` (${s.queue_len + 1}×)` : ""), el("div", { class: "slot-hint" }, "✋ Trotzdem anfragen lohnt sich oft – versuch dein Glück!"))
+      : queueAble ? el("span", {}, "Schon angefragt", el("div", { class: "slot-hint" }, "✋ Trotzdem anfragen lohnt sich oft – versuch dein Glück!"))
       : s.status === "requested" ? el("span", {}, "Von jemandem angefragt", el("div", { class: "slot-hint" }, "↻ Wird evtl. wieder frei – schau später nochmal rein"))
       : earlyStartMs(s) ? el("span", {}, "Antippen zum Anfragen", el("div", { class: "slot-early" }, `⏰ Auch früher möglich: ab ${fmtTime(new Date(earlyStartMs(s)))} Uhr`))
       : "Antippen zum Anfragen";
@@ -6665,14 +6671,14 @@ function openQueueRequest(s) {
   openModal("Trotzdem anfragen?",
     el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
     el("div", { class: "notice wish" }, el("b", {}, "ℹ️ Schon angefragt: "),
-      s.queue_len ? `Vor dir haben schon ${s.queue_len + 1} Schüler/innen angefragt.` : "Jemand hat diesen Termin schon vor dir angefragt.",
+      "Jemand hat diesen Termin schon vor dir angefragt.",
       " Dein Fahrlehrer hat aber noch nicht bestätigt."),
     el("div", { class: "notice" }, el("b", {}, "🍀 Die Chancen sind nicht sehr hoch – aber eine Anfrage lohnt sich oft! "),
       "Meistens bekommt die Person den Termin, die zuerst angefragt hat. ",
       "Manchmal fragen Schüler/innen aber dieselbe Uhrzeit an mehreren Tagen an – dann wird einer der Termine wieder frei. ",
       "Wer schon angefragt hat, rückt dann als Erste/r nach. Also: nutz deine Chance und versuch dein Glück! ",
       "Schau am besten trotzdem auch nach einem freien Termin."),
-    el("p", {}, `Du kommst auf `, el("b", {}, `Platz ${pos}`), ". Wird die Anfrage vor dir abgelehnt oder zurückgezogen, rückst du automatisch nach – du bekommst dann eine Mitteilung. Wird sie bestätigt, bekommst du eine Absage."),
+    el("p", {}, `Du kommst auf `, el("b", {}, `Platz ${pos}`), " (mehr als 2 Anfragen pro Termin gehen nicht). Wird die Anfrage vor dir abgelehnt oder zurückgezogen, rückst du automatisch nach – du bekommst dann eine Mitteilung. Wird sie bestätigt, bekommst du eine Absage."),
     s.note ? el("div", { class: "notice wish" }, "📝 ", el("b", {}, "Hinweis: "), s.note) : null,
     meetingBox(meetingOf(s)),
     el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note,

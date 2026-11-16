@@ -2470,3 +2470,73 @@ language sql stable security definer set search_path = public as $$
   order by s.starts_at;
 $$;
 grant execute on function public.get_calendar(timestamptz, timestamptz) to authenticated;
+
+-- ===== Nachtrag 16.11.2026: Funktion ein-/ausschaltbar (Einstellungen → Funktionen „queue“) + höchstens 2 Anfragen pro Termin =====
+create or replace function public.queue_allowed(p_teacher uuid, p_start timestamptz)
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce((
+    select coalesce((st.features->>'queue')::boolean, true) and case st.queue_mode
+             when 'off' then false
+             when 'times' then (st.queue_from is null or (p_start at time zone 'Europe/Berlin')::time >= st.queue_from)
+                           and (st.queue_to   is null or (p_start at time zone 'Europe/Berlin')::time <  st.queue_to)
+             else true end
+    from settings st where st.teacher_id = p_teacher), true);
+$$;
+
+create or replace function public.queue_slot(p_slot uuid, p_note text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_start timestamptz; v_teacher uuid; f record; v_id uuid;
+begin
+  if not is_active() then raise exception 'Dein Zugang ist nicht freigeschaltet'; end if;
+  select starts_at, teacher_id into v_start, v_teacher from slots where id = p_slot and teacher_id = my_teacher_id();
+  if v_start is null then raise exception 'Termin nicht gefunden'; end if;
+  if v_start < now() then raise exception 'Termin liegt in der Vergangenheit'; end if;
+  if is_time_off(v_teacher, v_start) then raise exception 'An diesem Tag ist dein Fahrlehrer nicht verfügbar (Urlaub/frei).'; end if;
+  if not queue_allowed(v_teacher, v_start) then raise exception 'Zu dieser Uhrzeit nimmt dein Fahrlehrer keine weiteren Anfragen an.'; end if;
+  perform 1 from slots where id = p_slot for update;
+  select id, student_id, status into f from bookings where slot_id = p_slot and status in ('requested','offered','confirmed') limit 1;
+  if f.id is null then raise exception 'FREE'; end if;
+  if f.status <> 'requested' then raise exception 'Dieser Termin ist leider schon vergeben'; end if;
+  if f.student_id = auth.uid() then raise exception 'Diesen Termin hast du schon angefragt'; end if;
+  if exists (select 1 from bookings where slot_id = p_slot and student_id = auth.uid() and status = 'queued') then
+    raise exception 'Diesen Termin hast du schon angefragt';
+  end if;
+  -- Höchstens 2 Anfragen pro Termin: die erste + eine auf Platz 2
+  if exists (select 1 from bookings where slot_id = p_slot and status = 'queued') then
+    raise exception 'Für diesen Termin gibt es schon 2 Anfragen – mehr gehen nicht. Such dir bitte einen anderen Termin aus.';
+  end if;
+  insert into bookings (slot_id, student_id, status, student_note)
+  values (p_slot, auth.uid(), 'queued', nullif(left(trim(coalesce(p_note, '')), 300), ''))
+  returning id into v_id;
+  return v_id;
+end $$;
+
+create or replace function public.get_calendar(p_from timestamptz, p_to timestamptz)
+returns table (slot_id uuid, starts_at timestamptz, duration_min int, status text, mine boolean, meeting_point text,
+               earlier_from timestamptz, note text, my_queue uuid, queue_pos int, queue_len int, queue_ok boolean)
+language sql stable security definer set search_path = public as $$
+  select s.id, s.starts_at, s.duration_min,
+         coalesce(b.status, 'free'),
+         coalesce(b.student_id = auth.uid(), false),
+         coalesce(b.meeting_point, s.meeting_point),
+         case when b.id is null and s.earlier_from < s.starts_at and not exists (
+           select 1 from slots o join bookings ob on ob.slot_id = o.id and ob.status in ('requested','confirmed','offered')
+           where o.teacher_id = s.teacher_id and o.id <> s.id and o.starts_at < s.starts_at
+             and o.starts_at + make_interval(mins => o.duration_min) > s.earlier_from
+         ) then s.earlier_from end,
+         case when b.id is null or b.student_id = auth.uid() then s.note end,
+         q.id,
+         case when q.id is not null then 1 + (select count(*) from bookings x where x.slot_id = s.id and x.status = 'queued' and x.created_at <= q.created_at)::int end,
+         (select count(*) from bookings x where x.slot_id = s.id and x.status = 'queued')::int,
+         b.status = 'requested' and b.student_id <> auth.uid() and q.id is null and queue_allowed(s.teacher_id, s.starts_at)
+           and not exists (select 1 from bookings x where x.slot_id = s.id and x.status = 'queued')
+  from slots s
+  left join bookings b on b.slot_id = s.id and b.status in ('requested','confirmed','offered')
+  left join bookings q on q.slot_id = s.id and q.status = 'queued' and q.student_id = auth.uid()
+  where s.starts_at >= p_from and s.starts_at < p_to
+    and s.teacher_id = my_teacher_id()
+    and (b.id is null or b.status = 'requested' or b.student_id = auth.uid())
+    and (b.id is not null or not is_time_off(s.teacher_id, s.starts_at))
+    and is_active()
+  order by s.starts_at;
+$$;
