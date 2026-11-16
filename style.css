@@ -1044,3 +1044,12 @@ html.dark .hex-icon { color: #cbd5e1; }
 .late-seen.ok { color: #1f8a3b; font-weight: 600; }
 .late-ack { margin-left: 6px; padding: 2px 8px; }
 .last-lesson { border-left: 4px solid #2e7dbd; }
+
+/* Schon angefragt – trotzdem anfragen (Platz 2, 3 …) */
+.slot.queue-able { border-style: dashed; cursor: pointer; }
+.slot.queue-able .slot-hint { font-weight: 600; }
+.queue-card { background: var(--req-bg); border: 1px solid var(--req-bd); border-radius: 12px; padding: 8px 12px; margin: 12px 0; }
+.queue-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; border-top: 1px solid var(--req-bd); }
+.queue-row.first { border-top: 0; }
+.queue-row .btn { flex-shrink: 0; }
+.queue-num { font-size: 20px; line-height: 1.1; min-width: 24px; text-align: center; }

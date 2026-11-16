@@ -27,6 +27,7 @@ const NOT_HELD_TEXT: Record<string, (c: Ctx) => string> = {
 const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   request: (c) => ["📥 Neue Anfrage", `${c.name} möchte am ${c.when} fahren.`],
   exception: (c) => ["⚠️ Ausnahme-Bitte", `${c.name} bittet um eine Ausnahme: ${c.when}.`],
+  queued: (c) => ["📥 Weitere Anfrage (Platz 2+)", `${c.name} möchte ${c.when} ebenfalls – falls die erste Anfrage nicht klappt.`],
   withdraw: (c) => ["↩️ Anfrage zurückgezogen", `${c.name} hat die Anfrage für ${c.when} zurückgezogen.`],
   cancel: (c) => ["❌ Fahrstunde abgesagt", `${c.name} hat ${c.when} abgesagt${c.late ? " – Fehlstunde" : ""}.`],
   accept: (c) => ["✅ Angebot angenommen", `${c.name} hat ${c.when} zugesagt.`],
@@ -39,7 +40,7 @@ const STUDENT_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
 };
 const TEACHER_EVENTS: Record<string, (c: Ctx) => [string, string]> = {
   confirmed: (c) => ["✅ Fahrstunde bestätigt", `${c.when}${c.meet ? ` · 📍 ${c.meet}` : ""}`],
-  rejected: (c) => ["Anfrage abgelehnt", `Deine Anfrage für ${c.when} wurde leider abgelehnt.`],
+  rejected: (c) => ["Anfrage abgelehnt", `Deine Anfrage für ${c.when} wurde leider abgelehnt.${c.reply ? ` 💬 ${c.reply}` : ""}`],
   change: (c) => ["🔄 Terminänderung", `${c.t.Dein} möchte die Fahrstunde am ${c.when} ändern (Zeit oder Treffpunkt) – bitte zusagen oder ablehnen.`],
   offered: (c) => ["📨 Neues Angebot", `${c.t.Dein} bietet dir ${c.when} an – bitte zusagen oder absagen.`],
   assigned: (c) => ["📅 Neue Fahrstunde", `${c.when} wurde für dich eingetragen${c.meet ? ` · 📍 ${c.meet}` : ""}.`],
@@ -139,7 +140,7 @@ Deno.serve(async (req) => {
       messages.push({ to: user.id, title: "🔔 Mitteilungen sind an", body: "So sehen Mitteilungen vom Easy Fahrstundenplaner aus." });
     } else if (kind === "booking" && Array.isArray(ids) && ids.length && ids.length <= 60) {
       const { data: rows } = await admin.from("bookings")
-        .select("id,student_id,status,cancel_reason,late_cancel,meeting_point,admin_reply,late_student,late_teacher,profiles(*),slots(starts_at,teacher_id,meeting_point)")
+        .select("id,slot_id,student_id,status,cancel_reason,late_cancel,meeting_point,admin_reply,late_student,late_teacher,profiles(*),slots(starts_at,teacher_id,meeting_point)")
         .in("id", ids);
       for (const b of rows ?? []) {
         // deno-lint-ignore no-explicit-any
@@ -157,6 +158,31 @@ Deno.serve(async (req) => {
         } else if (user.id === slot.teacher_id && TEACHER_EVENTS[event]) {
           const [title, body] = TEACHER_EVENTS[event](ctx);
           messages.push({ to: b.student_id, title, body });
+        }
+      }
+      // Nachrücken (Datenbank-Trigger „queue_flow“): wer auf Platz 1 aufgerückt ist bzw. wessen Termin vergeben wurde
+      const slotIds = [...new Set((rows ?? []).map((b) => {
+        // deno-lint-ignore no-explicit-any
+        const sl: any = b.slots;
+        return sl && (user.id === b.student_id || user.id === sl.teacher_id) ? (b as { slot_id?: string }).slot_id ?? null : null;
+      }).filter(Boolean))] as string[];
+      if (slotIds.length) {
+        const { data: qs } = await admin.from("bookings")
+          .select("id,student_id,status,queue_event,admin_reply,profiles(*),slots(starts_at,teacher_id)")
+          .in("slot_id", slotIds).not("queue_event", "is", null);
+        for (const q of qs ?? []) {
+          // deno-lint-ignore no-explicit-any
+          const sl: any = q.slots, p: any = q.profiles;
+          if (!sl) continue;
+          const t = teacherWords((await teacherSettings(sl.teacher_id))?.teacher_gender);
+          const when = fmtWhen(sl.starts_at);
+          if (q.queue_event === "promoted" && q.status === "requested") {
+            messages.push({ to: q.student_id, title: "⬆️ Du bist nachgerückt", body: `Deine Anfrage für ${when} ist jetzt an erster Stelle – ${t.Dein} entscheidet bald.` });
+            if (user.id !== sl.teacher_id) messages.push({ to: sl.teacher_id, title: "📥 Nachgerückt", body: `${fullName(p)} ist für ${when} jetzt an erster Stelle – bitte bestätigen oder ablehnen.` });
+          } else if (q.queue_event === "lost" && q.status === "rejected") {
+            messages.push({ to: q.student_id, title: "Termin vergeben", body: `${when} ist leider an jemand anderen vergeben.${q.admin_reply ? ` 💬 ${q.admin_reply}` : ""} Such dir gern einen anderen freien Termin aus.` });
+          }
+          await admin.from("bookings").update({ queue_event: null }).eq("id", q.id);
         }
       }
     } else if (kind === "broadcast" && Array.isArray(ids) && ids.length && ids.length <= 500) {

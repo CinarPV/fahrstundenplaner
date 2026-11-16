@@ -27,6 +27,8 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - **🎓 Prüfung zuordnen:** Im selben Fenster wie Termine. Schüler, Art (Praxis/Theorie), Beginn, Dauer (Standard **55 Min.**) und Ort wählen. Die Prüfung erscheint gold im Kalender von Fahrlehrer und Schüler. Danach „bestanden“ oder „nicht bestanden“ eintragen; bei „nicht bestanden“ gleich den nächsten Termin, bis bestanden ist.
 - **🏖️ Tage sperren (Urlaub, frei, krank …):** Im Kalender oben. An gesperrten Tagen kann niemand anfragen, beim Anlegen werden sie übersprungen, Schüler sehen einen Hinweis.
 - **⧉ Woche kopieren:** Eine fertig geplante Woche mit einem Klick in die nächsten Wochen übernehmen. Termine, die es schon gibt, werden übersprungen.
+- **Wer hat zuerst angefragt?** Bei mehreren Anfragen für denselben Termin stehen alle in Reihenfolge da (① ② ③ mit Datum und Uhrzeit der Anfrage). Mit **„✓ Stattdessen bestätigen“** geht der Termin direkt an ② (① bekommt eine Absage). Unter Einstellungen → Buchungsregeln: **ganzer Tag**, **nur bestimmte Uhrzeiten** oder **aus**.
+- **Ablehnen mit Grund (freiwillig):** Beim Ablehnen öffnet sich ein Feld für eine kurze Erklärung (mit Text-Bausteinen). Der/die Schüler/in sieht sie in der App, in der Mitteilung und in der WhatsApp-Nachricht.
 - Anfragen **bestätigen** (verbindlich) oder **ablehnen**. Dabei lassen sich die Uhrzeit anpassen und eine Antwort schreiben, etwa „Ausweis + Brille mitbringen, Treffpunkt Bahnhof“.
 - Nach der Fahrstunde **abhaken**: Die geplanten Minuten stehen schon drin. Bei kürzerer oder längerer Fahrt passt du sie mit −15/−5/+5/+15 an und setzt dann den Haken.
 - Nicht gefahren? Den Grund ankreuzen: **🤒 Krank gemeldet**, **🙋 Schüler hat abgesagt** oder **🚫 Ich habe abgesagt**. Dazu kommen eine kurze Notiz und der Haken **„Fehlstunde – kostenpflichtig“**, der nach der Frist automatisch vorausgewählt ist. Ein zukünftiger Termin wird dabei wieder frei.
@@ -65,6 +67,8 @@ Web-App, mit der Fahrlehrer Fahrstunden freigeben und Fahrschüler sie per Link 
 - Unter „Meine Fahrstunden“ eine **nummerierte Liste aller gefahrenen Fahrstunden** (Datum, Uhrzeit, Minuten, Gesamtsumme) sehen.
 - Unter „Meine Fahrstunden“ den Status, die Antwort des Fahrlehrers, die **gefahrenen Minuten** und **„Abgesagt – krank“** sehen.
 - Eine noch unbestätigte Anfrage zurückziehen.
+- **Schon angefragte Termine trotzdem anfragen:** Hat jemand einen Termin angefragt, der noch nicht bestätigt ist, steht dort „Schon angefragt – du kannst trotzdem anfragen“. Man kommt auf **Platz 2, 3 …** und rückt automatisch nach (mit Mitteilung), wenn die Anfrage davor abgelehnt oder zurückgezogen wird. Wird sie bestätigt, gibt es automatisch eine Absage.
+- Unter „Meine Fahrstunden“ stehen **nicht angenommene Anfragen** der letzten 14 Tage – mit dem Grund des Fahrlehrers.
 - **Angebote vom Fahrlehrer** erscheinen lila und ganz oben. Der Schüler tippt auf **✓ Zusagen** oder **✗ Absagen**, optional mit kurzer Nachricht. Danach erscheint ein Knopf, mit dem er den Fahrlehrer per WhatsApp informiert.
 - Die **WhatsApp-Nummer ist bei der Registrierung Pflicht**, damit der Fahrlehrer den Schüler erreichen kann.
 

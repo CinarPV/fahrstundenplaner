@@ -449,7 +449,7 @@ function fmtLessons(m) {
 }
 const fullName = (p) => (p ? `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unbekannt" : "Unbekannt");
 const STATUS_TEXT = {
-  requested: "Angefragt", confirmed: "Bestätigt", rejected: "Abgelehnt", cancelled: "Anfrage zurückgezogen",
+  requested: "Angefragt", queued: "Angefragt – wartet auf Platz 1", confirmed: "Bestätigt", rejected: "Abgelehnt", cancelled: "Anfrage zurückgezogen",
   offered: "Angeboten – wartet auf Zusage", declined: "Angebot abgelehnt",
   sick: "Krank gemeldet", cancelled_student: "Vom Schüler abgesagt", cancelled_teacher: "Vom Fahrlehrer abgesagt", no_show: "Nicht erschienen",
 };
@@ -958,7 +958,7 @@ function profileFields(p) {
 
 // Export der Fahrstunden eines Schülers: Excel (CSV) oder Drucken/PDF
 function lessonRows(rows) {
-  return rows.filter((b) => b.slots && b.status !== "requested" && b.status !== "cancelled")
+  return rows.filter((b) => b.slots && b.status !== "requested" && b.status !== "queued" && b.status !== "cancelled")
     .sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at))
     .map((b) => ({
       date: new Date(b.slots.starts_at).toLocaleDateString("de-DE"),
@@ -2389,7 +2389,7 @@ async function openSick(kind = "krank") {
       const [a, b] = range();
       const [st, bk] = await Promise.all([
         students.length ? { data: students } : myProfiles().select("id,first_name,last_name,email,phone").eq("role", "student").eq("status", "active").order("last_name"),
-        sb.from("bookings").select("id,status,student_id,slots!inner(starts_at,duration_min)").in("status", ["requested", "offered", "confirmed"])
+        sb.from("bookings").select("id,status,student_id,slots!inner(starts_at,duration_min)").in("status", ["requested", "queued", "offered", "confirmed"])
           .is("actual_minutes", null).gte("slots.starts_at", a.toISOString()).lt("slots.starts_at", b.toISOString()),
       ]);
       if (st.error) throw st.error;
@@ -2414,7 +2414,7 @@ async function openSick(kind = "krank") {
     if (!confirm(`${K.label} für ${span} eintragen und senden?` + (cancel.checked && hit.length ? `\n\n${hit.length} Fahrstunde(n)/Anfrage(n) werden abgesagt.` : ""))) return;
     if (cancel.checked && hit.length) {
       const now = new Date().toISOString(), reason = K.reason;
-      const conf = hit.filter((x) => x.status !== "requested").map((x) => x.id), req = hit.filter((x) => x.status === "requested").map((x) => x.id);
+      const conf = hit.filter((x) => x.status !== "requested" && x.status !== "queued").map((x) => x.id), req = hit.filter((x) => x.status === "requested" || x.status === "queued").map((x) => x.id);
       if (conf.length) { const { error } = await sb.from("bookings").update({ status: "cancelled_teacher", cancel_reason: reason, decided_at: now }).in("id", conf); if (error) throw error; }
       if (req.length) { const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reason, decided_at: now }).in("id", req); if (error) throw error; }
     }
@@ -3198,7 +3198,8 @@ async function adminCalendar() {
     if (!b && notHeld && (past || notHeld.late_cancel)) label = `${NOT_HELD_ICON[notHeld.status]} ${fullName(notHeld.profiles)} – ${STATUS_TEXT[notHeld.status]}`
       + (notHeld.late_cancel ? " · Fehlstunde" : "") + (past ? "" : " · wieder frei");
     if (!b && notHeld && past) tag = "nicht stattgefunden"; // angesetzt, aber abgesagt/krank – Grund steht im Text
-    if (b && b.status === "requested") { cls = "requested"; tag = b.over_limit ? "⚠️ Ausnahme" : "angefragt"; label = fullName(b.profiles) + glasses(b.profiles) + (b.wish_start ? ` · ⏰ Wunsch ${fmtTime(b.wish_start)}` : ""); }
+    const waiting = (s.bookings || []).filter((x) => x.status === "queued").length;
+    if (b && b.status === "requested") { cls = "requested"; tag = b.over_limit ? "⚠️ Ausnahme" : "angefragt"; label = (waiting ? "① " : "") + fullName(b.profiles) + glasses(b.profiles) + (b.wish_start ? ` · ⏰ Wunsch ${fmtTime(b.wish_start)}` : "") + (waiting ? ` · +${waiting} weitere` : ""); }
     if (b && b.status === "offered") { cls = "offered"; tag = "angeboten"; label = fullName(b.profiles) + " – wartet auf Zusage"; }
     if (b && b.status === "confirmed") {
       cls = b.actual_minutes !== null ? "done" : "confirmed";
@@ -4248,6 +4249,59 @@ async function openChangeRequest(slotId) {
 }
 const movedText = (n) => (n ? ` · ${n} ${n === 1 ? "freier Termin" : "freie Termine"} verschoben` : "");
 
+// ① ② ③ … – Reihenfolge der Anfragen
+const NUM_CIRCLE = ["①", "②", "③", "④", "⑤", "⑥", "⑦"];
+const queueNum = (i) => NUM_CIRCLE[i] || `${i + 1}.`;
+const fmtAsked = (iso) => `angefragt ${fmtDay(iso)}, ${fmtTime(iso)} Uhr`;
+const REJECT_CHIPS = ["Da habe ich leider schon einen anderen Termin.", "Ich fahre an dem Tag nicht.", "Der Termin ist schon an jemand anderen vergeben.", "Bitte frag einen anderen Termin an.", "Du hast diese Woche schon genug Fahrstunden.", "Vor der Prüfung haben andere Vorrang."];
+const reasonChips = (ta) => el("div", { class: "reply-chips" }, REJECT_CHIPS.map((c) => el("button", { type: "button", class: "chip", onclick: () => {
+  ta.value = (ta.value.trim() ? ta.value.trim() + " " : "") + c; ta.focus(); } }, c)));
+
+// Anfrage ablehnen – Grund optional; sieht der/die Schüler/in in der App, in der Mitteilung und in der WhatsApp-Nachricht
+// queue = Wartende (Platz 2, 3 …) – die/der Erste rückt danach automatisch nach
+function openRejectRequest(b, slot, preset = "", queue = []) {
+  const why = el("textarea", { maxlength: 1000, rows: 3, placeholder: "Optional, z. B. „Da habe ich leider schon einen anderen Termin.“" }, preset || "");
+  const next = queue[0];
+  const btn = el("button", { class: "btn danger" }, "✗ Anfrage ablehnen");
+  btn.onclick = () => busy(btn, async () => {
+    const reason = why.value.trim();
+    const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reason || null, decided_at: new Date().toISOString() }).eq("id", b.id);
+    if (error) throw error;
+    pushNotify("booking", b.id, "rejected");
+    notifyStep(next ? `Anfrage abgelehnt – ${fullName(next.profiles)} ist jetzt auf Platz 1` : "Anfrage abgelehnt – Termin ist wieder frei",
+      b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, slot, reason));
+  });
+  openModal("Anfrage ablehnen",
+    el("p", {}, el("b", {}, fullName(b.profiles)), el("br"), `${fmtDate(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)}`),
+    el("label", {}, "Grund / Erklärung für den/die Schüler/in (optional)"), why, reasonChips(why),
+    el("p", { class: "muted small", style: "margin:4px 0 0" }, "Kein Muss. Der/die Schüler/in sieht den Text in der App unter „Meine Fahrstunden“ und in der Mitteilung."),
+    next ? el("div", { class: "notice wish" }, el("b", {}, "⬆️ Danach: "), `${fullName(next.profiles)} (${fmtAsked(next.created_at)}) rückt automatisch auf Platz 1 und bekommt eine Mitteilung. Du bestätigst dann wie gewohnt.`) : null,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+// Termin direkt einer/einem Wartenden geben: erste Anfrage wird abgelehnt (Grund optional), diese/r wird bestätigt
+function openGiveToQueued(q, first, slot) {
+  const why = el("textarea", { maxlength: 1000, rows: 2, placeholder: "Optional, z. B. „Vor der Prüfung haben andere Vorrang.“" });
+  const btn = el("button", { class: "btn ok" }, `✓ ${fullName(q.profiles)} bestätigen`);
+  btn.onclick = () => busy(btn, async () => {
+    const reason = why.value.trim();
+    const { data: oldId, error } = await sb.rpc("give_to_queued", { p_booking: q.id, p_reason: reason || null });
+    if (error) throw error;
+    pushNotify("booking", q.id, "confirmed");
+    if (oldId) pushNotify("booking", oldId, "rejected");
+    notifyStep(`Fahrstunde für ${fullName(q.profiles)} bestätigt`, q.profiles && q.profiles.phone, waTextForStudent("confirmed", q.profiles, slot, "", meetingOf({ meeting_point: slot.meeting_point })),
+      "den/die Schüler/in",
+      first && first.profiles && first.profiles.phone ? waButton(first.profiles.phone, waTextForStudent("rejected", first.profiles, slot, reason), `💬 ${fullName(first.profiles)} die Absage schicken`) : null);
+  });
+  openModal("Termin stattdessen vergeben?",
+    el("p", {}, `${fmtDate(slot.starts_at)}, ${fmtRange(slot.starts_at, slot.duration_min)}`),
+    el("div", { class: "notice" }, el("b", {}, `${fullName(q.profiles)}`), " bekommt den Termin (bestätigt).",
+      first ? [el("br"), el("b", {}, fullName(first.profiles)), ` hat zuerst angefragt (${fmtAsked(first.created_at)}) und bekommt eine Absage.`] : null,
+      " Alle anderen Wartenden bekommen ebenfalls eine Absage."),
+    first ? [el("label", {}, `Grund für ${fullName(first.profiles)} (optional)`), why, reasonChips(why)] : null,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
 async function openAdminSlot(slotId) {
   const { data: slot, error } = await sb.from("slots")
     .select("id,starts_at,duration_min,meeting_point,note,original_start,bookings(id,status,student_id,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,change_meeting,wish_start,wish_meeting,counter_from,change_start,change_dur,change_note,no_pay,teacher_note,booked_on,created_at,decided_at,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,lesson_topics,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone))")
@@ -4255,7 +4309,9 @@ async function openAdminSlot(slotId) {
   if (error) return fail(error);
 
   const b = activeBooking(slot);
-  const history = (slot.bookings || []).filter((x) => x !== b).sort((x, y) => x.created_at.localeCompare(y.created_at));
+  const history = (slot.bookings || []).filter((x) => x !== b && x.status !== "queued").sort((x, y) => x.created_at.localeCompare(y.created_at));
+  // Weitere Anfragen auf Platz 2, 3 … – in der Reihenfolge, in der angefragt wurde
+  const queue = (slot.bookings || []).filter((x) => x.status === "queued").sort((x, y) => x.created_at.localeCompare(y.created_at));
 
   const date = el("input", { type: "date", value: dateInput(slot.starts_at) });
   const time = el("input", { type: "time", value: timeInput(slot.starts_at), step: 300 });
@@ -4497,15 +4553,22 @@ async function openAdminSlot(slotId) {
         notifyStep("Fahrstunde bestätigt" + movedText(moved), b.profiles && b.profiles.phone, waTextForStudent("confirmed", b.profiles, newSlot, noteText, meetingOf({ meeting_point: meet.value() })));
       });
       const no = el("button", { class: "btn danger" }, "Ablehnen");
-      no.onclick = () => busy(no, async () => {
-        if (!confirm("Anfrage ablehnen? Der Termin wird danach wieder frei.")) return;
-        const { error } = await sb.from("bookings").update({ status: "rejected", admin_reply: reply.value.trim() || null, decided_at: new Date().toISOString() }).eq("id", b.id);
-        if (error) throw error;
-        pushNotify("booking", b.id, "rejected");
-        notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, slot, reply.value.trim()));
-      });
+      no.onclick = () => openRejectRequest(b, slot, reply.value.trim(), queue);
       const counter = el("button", { class: "btn", onclick: () => openCounterOffer(b, slot) }, "⏱ Gegenangebot");
       parts.push(el("div", { class: "actions" }, ok, counter, no));
+      // Reihenfolge: wer hat zuerst angefragt? ① = diese Anfrage, ② ③ … warten
+      if (queue.length) parts.push(el("div", { class: "queue-card" },
+        el("div", { class: "hist-title" }, `✋ Weitere Anfragen für diesen Termin (${queue.length})`),
+        el("div", { class: "queue-row first" }, el("span", { class: "queue-num" }, queueNum(0)),
+          el("div", {}, el("b", {}, fullName(b.profiles)), " ", el("span", { class: "badge requested" }, "zuerst angefragt"),
+            el("div", { class: "small muted" }, fmtAsked(b.created_at)))),
+        queue.map((q, i) => el("div", { class: "queue-row" }, el("span", { class: "queue-num" }, queueNum(i + 1)),
+          el("div", { style: "flex:1" },
+            el("button", { type: "button", class: "name-link", onclick: () => openStudentById(q.student_id) }, el("b", {}, fullName(q.profiles))), " ", studentTags(q.profiles),
+            el("div", { class: "small muted" }, fmtAsked(q.created_at)),
+            q.student_note ? el("div", { class: "note", style: "margin:4px 0 0" }, q.student_note) : null),
+          el("button", { class: "btn small ok", onclick: () => openGiveToQueued(q, b, slot) }, "✓ Stattdessen bestätigen"))),
+        el("p", { class: "small muted", style: "margin:6px 0 0" }, "Lehnst du ① ab, rückt ② automatisch nach. Bestätigst du ①, bekommen alle anderen automatisch eine Absage.")));
     } else {
       const save = el("button", { class: "btn" }, "Änderungen speichern");
       // Bestätigte, noch nicht gefahrene Fahrstunde: Zeit/Dauer ändern = Anfrage an den Schüler (er muss zusagen)
@@ -4965,6 +5028,25 @@ async function adminRequests(opts = {}) {
   const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
     .eq("answer_seen", false).order("answer_at", { ascending: false });
   const unseen = answers.error ? [] : (answers.data || []).filter((b) => b.slots && b.answer);
+  // Weitere Anfragen (Platz 2, 3 …) zu den offenen Anfragen – nach Reihenfolge der Anfrage
+  const qSlots = (req.data || []).filter((b) => b.slots).map((b) => b.slots.id);
+  const { data: queuedAll } = qSlots.length
+    ? await sb.from("bookings").select("id,slot_id,student_id,student_note,created_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone)")
+      .eq("status", "queued").in("slot_id", qSlots).order("created_at")
+    : { data: [] };
+  const queueOf = (b) => (queuedAll || []).filter((q) => q.slot_id === b.slots.id);
+  const queueInfo = (b) => {
+    const q = queueOf(b);
+    if (!q.length) return null;
+    return el("div", { class: "queue-card", style: "margin:8px 0 0" },
+      el("div", { class: "queue-row first" }, el("span", { class: "queue-num" }, queueNum(0)),
+        el("div", {}, el("b", {}, fullName(b.profiles)), " – zuerst angefragt", el("div", { class: "small muted" }, fmtAsked(b.created_at)))),
+      q.map((x, i) => el("div", { class: "queue-row" }, el("span", { class: "queue-num" }, queueNum(i + 1)),
+        el("div", { style: "flex:1" }, el("b", {}, fullName(x.profiles)), " ", studentTags(x.profiles), el("div", { class: "small muted" }, fmtAsked(x.created_at)),
+          x.student_note ? el("div", { class: "note", style: "margin:4px 0 0" }, x.student_note) : null),
+        el("button", { class: "btn small ok", onclick: () => openGiveToQueued(x, b, b.slots) }, "✓ Stattdessen"))),
+      el("div", { class: "small muted", style: "margin-top:4px" }, "Lehnst du ① ab, rückt ② automatisch nach."));
+  };
   const unseenIds = new Set(unseen.map((b) => b.id));
   if (offers.error) throw offers.error;
   if (req.error) throw req.error;
@@ -5021,16 +5103,9 @@ async function adminRequests(opts = {}) {
     ok.onclick = () => busy(ok, confirmAt(true));
     const orig = b.wish_start ? el("button", { class: "btn small ghost" }, `✓ Zu ${fmtTime(b.slots.starts_at)} Uhr (wie angelegt)`) : null;
     if (orig) orig.onclick = () => busy(orig, confirmAt(false));
-    const no = el("button", { class: "btn small danger" }, "✗ Ablehnen");
-    no.onclick = () => busy(no, async () => {
-      if (!confirm(`Anfrage von ${fullName(b.profiles)} ablehnen? Der Termin wird danach wieder frei.`)) return;
-      const { error } = await sb.from("bookings").update({ status: "rejected", decided_at: new Date().toISOString() }).eq("id", b.id);
-      if (error) throw error;
-      pushNotify("booking", b.id, "rejected");
-      notifyStep("Anfrage abgelehnt – Termin ist wieder frei", b.profiles && b.profiles.phone, waTextForStudent("rejected", b.profiles, b.slots, ""));
-    });
+    const no = el("button", { class: "btn small danger", onclick: () => openRejectRequest(b, b.slots, "", queueOf(b)) }, "✗ Ablehnen");
     const counter = b.wish_start ? el("button", { class: "btn small", onclick: () => openCounterOffer(b, b.slots) }, "⏱ Gegenangebot") : null;
-    return [wm ? wm.node : null, el("div", { class: "actions", style: "margin-top:8px" }, ok, orig, counter, no)];
+    return [wm ? wm.node : null, queueInfo(b), el("div", { class: "actions", style: "margin-top:8px" }, ok, orig, counter, no)];
   };
 
   const seen = (b, patch = {}) => async () => {
@@ -6187,6 +6262,35 @@ function bookingWindowSettings() {
     el("div", { class: "actions" }, save));
 }
 
+// Schon angefragte (noch nicht bestätigte) Termine: dürfen weitere Schüler/innen trotzdem anfragen (Platz 2, 3 …)?
+function queueSettings() {
+  const st = state.settings;
+  let mode = st.queue_mode || "day";
+  const from = el("input", { type: "time", step: 900, value: (st.queue_from || "14:00").slice(0, 5) });
+  const to = el("input", { type: "time", step: 900, value: (st.queue_to || "18:00").slice(0, 5) });
+  const timesBox = el("div", { class: "row", style: "max-width:320px" }, el("div", {}, el("label", {}, "von"), from), el("div", {}, el("label", {}, "bis"), to));
+  const MODES = [["day", "✅ Ganzer Tag"], ["times", "🕐 Nur zu bestimmten Uhrzeiten"], ["off", "⛔ Aus"]];
+  const modeBtns = MODES.map(([m, t]) => el("button", { type: "button", class: "tab", onclick: () => { mode = m; paint(); } }, t));
+  const paint = () => { modeBtns.forEach((b, i) => b.classList.toggle("active", MODES[i][0] === mode)); timesBox.hidden = mode !== "times"; };
+  const save = el("button", { class: "btn small" }, "Speichern");
+  save.onclick = () => busy(save, async () => {
+    if (mode === "times" && !(from.value && to.value && from.value < to.value)) throw new Error("„bis“ muss nach „von“ liegen");
+    const v = { queue_mode: mode, queue_from: mode === "times" ? from.value : null, queue_to: mode === "times" ? to.value : null };
+    const { error } = await sb.from("settings").update(v).eq("teacher_id", state.profile.id);
+    if (error) throw error;
+    Object.assign(state.settings, v);
+    toast(mode === "off" ? "Angefragte Termine kann jetzt niemand mehr zusätzlich anfragen."
+      : mode === "times" ? `Zusätzlich anfragen geht jetzt nur für Termine von ${from.value} bis ${to.value} Uhr.` : "Angefragte Termine können jetzt den ganzen Tag zusätzlich angefragt werden.");
+  });
+  paint();
+  return el("div", {},
+    el("h3", { style: "margin-top:18px" }, "Schon angefragte Termine trotzdem anfragen?"),
+    el("p", { class: "muted small" }, "Hat jemand einen Termin angefragt und du hast noch nicht bestätigt, sehen die anderen Schüler/innen „Schon angefragt – du kannst trotzdem anfragen“. Du siehst, wer zuerst angefragt hat (① ② ③). Lehnst du die erste Anfrage ab oder wird sie zurückgezogen, rückt die/der Nächste automatisch auf Platz 1. Bestätigst du, bekommen die anderen automatisch eine Absage."),
+    el("p", { class: "muted small" }, "Gilt für Termine, die in diesem Zeitraum beginnen:"),
+    el("div", { class: "tabs", style: "flex-wrap:wrap" }, modeBtns), timesBox,
+    el("div", { class: "actions" }, save));
+}
+
 function adminSettings() {
   const dur = durationControl(state.settings.default_duration);
   const maxOpen = el("input", { type: "number", min: 0, max: 50, value: state.settings.max_open ?? 3, style: "max-width:110px" });
@@ -6253,6 +6357,7 @@ function adminSettings() {
       "). ", legalLink("impressum", "Impressum ansehen")) : null,
     group("📅", "Buchungsregeln", sum.rules,
       bookingWindowSettings(),
+      queueSettings(),
       el("h3", { style: "margin-top:18px" }, "Höchstzahl Fahrstunden pro Woche"),
       el("p", { class: "muted small" }, "So viele Termine darf ein/e Schüler/in pro Woche (Mo–So) anfragen bzw. haben, z. B. 1 oder 2. 0 = unbegrenzt. Will er/sie mehr, kann er/sie um eine Ausnahme bitten. Einzelne Schüler/innen (z. B. vor der Prüfung) kannst du auf ihrer Karte freigeben."),
       el("label", { class: "check" }, winAll, el("span", {}, "Eine Höchstzahl für den ganzen Tag")),
@@ -6324,18 +6429,23 @@ async function studentCalendar() {
   const grid = weekGrid(slots, (s) => {
     const past = new Date(s.starts_at).getTime() < now;
     const cls = s.mine && past ? "past" : s.status;
+    // Schon angefragt, aber noch nicht bestätigt: trotzdem anfragen (Platz 2, 3 …), wenn der Fahrlehrer das erlaubt
+    const queueAble = !s.mine && !past && s.status === "requested" && !s.my_queue && !!s.queue_ok;
     const label = s.mine
       ? (s.status === "confirmed" ? "Deine Fahrstunde"
         : s.status === "offered" ? "📨 Für dich – bitte zusagen" : "Deine Anfrage – wartet")
+      : s.my_queue ? el("span", {}, `⏳ Deine Anfrage – Platz ${s.queue_pos || 2}`, el("div", { class: "slot-hint" }, "Du rückst nach, falls die Anfrage vor dir nicht bestätigt wird"))
+      : queueAble ? el("span", {}, "Schon angefragt" + (s.queue_len ? ` (${s.queue_len + 1}×)` : ""), el("div", { class: "slot-hint" }, "✋ Du kannst trotzdem anfragen – mit etwas Glück gehört er dir"))
       : s.status === "requested" ? el("span", {}, "Von jemandem angefragt", el("div", { class: "slot-hint" }, "↻ Wird evtl. wieder frei – schau später nochmal rein"))
       : earlyStartMs(s) ? el("span", {}, "Antippen zum Anfragen", el("div", { class: "slot-early" }, `⏰ Auch früher möglich: ab ${fmtTime(new Date(earlyStartMs(s)))} Uhr`))
       : "Antippen zum Anfragen";
     const tag = s.mine && past ? "gefahren"
+      : s.my_queue ? `Platz ${s.queue_pos || 2}`
       : { free: "frei", requested: "angefragt", offered: "angeboten", confirmed: "bestätigt" }[s.status] || "";
-    const clickable = s.mine || (s.status === "free" && !past);
+    const clickable = s.mine || (s.status === "free" && !past) || queueAble || (!!s.my_queue && !past);
     const slotBtn = el("button", {
-      class: "slot " + cls + (s.mine ? " mine" : ""), disabled: !clickable,
-      onclick: clickable ? () => (s.mine ? goTab("mine") : openBooking(s)) : null,
+      class: "slot " + cls + (s.mine || s.my_queue ? " mine" : "") + (queueAble ? " queue-able" : ""), disabled: !clickable,
+      onclick: clickable ? () => (s.mine || s.my_queue ? goTab("mine") : queueAble ? openQueueRequest(s) : openBooking(s)) : null,
     }, slotHead(fmtRange(s.starts_at, s.duration_min), tag), label, s.note ? el("div", { class: "slot-note" }, "📝 " + s.note) : null);
     // Jede eigene bestätigte Fahrstunde lässt sich direkt im Kalender absagen
     const ownB = s.mine && s.status === "confirmed" && !past
@@ -6532,6 +6642,37 @@ function openBooking(s) {
       "Spätere Absagen werden als Fehlstunde berechnet und sind kostenpflichtig."),
     isLate(s.starts_at) ? el("div", { class: "notice danger" },
       "Kurzfristige Buchung: Die Absagefrist ist bereits abgelaufen. Wird diese Fahrstunde bestätigt, ist eine Absage kostenpflichtig.") : null,
+    el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+
+// Schon angefragter (noch nicht bestätigter) Termin: trotzdem anfragen – landet auf Platz 2, 3 …
+function openQueueRequest(s) {
+  const win = bookingWindow();
+  if (!win.open) return openModal("Anfragen gerade nicht möglich", el("p", {}, win.text), el("div", { class: "actions" }, el("button", { class: "btn", onclick: closeModal }, "OK")));
+  const pos = (s.queue_len || 0) + 2;
+  const note = el("textarea", { maxlength: 300, placeholder: "Optional, z. B. „Ich könnte auch etwas später.“" });
+  const btn = el("button", { class: "btn" }, "✋ Trotzdem anfragen");
+  btn.onclick = () => busy(btn, async () => {
+    const { data: newId, error } = await sb.rpc("queue_slot", { p_slot: s.slot_id, p_note: note.value });
+    // Inzwischen wieder frei → ganz normal anfragen
+    if (error && /FREE/.test(error.message || "")) { toast("Der Termin ist gerade frei geworden – du kannst ihn normal anfragen."); return openBooking({ ...s, status: "free" }); }
+    if (error) throw error;
+    pushNotify("booking", newId, "queued");
+    toast(`Angefragt – du bist auf Platz ${pos}. Wird die Anfrage vor dir nicht bestätigt, rückst du automatisch nach.`);
+    closeModal();
+    render();
+  });
+  openModal("Trotzdem anfragen?",
+    el("p", {}, el("b", {}, fmtDate(s.starts_at)), el("br"), fmtRange(s.starts_at, s.duration_min), ` (${s.duration_min} Min.)`),
+    el("div", { class: "notice wish" }, el("b", {}, "ℹ️ Schon angefragt: "),
+      s.queue_len ? `Vor dir haben schon ${s.queue_len + 1} Schüler/innen angefragt.` : "Jemand hat diesen Termin schon vor dir angefragt.",
+      " Dein Fahrlehrer hat aber noch nicht bestätigt."),
+    el("p", {}, `Du kommst auf `, el("b", {}, `Platz ${pos}`), ". Wird die Anfrage vor dir abgelehnt oder zurückgezogen, rückst du automatisch nach – du bekommst dann eine Mitteilung. Wird sie bestätigt, bekommst du eine Absage."),
+    s.note ? el("div", { class: "notice wish" }, "📝 ", el("b", {}, "Hinweis: "), s.note) : null,
+    meetingBox(meetingOf(s)),
+    el("label", {}, "Kurze Nachricht an deinen Fahrlehrer"), note,
+    el("div", { class: "notice" }, el("b", {}, "Wichtig: "), "Bekommst du den Termin, ist die Fahrstunde nach der Bestätigung verbindlich. ",
+      `Kostenlos absagen kannst du bis zum Vortag 18:00 Uhr (hier: ${fmtDeadline(s.starts_at)}).`),
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
@@ -7338,12 +7479,22 @@ async function openReflection(b) {
 
 async function studentMine() {
   const { data, error } = await sb.from("bookings")
-    .select("id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,slots(starts_at,duration_min,meeting_point,note)")
+    .select("id,slot_id,status,student_note,admin_reply,meeting_point,actual_minutes,cancel_reason,late_cancel,lesson_type,wish_start,change_start,change_dur,change_meeting,change_note,created_at,decided_at,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,queue_lost,slots(starts_at,duration_min,meeting_point,note)")
     .eq("student_id", state.profile.id).eq("sick_hidden", false);
   if (error) throw error;
   const rows = data.filter((b) => b.slots).sort((a, b) => b.slots.starts_at.localeCompare(a.slots.starts_at));
   const now = Date.now();
-  const upcoming = rows.filter((b) => (b.status === "requested" || b.status === "offered" || (b.status === "confirmed" && b.actual_minutes === null)) && new Date(b.slots.starts_at).getTime() >= now - 3600000).reverse();
+  const upcoming = rows.filter((b) => (b.status === "requested" || b.status === "queued" || b.status === "offered" || (b.status === "confirmed" && b.actual_minutes === null)) && new Date(b.slots.starts_at).getTime() >= now - 3600000).reverse();
+  // Anfragen auf Platz 2, 3 …: aktuellen Platz aus dem Kalender holen
+  const queuePos = new Map();
+  const qRows = upcoming.filter((b) => b.status === "queued");
+  if (qRows.length) {
+    const t = qRows.map((b) => new Date(b.slots.starts_at).getTime());
+    const { data: qc } = await sb.rpc("get_calendar", { p_from: new Date(Math.min(...t) - 60000).toISOString(), p_to: new Date(Math.max(...t) + 60000).toISOString() });
+    (qc || []).forEach((x) => { if (x.my_queue) queuePos.set(x.my_queue, x.queue_pos); });
+  }
+  // Abgelehnte Anfragen (letzte 14 Tage) – mit dem Grund des Fahrlehrers
+  const rejectedRows = rows.filter((b) => b.status === "rejected" && b.decided_at && new Date(b.decided_at).getTime() >= now - 14 * 86400000);
   const offers = upcoming.filter((b) => b.status === "offered" && new Date(b.slots.starts_at).getTime() > now);
   const planned = upcoming.filter((b) => !offers.includes(b));
   const total = rows.reduce((sum, b) => sum + (b.status === "confirmed" && b.actual_minutes ? b.actual_minutes : 0), 0);
@@ -7361,7 +7512,7 @@ async function studentMine() {
     const isOffer = b.status === "offered" && future;
     const hasChange = b.status === "confirmed" && !!b.change_start && future && b.actual_minutes === null;
     const canCancel = b.status === "confirmed" && b.actual_minutes === null && future;
-    const withdraw = b.status === "requested" ? el("button", { class: "btn small ghost" }, "Anfrage zurückziehen") : null;
+    const withdraw = b.status === "requested" || b.status === "queued" ? el("button", { class: "btn small ghost" }, "Anfrage zurückziehen") : null;
     if (withdraw) withdraw.onclick = () => busy(withdraw, async () => {
       if (!confirm("Anfrage wirklich zurückziehen?")) return;
       const { error } = await sb.rpc("cancel_request", { p_booking: b.id });
@@ -7373,6 +7524,7 @@ async function studentMine() {
     const badge = hasChange ? ["offered", "Änderung – bitte antworten"]
       : isOffer ? ["offered", "Angebot – bitte antworten"]
       : b.status === "requested" ? ["requested", "Angefragt – wartet"]
+      : b.status === "queued" ? ["requested", `⏳ Angefragt – Platz ${queuePos.get(b.id) || "2+"}`]
       : ["confirmed", "✓ Bestätigt"];
     const meet = b.status === "confirmed" || isOffer ? meetingOf(b) : "";
     return el("div", { class: "lesson-card" + (isOffer || hasChange ? " offer" : "") },
@@ -7386,6 +7538,7 @@ async function studentMine() {
           b.decided_at && b.decided_at > seen ? el("span", { class: "badge late" }, "Neu") : null),
         el("span", { class: "badge " + badge[0] }, badge[1]),
         b.status === "requested" && b.wish_start ? el("div", { class: "lesson-hint" }, `⏰ Deine Wunschzeit: ${fmtTime(b.wish_start)} Uhr (ohne Garantie)`) : null,
+        b.status === "queued" ? el("div", { class: "lesson-hint" }, "Jemand hat vor dir angefragt. Wird diese Anfrage nicht bestätigt, rückst du automatisch nach und bekommst eine Mitteilung.") : null,
         isOffer && b.wish_start ? el("div", { class: "lesson-hint" }, `⏱ Gegenangebot deines Fahrlehrers. Dein Wunsch war ${fmtTime(b.wish_start)} Uhr.`) : null,
         meet ? el("a", { class: "lesson-meet", href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(meet), target: "_blank", rel: "noopener" }, "📍 " + meet) : null,
         b.admin_reply ? el("div", { class: "lesson-hint" }, "💬 " + b.admin_reply) : null,
@@ -7482,6 +7635,13 @@ async function studentMine() {
     offers.map(card),
     el("h2", { class: "mine-h" }, "Anstehende Fahrstunden"),
     planned.length ? planned.map(card) : el("p", { class: "muted" }, "Keine anstehenden Fahrstunden. Im Kalender kannst du freie Termine anfragen."),
+    rejectedRows.length ? el("details", { class: "fold", open: rejectedRows.some((b) => b.decided_at > seen) },
+      el("summary", {}, `✗ Nicht angenommene Anfragen (${rejectedRows.length})`),
+      rejectedRows.map((b) => el("div", { class: "list-item small" },
+        el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
+        b.decided_at > seen ? el("span", { class: "badge late", style: "margin-left:6px" }, "Neu") : null,
+        el("div", {}, b.queue_lost ? "Der Termin ist an jemand anderen vergeben." : "Dein Fahrlehrer hat die Anfrage nicht angenommen."),
+        b.admin_reply ? el("div", { class: "note" }, "💬 ", b.admin_reply) : null))) : null,
     cancelledRows.length ? el("h2", { class: "mine-h" }, `❌ Abgesagt (${cancelledRows.length})`) : null,
     cancelledRows.map((b) => el("div", { class: "list-item small" },
       el("b", {}, `${fmtDay(b.slots.starts_at)} ${fmtRange(b.slots.starts_at, b.slots.duration_min)}`),
