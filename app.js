@@ -677,7 +677,6 @@ const FEATURES = [
     ["review_to_student", "🌟 Bewertung auch für Schüler/innen sichtbar (Motivation)", "immer aufbauend formuliert – 👎 und die echten Worte bleiben bei dir"],
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
-    ["clash", "⚠️ Rückfrage bei Überschneidung", "sonst wird ohne Nachfrage eingetragen"],
     ["reply_chips", "💬 Antwort-Bausteine", "antippbare Texte beim Hinweis an Schüler/innen"],
     ["auto_backup", "☁️ Nach jeder Änderung automatisch sichern", "Daten und Einstellungen werden ca. 30 Sek. nach dem Abhaken, Bestätigen, Eintragen usw. in der Cloud gesichert"],
     ["undo", "↩️ „Rückgängig“ nach dem Löschen", "ein paar Sekunden lang (eigene Einträge, Theorie, Privates, freie Termine)"],
@@ -2281,7 +2280,9 @@ function openCopyWeek(slots) {
         list.push({ starts_at: at.toISOString(), duration_min: s.duration_min, meeting_point: s.meeting_point || null });
       }
     }
-    const res = await insertSlots(list);
+    const ok = await avoidOverlap(list);
+    if (!ok) return;
+    const res = await insertSlots(ok);
     toast(insertedMsg(res));
     closeModal();
     render();
@@ -2695,49 +2696,88 @@ async function cancelOwn(x) {
   toast(`Fahrstunde mit ${x.student_name} abgesagt.`);
   render();
 }
-// Prüft, ob die neuen Einträge mit etwas Bestehendem kollidieren → verständliche Meldung statt Doppelbelegung
-// Überschneidungen mit schon eingetragenen Fahrstunden/Prüfungen finden
-async function findClashes(items, ignoreSlot = null) {
-  const starts = items.map((x) => new Date(x.starts_at).getTime()), ends = items.map((x, i) => starts[i] + x.duration_min * 60000);
-  const lo = new Date(Math.min(...starts) - 6 * 3600000).toISOString(), hi = new Date(Math.max(...ends)).toISOString();
-  const [sl, ow, ex] = await Promise.all([
+// ===== Keine Überschneidungen (immer aktiv) =====
+// Neue Fahrstunden dürfen sich weder untereinander noch mit Bestehendem überschneiden.
+// Vorschlag: Was sich überschneidet, rückt nach (hinter die vorherige Fahrstunde). Liegt danach etwas Festes
+// (gebuchte Fahrstunde, Schüler/in ohne App, Prüfung, Theorie, Privat), wird bis zu dessen Beginn gekürzt.
+// Freie, noch nicht gebuchte Termine rücken mit nach. Nichts wird ohne Rückfrage geändert.
+const MIN_LESSON = 45;   // kürzer als eine Fahrstunde (45 Min.) wird nicht gekürzt – dann rückt die Fahrstunde hinter den festen Termin
+async function avoidOverlap(items, ignoreSlot = null) {
+  if (!items.length) return items;
+  const ms = (x) => new Date(x).getTime();
+  const lo = new Date(Math.min(...items.map((x) => ms(x.starts_at))) - 12 * 3600000).toISOString();
+  const hi = new Date(Math.max(...items.map((x) => ms(x.starts_at) + x.duration_min * 60000)) + 12 * 3600000).toISOString();
+  const [sl, ow, ex, bl, th] = await Promise.all([
     sb.from("slots").select("id,starts_at,duration_min,bookings(status,profiles(first_name,last_name))").eq("teacher_id", state.profile.id).gte("starts_at", lo).lt("starts_at", hi),
     sb.from("own_entries").select("id,student_name,starts_at,duration_min").eq("teacher_id", state.profile.id).gte("starts_at", lo).lt("starts_at", hi),
     sb.from("exams").select("exam_at,duration_min,profiles(first_name,last_name)").gte("exam_at", lo).lt("exam_at", hi),
+    sb.from("time_blocks").select("starts_at,duration_min,reason").eq("teacher_id", state.profile.id).gte("starts_at", lo).lt("starts_at", hi),
+    sb.from("theory_lessons").select("held_at,duration_min").eq("teacher_id", state.profile.id).gte("held_at", lo).lt("held_at", hi),
   ]);
-  const hit = (aS, aD, bS, bD) => aS < bS + bD * 60000 && bS < aS + aD * 60000;
-  const out = [];
-  for (let i = 0; i < items.length; i++) {
-    const x = items[i];
-    for (const q of sl.data || []) {
-      if (q.id === ignoreSlot) continue;
-      const bk = (q.bookings || []).find((y) => ["requested", "confirmed", "offered"].includes(y.status));
-      if (bk && hit(starts[i], x.duration_min, new Date(q.starts_at).getTime(), q.duration_min)) out.push({ table: "slots", id: q.id, name: fullName(bk.profiles), start: q.starts_at, dur: q.duration_min, newStart: starts[i] });
-    }
-    for (const q of ow.data || []) if (hit(starts[i], x.duration_min, new Date(q.starts_at).getTime(), q.duration_min)) out.push({ table: "own_entries", id: q.id, name: q.student_name, start: q.starts_at, dur: q.duration_min, newStart: starts[i] });
-    for (const q of ex.data || []) if (hit(starts[i], x.duration_min, new Date(q.exam_at).getTime(), q.duration_min || 55)) out.push({ table: null, name: "Prüfung " + fullName(q.profiles), start: q.exam_at, dur: q.duration_min || 55, newStart: starts[i] });
+  const fixed = [], movable = [];
+  const add = (at, dur, label) => fixed.push({ s: ms(at), e: ms(at) + (dur || 0) * 60000, label });
+  const newStarts = new Set(items.map((x) => ms(x.starts_at)));
+  for (const q of sl.data || []) {
+    if (q.id === ignoreSlot) continue;
+    const bk = (q.bookings || []).find((y) => ["requested", "confirmed", "offered"].includes(y.status));
+    if (bk) add(q.starts_at, q.duration_min, `${fullName(bk.profiles)} (${bk.status === "confirmed" ? "bestätigt" : bk.status === "offered" ? "angeboten" : "angefragt"})`);
+    else if (!newStarts.has(ms(q.starts_at))) movable.push({ id: q.id, s0: ms(q.starts_at), dur: q.duration_min, label: "Freier Termin" });
   }
-  return out;
-}
-// Überschneidung: nachfragen. Wer darauf besteht: die Fahrstunde DAVOR wird bis zum neuen Beginn gekürzt (und so gespeichert).
-async function confirmClash(items, ignoreSlot = null) {
-  if (!feat("clash")) return true;
-  const list = await findClashes(items, ignoreSlot);
-  if (!list.length) return true;
-  const when = (c) => `${fmtDay(c.start)} ${fmtRange(c.start, c.dur)} Uhr`;
-  const cut = list.filter((c) => c.table && new Date(c.start).getTime() < c.newStart);
-  const other = list.filter((c) => !cut.includes(c));
-  const text = "Diese Zeit überschneidet sich mit:\n" + list.map((c) => `• ${c.name} (${when(c)})`).join("\n") +
-    (cut.length ? `\n\nTrotzdem eintragen? Dann wird ${cut.length === 1 ? "die Fahrstunde davor" : "die Fahrstunden davor"} gekürzt, sodass sie zum neuen Beginn endet.` : "\n\nTrotzdem eintragen?") +
-    (other.length && cut.length ? "\n(Spätere Termine und Prüfungen bleiben unverändert.)" : "");
-  if (!confirm(text)) return false;
-  for (const c of cut) {
-    const minutes = Math.max(5, Math.round((c.newStart - new Date(c.start).getTime()) / 60000));
-    const { error } = await sb.from(c.table).update({ duration_min: minutes }).eq("id", c.id);
+  for (const q of ow.data || []) add(q.starts_at, q.duration_min, `${q.student_name} (ohne App)`);
+  for (const q of ex.data || []) add(q.exam_at, q.duration_min || 55, "Prüfung " + fullName(q.profiles));
+  for (const q of bl.data || []) add(q.starts_at, q.duration_min, "📌 " + (q.reason || "Privat"));
+  for (const q of th.data || []) add(q.held_at, q.duration_min, "📚 Theorie");
+  // Gleiche Startzeit wie ein vorhandener freier Termin: den gibt es schon (wird beim Speichern übersprungen)
+  const dupFree = new Set(movable.map((m) => m.s0));
+  items.forEach((x, k) => { if (!dupFree.has(ms(x.starts_at))) movable.push({ item: x, k, s0: ms(x.starts_at), dur: x.duration_min, label: "Neu" }); });
+  movable.sort((a, b) => a.s0 - b.s0 || (a.item ? 1 : 0) - (b.item ? 1 : 0) || (a.k || 0) - (b.k || 0));
+  fixed.sort((a, b) => a.s - b.s);
+  let cursor = -Infinity;
+  for (const m of movable) {
+    let s = Math.max(m.s0, cursor), d = m.dur, cutBy = null;
+    for (let guard = 0; guard < 50; guard++) {
+      const inside = fixed.find((f) => f.s <= s && s < f.e);
+      if (inside) { s = inside.e; continue; }
+      const next = fixed.find((f) => f.s > s && f.s < s + m.dur * 60000);
+      if (next) {
+        const left = Math.round((next.s - s) / 60000);
+        if (left >= Math.min(MIN_LESSON, m.dur)) { d = left; cutBy = next; } else { s = next.e; continue; }
+      }
+      break;
+    }
+    Object.assign(m, { s, d, cutBy });
+    cursor = s + d * 60000;
+  }
+  const changed = movable.filter((m) => m.s !== m.s0 || m.d !== m.dur);
+  if (!changed.length) return items;
+  const multiDay = new Set(movable.filter((m) => m.item).map((m) => dateInput(new Date(m.s0)))).size > 1;
+  const t = (x) => (multiDay ? fmtDay(new Date(x).toISOString()) + " " : "") + fmtTime(new Date(x).toISOString());
+  const rng = (x, d) => `${t(x)}–${fmtTime(new Date(x + d * 60000).toISOString())}`;
+  const lines = changed.map((m) => {
+    const who = m.item ? "Neu" : "Freier Termin";
+    const moved = m.s !== m.s0 ? `${who} ${t(m.s0)} → rückt nach auf ${rng(m.s, m.d)}` : `${who} ${rng(m.s, m.d)}`;
+    return "• " + moved + (m.d !== m.dur ? ` – gekürzt auf ${m.d} Min. (danach: ${m.cutBy.label})` : "");
+  });
+  const text = "⚠️ Diese Zeiten würden sich überschneiden!\n\nVorschlag ohne Überschneidung:\n" + lines.slice(0, 12).join("\n")
+    + (lines.length > 12 ? `\n… und ${lines.length - 12} weitere` : "")
+    + "\n\nOK = so eintragen\nAbbrechen = nichts eintragen (Zeiten selbst ändern)";
+  if (!confirm(text)) return null;
+  // Vorhandene freie Termine nachrücken (von hinten nach vorn)
+  for (const m of changed.filter((x) => !x.item).sort((a, b) => b.s - a.s)) {
+    const { error } = await sb.from("slots").update({ starts_at: new Date(m.s).toISOString(), duration_min: m.d }).eq("id", m.id);
     if (error) throw error;
   }
-  if (cut.length) toast(`${cut.map((c) => c.name).join(", ")}: Fahrstunde gekürzt.`);
-  return true;
+  return items.map((x, k) => { const m = movable.find((y) => y.item && y.k === k); return m ? { ...x, starts_at: new Date(m.s).toISOString(), duration_min: m.d } : x; });
+}
+// Ein einzelner Termin (Nachtragen, Verschieben): Vorschlag direkt ins Formular übernehmen
+async function avoidOverlapOne(start, durCtl, ignoreSlot, dateIn, timeIn) {
+  const res = await avoidOverlap([{ starts_at: start.toISOString(), duration_min: durCtl.value }], ignoreSlot);
+  if (!res) return null;
+  const at = new Date(res[0].starts_at);
+  if (res[0].duration_min !== durCtl.value) durCtl.set(res[0].duration_min);
+  if (dateIn) dateIn.value = dateInput(at);
+  if (timeIn) timeIn.value = timeInput(at);
+  return at;
 }
 const offOn = (day) => { const d = dateInput(day); return (state.timeOff || []).find((t) => d >= t.from_day && d <= t.to_day); };
 const fmtDayStr = (s) => new Date(s + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
@@ -3288,10 +3328,10 @@ async function openBackfill(preStudent) {
     const ownName = isOwn ? (who.value.slice(4) || newName.value.trim()) : "";
     const st = students.find((x) => x.id === who.value);
     if (!st && !ownName) throw new Error(isOwn ? "Bitte den Namen des/der Schüler/in eintragen" : "Bitte eine/n Schüler/in wählen");
-    const start = fromInputs(date.value, time.value);
+    let start = fromInputs(date.value, time.value);
     if (isNaN(start)) throw new Error("Bitte Datum und Uhrzeit angeben");
     if (start.getTime() > Date.now()) throw new Error("Das liegt in der Zukunft – künftige Termine bitte über „➕ Anlegen“ eintragen.");
-    if (type !== "exam" && type !== "schaltpruefung" && !(await confirmClash([{ starts_at: start.toISOString(), duration_min: dur.value }]))) return;
+    if (type !== "exam" && type !== "schaltpruefung") { const at = await avoidOverlapOne(start, dur, null, date, time); if (!at) return; start = at; }
     if (isOwn) {
       // Schüler/in ohne App: eigener Eintrag, gleich als gefahren abgehakt
       const isExam = type === "exam";
@@ -3836,7 +3876,9 @@ function newSlotForm(opts = {}) {
         if (error) throw error;
         summary = "📚 Theorie" + (noteTxt ? ` · ${noteTxt}` : "");
       } else {
-        if (!(await confirmClash(items))) return;
+        const fixedItems = await avoidOverlap(items);
+        if (!fixedItems) return;
+        items.splice(0, items.length, ...fixedItems);
         const nowMs = Date.now();
         const rows = items.map((x) => ({ teacher_id: state.profile.id, kind: isExam ? "exam" : "lesson", lesson_type: isExam ? null : ownType, student_name: name,
           starts_at: x.starts_at, duration_min: x.duration_min, note: ownNote.value.trim() || null, no_pay: pnOwn.noPay(),
@@ -3862,9 +3904,10 @@ function newSlotForm(opts = {}) {
       refresh();
       return;
     }
-    const list = build();
+    let list = build();
     if (mode === "assign" && !student) { assignBox.scrollIntoView({ behavior: "smooth", block: "start" }); search.focus(); throw new Error("Bitte oben eine/n Schüler/in antippen"); }
-    if (mode === "assign" && !(await confirmClash(list))) return;
+    list = await avoidOverlap(list);
+    if (!list) return;
     await meetSlot.commit();
     const res = await insertSlots(list);
     showDate(new Date(list[0].starts_at));
@@ -4341,8 +4384,14 @@ async function openAdminSlot(slotId) {
   // Speichert Zeit, Dauer und Treffpunkt des Termins
   async function saveTime() {
     if (!timeChanged()) return;
-    const start = fromInputs(date.value, time.value);
+    let start = fromInputs(date.value, time.value);
     if (isNaN(start)) throw new Error("Ungültiges Datum/Uhrzeit");
+    // Keine Überschneidung: Vorschlag (nachrücken / kürzen) übernehmen oder abbrechen
+    if (start.getTime() !== new Date(slot.starts_at).getTime() || dur.value !== slot.duration_min) {
+      const at = await avoidOverlapOne(start, dur, slot.id, date, time);
+      if (!at) throw new Error("Nicht gespeichert – bitte eine Zeit ohne Überschneidung wählen.");
+      start = at;
+    }
     await meet.commit();
     // Freier Termin von Hand verschoben: die neue Zeit gilt als die normale (bei gebuchten merkt sich die Datenbank die erste Zeit)
     const handMoved = !activeBooking(slot) && start.getTime() !== new Date(slot.starts_at).getTime() ? { original_start: null } : {};
@@ -4586,7 +4635,7 @@ async function openAdminSlot(slotId) {
         const chosen = fromInputs(date.value, time.value);
         if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
         if (chosen.getTime() <= Date.now()) throw new Error("Die neue Zeit liegt in der Vergangenheit");
-        if (!(await confirmClash([{ starts_at: chosen.toISOString(), duration_min: dur.value }], slot.id))) return;
+        if (!(await avoidOverlapOne(chosen, dur, slot.id, date, time))) return;
         await saveTime();
         const note = reply.value.trim();
         const { error } = await sb.from("bookings").update({ admin_reply: note || null, change_start: null, change_dur: null, change_meeting: null, change_note: null }).eq("id", b.id);
@@ -4601,6 +4650,8 @@ async function openAdminSlot(slotId) {
       dur.input.addEventListener("input", sync);
       meet.node.addEventListener("change", sync); meet.node.addEventListener("input", sync);
       async function proposeChange() {
+        const want = fromInputs(date.value, time.value);
+        if (!isNaN(want) && !(await avoidOverlapOne(want, dur, slot.id, date, time))) return;
         const chosen = fromInputs(date.value, time.value);
         if (isNaN(chosen)) throw new Error("Ungültiges Datum/Uhrzeit");
         if (chosen.getTime() <= Date.now()) throw new Error("Die neue Zeit liegt in der Vergangenheit");
