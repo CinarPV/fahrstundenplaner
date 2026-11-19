@@ -3476,7 +3476,7 @@ function newSlotForm(opts = {}) {
   // Art: normale Fahrstunde, Schaltstunde oder Schaltkompetenz-Test (15 Min.)
   const planType = schaltPicker("normal", (t) => { if (t === "schaltpruefung") dur.set(15); });
   const pnAssign = payNoteFields();
-  const assignExtras = el("div", {}, el("label", {}, "Art"), planType.node, how.node, el("label", {}, "Hinweis an den/die Schüler/in"), reply, pnAssign.node);
+  const assignExtras = el("div", {}, how.node, el("label", {}, "Art"), planType.node, el("label", {}, "Hinweis an den/die Schüler/in"), reply, pnAssign.node);
   const assignBox = el("div", { hidden: true },
     el("label", {}, "Welchem Schüler?"), search, studentList, assignExtras);
   // Prüfung zuordnen: Art, Uhrzeit, Dauer (Standard 55 Min.), Ort/Hinweis
@@ -4726,10 +4726,22 @@ function assignHow() {
   const offer = el("input", { type: "radio", name, value: "offer" });
   const fix = el("input", { type: "radio", name, value: "fix" });
   offer.checked = true;
+  // Zwei große Knöpfe statt kleiner Auswahlpunkte – damit die Wahl nicht übersehen wird
+  const big = (radio, icon, title, sub) => {
+    const b = el("button", { type: "button", class: "tab how-tab" }, el("span", { class: "how-title" }, `${icon} ${title}`), el("span", { class: "how-sub" }, sub));
+    b.onclick = () => { radio.checked = true; radio.dispatchEvent(new Event("change")); };
+    return b;
+  };
+  const bOffer = big(offer, "📨", "Anbieten", "Schüler/in sagt in der App zu oder ab");
+  const bFix = big(fix, "✓", "Fest eintragen", "sofort bestätigt (z. B. nach Telefonat)");
+  const paint = () => { bOffer.classList.toggle("active", offer.checked); bFix.classList.toggle("active", fix.checked); };
+  [offer, fix].forEach((r) => r.addEventListener("change", paint));
+  paint();
   return {
-    node: el("div", {},
-      el("label", { class: "check" }, offer, el("span", {}, el("b", {}, "Anbieten"), " – der/die Schüler/in sagt in der App zu oder ab")),
-      el("label", { class: "check" }, fix, el("span", {}, el("b", {}, "Fest eintragen"), " – sofort bestätigt (z. B. nach Telefonat)"))),
+    node: el("div", { class: "how-box" },
+      el("label", {}, "Wie eintragen?"),
+      el("div", { class: "tabs how-tabs" }, bOffer, bFix),
+      el("div", { hidden: true }, offer, fix)),
     offer: () => offer.checked,
     onChange: (fn) => [offer, fix].forEach((r) => r.addEventListener("change", fn)),
   };
@@ -4777,7 +4789,7 @@ async function bookForStudentForm(slot, saveTime, meetVal = () => null) {
   });
   return el("div", {},
     el("h3", {}, "Schüler/in anbieten oder eintragen"),
-    who, el("label", {}, "Art"), planType.node, how.node, el("label", {}, "Hinweis"), reply, pnBook.node, el("div", { class: "actions" }, btn));
+    who, how.node, el("label", {}, "Art"), planType.node, el("label", {}, "Hinweis"), reply, pnBook.node, el("div", { class: "actions" }, btn));
 }
 
 // Ergebnis einer bestätigten Fahrstunde: gefahren (mit Minuten) – oder warum sie nicht zustande kam

@@ -1057,3 +1057,9 @@ html.dark .hex-icon { color: #cbd5e1; }
 .wait-note { background: #fff8e1; border-color: #e0b100; }
 .todo-wait > summary { cursor: pointer; }
 .wait-row { background: #fff8e1; }
+/* Zuordnen: „Anbieten“ oder „Fest eintragen“ als zwei große Knöpfe */
+.how-box { margin: 10px 0 4px; }
+.tabs.how-tabs { display: grid !important; grid-template-columns: 1fr 1fr; gap: 8px; overflow: visible; flex-wrap: wrap; }
+.tabs.how-tabs .tab.how-tab { display: flex !important; flex-direction: column; align-items: flex-start; justify-content: center; text-align: left; padding: 10px 12px; min-height: 64px; white-space: normal; width: 100%; margin: 0; }
+.tab.how-tab .how-title { display: block; font-size: 16px; font-weight: 700; }
+.tab.how-tab .how-sub { display: block; font-size: 12px; opacity: .85; margin-top: 3px; font-weight: 400; }
