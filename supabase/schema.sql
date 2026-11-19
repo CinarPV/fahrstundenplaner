@@ -2540,3 +2540,13 @@ language sql stable security definer set search_path = public as $$
     and is_active()
   order by s.starts_at;
 $$;
+
+-- ===== Paket 20.11.2026: Welche meiner Schüler/innen haben Mitteilungen an? (nur Ja/Nein, keine Geräte-Daten) =====
+-- Damit fragt die App nach einer Aktion nur dann „Per WhatsApp informieren?“, wenn keine Mitteilung ankommt.
+create or replace function public.my_students_with_push()
+returns setof uuid language sql stable security definer set search_path = public as $$
+  select distinct p.id from profiles p
+  where p.role = 'student' and p.teacher_id = auth.uid() and public.is_teacher()
+    and exists (select 1 from push_subscriptions s where s.user_id = p.id);
+$$;
+grant execute on function public.my_students_with_push() to authenticated;

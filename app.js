@@ -127,6 +127,22 @@ function undoToast(msg, onUndo) {
   clearTimeout(toast._t);
   toast._t = setTimeout(hide, 7000);
 }
+// Erfolgsmeldung mit einem Knopf (z. B. „💬 WhatsApp“) – verschwindet nach ein paar Sekunden von selbst
+function actionToast(msg, label, onAction) {
+  const t = document.getElementById("toast");
+  const btn = el("button", { type: "button", class: "toast-undo" }, label);
+  t.replaceChildren(el("span", {}, msg.replace(/^[✓✔]\s*/, "")), btn);
+  t.className = "toast ok";
+  t.hidden = false;
+  toast._ok = Date.now();
+  scheduleBackup();
+  try { t.setAttribute("popover", "manual"); if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch { /* ältere Browser */ }
+  const hide = () => { try { if (t.matches(":popover-open")) t.hidePopover(); } catch { /* egal */ } t.hidden = true; };
+  t.onclick = hide;
+  btn.onclick = (ev) => { ev.stopPropagation(); hide(); onAction(); };
+  clearTimeout(toast._t);
+  toast._t = setTimeout(hide, 8000);
+}
 // Löschen mit Rückgängig: Zeile vorher merken, bei „Rückgängig“ wieder einfügen
 async function deleteWithUndo(table, id, msg) {
   let row = null;
@@ -569,6 +585,9 @@ function callButton(phone, label = "📞 Anrufen", cls = "btn small ghost") {
   return n ? el("a", { class: cls, href: "tel:+" + n, onclick: (e) => e.stopPropagation() }, label) : null;
 }
 // Angeheftete Uhrzeiten des Fahrlehrers (Einstellungen), z. B. "08:00,09:45,11:30"
+// Anlege-Fenster: zuletzt benutzte Art (Freigeben/Zuordnen/Ohne App) und Fahrstunden-Art merken, dazu die zuletzt gewählten Uhrzeiten
+const lastPick = (k, def) => { try { return JSON.parse(localStorage.getItem("fsp_last_" + k + "_" + state.profile.id)) ?? def; } catch { return def; } };
+const savePick = (k, v) => { try { localStorage.setItem("fsp_last_" + k + "_" + state.profile.id, JSON.stringify(v)); } catch { /* egal */ } };
 const timePresets = () => (state.settings.time_presets ?? "08:00").split(",").map((x) => x.trim()).filter((x) => /^\d\d:\d\d$/.test(x)).sort();
 async function saveTimePresets(list) {
   const v = list.join(",");
@@ -677,6 +696,7 @@ const FEATURES = [
     ["review_to_student", "🌟 Bewertung auch für Schüler/innen sichtbar (Motivation)", "immer aufbauend formuliert – 👎 und die echten Worte bleiben bei dir"],
     ["pay_toggle", "💶 Schalter „Bezahlt / Unbezahlt“", "beim Eintragen, Nachtragen und Zuteilen"],
     ["length_chips", "⏱ Längen-Knöpfe beim Abhaken", "45, 60, 70, 75, 80, 90, 100, 105, 110 Min."],
+    ["wa_smart", "💬 WhatsApp-Fenster nur, wenn keine Mitteilung ankommt", "hat der/die Schüler/in Mitteilungen an, kommt nach dem Speichern nur eine kurze Meldung mit „💬 WhatsApp“-Knopf statt eines Fensters"],
     ["reply_chips", "💬 Antwort-Bausteine", "antippbare Texte beim Hinweis an Schüler/innen"],
     ["auto_backup", "☁️ Nach jeder Änderung automatisch sichern", "Daten und Einstellungen werden ca. 30 Sek. nach dem Abhaken, Bestätigen, Eintragen usw. in der Cloud gesichert"],
     ["undo", "↩️ „Rückgängig“ nach dem Löschen", "ein paar Sekunden lang (eigene Einträge, Theorie, Privates, freie Termine)"],
@@ -854,7 +874,26 @@ function sickSilentBox() {
 }
 
 // Nach einer Aktion: Erfolg anzeigen und anbieten, den Schüler per WhatsApp zu informieren
+// Welche meiner Schüler/innen bekommen Mitteilungen? (Handynummern, für das WhatsApp-Fenster nach Aktionen)
+let pushPhones = null, pushPhonesAt = 0;
+async function loadPushPhones(force = false) {
+  if (!isAdmin() || (!force && Date.now() - pushPhonesAt < 3 * 60000)) return;
+  pushPhonesAt = Date.now();
+  const [ids, ps] = await Promise.all([sb.rpc("my_students_with_push"), myProfiles().select("id,phone").eq("role", "student")]);
+  if (ids.error || ps.error) return;   // SQL noch nicht da → wie bisher immer fragen
+  const on = new Set((ids.data || []).map((x) => (typeof x === "string" ? x : x.my_students_with_push || x.id)));
+  pushPhones = new Set((ps.data || []).filter((p) => on.has(p.id) && p.phone).map((p) => waNumber(p.phone)).filter(Boolean));
+}
 function notifyStep(msg, phone, text, who = "den/die Schüler/in", extraBtn = null) {
+  // Fahrlehrer/in: Bekommt der/die Schüler/in eine Mitteilung (oder gibt es keine Handynummer), kein extra Fenster –
+  // nur eine kurze Meldung, auf Wunsch mit „💬 WhatsApp“-Knopf
+  const num = waNumber(phone);
+  if (isAdmin() && !extraBtn && feat("wa_smart") && (!num || (pushPhones && pushPhones.has(num)))) {
+    if (!num) { toast("✓ " + msg); return render(); }
+    actionToast(`✓ ${msg} · 🔔 bekommt eine Mitteilung`, "💬 WhatsApp", () => window.open(`https://wa.me/${num}?text=${encodeURIComponent(text)}`, "_blank", "noopener"));
+    if (modal.open) closeModal();
+    return render();
+  }
   state.renderOnClose = true;
   const wa = waButton(phone, text, `💬 ${who[0].toUpperCase() + who.slice(1)} per WhatsApp informieren`);
   openModal("✓ " + msg,
@@ -1331,6 +1370,7 @@ async function loadUserAndRender() {
       if (settings) state.settings = settings;
     }
     if (window.fspOffline) await window.fspOffline.configure(profile.id, profile.role === "teacher" && feat("offline"));
+    if (profile.role === "teacher") loadPushPhones(true).catch(() => {});
     // Schüler: ist der Zugang wirklich aktiv (auch der Fahrlehrer nicht gesperrt)?
     state.active = !!(await sb.rpc(profile.role === "teacher" ? "is_teacher" : "is_active")).data;
     // Gesperrt / abgeschlossen / abgelaufen: noch 3 Monate die eigenen Fahrstunden ansehen (nichts buchen)
@@ -2183,6 +2223,7 @@ function renderNewPassword() {
 async function render() {
   if (!state.profile) return;
   state.dirty = false;
+  if (isAdmin()) loadPushPhones().catch(() => {});
   // Sperrseiten immer zuerst – egal von wo render() aufgerufen wird
   if (state.profile.must_change_password) return renderForcePassword();
   if (!state.active && !state.readonly) return renderWaiting();
@@ -3474,9 +3515,12 @@ function newSlotForm(opts = {}) {
   const how = assignHow();
   how.onChange(() => refresh());
   // Art: normale Fahrstunde, Schaltstunde oder Schaltkompetenz-Test (15 Min.)
-  const planType = schaltPicker("normal", (t) => { if (t === "schaltpruefung") dur.set(15); });
+  const planType = schaltPicker(lastPick("plantype", "normal"), (t) => { savePick("plantype", t); if (t === "schaltpruefung") dur.set(15); });
   const pnAssign = payNoteFields();
-  const assignExtras = el("div", {}, how.node, el("label", {}, "Art"), planType.node, el("label", {}, "Hinweis an den/die Schüler/in"), reply, pnAssign.node);
+  const assignExtras = el("div", {}, how.node, el("label", {}, "Art"), planType.node,
+    el("details", { class: "fold more-fields" },
+      el("summary", {}, "➕ Weitere Angaben: Hinweis an Schüler/in, bezahlt/unbezahlt (optional)"),
+      el("label", {}, "Hinweis an den/die Schüler/in"), reply, pnAssign.node));
   const assignBox = el("div", { hidden: true },
     el("label", {}, "Welchem Schüler?"), search, studentList, assignExtras);
   // Prüfung zuordnen: Art, Uhrzeit, Dauer (Standard 55 Min.), Ort/Hinweis
@@ -3508,13 +3552,14 @@ function newSlotForm(opts = {}) {
   // Oben: Fahrstunde (Standard) oder Prüfung. Bei Fahrstunde darunter: freigeben oder einem Schüler zuordnen.
   const KINDS = [["lesson", "🚗 Fahrstunde"], ["exam", "🎓 Prüfung"], ["theory", "📚 Theorie"], ["own", "👤 Ohne App"], ["block", "📌 Privat"], ["vacation", "🏖️ Urlaub"]];
   const kindBtns = KINDS.map(([k, text]) => el("button", { type: "button", class: "tab kind-tab" + (k === "exam" ? " exam-mode" : ""),
-    onclick: () => setMode(k === "lesson" ? lessonMode : k) }, text));
+    onclick: () => setMode(k === "lesson" ? lessonMode : k, true) }, text));
   const SUBS = [["free", "🟢 Freigeben (für alle)"], ["assign", "👤 Schüler/in zuordnen"]];
   let lessonMode = "free";
-  const subBtns = SUBS.map(([m, text]) => el("button", { type: "button", class: "tab", onclick: () => setMode(m) }, text));
+  const subBtns = SUBS.map(([m, text]) => el("button", { type: "button", class: "tab", onclick: () => setMode(m, true) }, text));
   const subRow = el("div", { class: "tabs", style: "flex-wrap:wrap" }, subBtns);
-  async function setMode(m) {
+  async function setMode(m, remember = false) {
     mode = m;
+    if (remember && ["free", "assign", "own"].includes(m)) savePick("mode", m);
     if (m === "free" || m === "assign") lessonMode = m;
     const kindOf = m === "free" || m === "assign" ? "lesson" : m;
     const isLesson = kindOf === "lesson";
@@ -3678,6 +3723,28 @@ function newSlotForm(opts = {}) {
     pinTimes([extra.value]); times = uniq(times.concat(extra.value)); extra.value = ""; refresh();
   } }, "+ Uhrzeit anheften");
 
+  // ⭐ Deine üblichen Uhrzeiten (aus den letzten 8 Wochen) und „Wie letztes Mal“ – ein Tipp statt Eintippen
+  const usualRow = el("div", { class: "chips usual-times" });
+  const lastTimes = lastPick("times", []).filter((t) => /^\d\d:\d\d$/.test(t));
+  let usual = [];
+  const paintUsual = () => {
+    const extraUsual = usual.filter((t) => !pinned.includes(t));
+    usualRow.replaceChildren(...[
+      lastTimes.length ? el("button", { type: "button", class: "btn small ok", title: lastTimes.join(", "),
+        onclick: () => { pinTimes(lastTimes); times = uniq(lastTimes); refresh(); } }, `↺ Wie letztes Mal (${lastTimes.join(", ")})`) : null,
+      pinned.length > 1 ? el("button", { type: "button", class: "btn small ghost", onclick: () => { times = uniq(pinned); refresh(); } }, "Alle meine Zeiten") : null,
+      times.length ? el("button", { type: "button", class: "btn small ghost", onclick: () => { times = []; refresh(); } }, "Keine") : null,
+      ...extraUsual.map((t) => el("button", { type: "button", class: "btn small ghost", title: "Häufig bei dir – antippen zum Auswählen und Anheften",
+        onclick: () => { pinTimes([t]); times = uniq(times.concat(t)); refresh(); } }, `⭐ ${t}`)),
+    ].filter(Boolean));
+  };
+  sb.from("slots").select("starts_at").eq("teacher_id", state.profile.id).gte("starts_at", addDays(new Date(), -56).toISOString()).then(({ data }) => {
+    const n = {};
+    for (const x of data || []) { const t = timeInput(new Date(x.starts_at)); n[t] = (n[t] || 0) + 1; }
+    usual = Object.entries(n).filter(([, c]) => c >= 3).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t]) => t).sort();
+    paintUsual();
+  });
+
   let skippedOff = 0, skippedBlocked = 0;
   // Tage, an denen angelegt wird (einzeln, mehrere im Kalender oder Wiederholung); gesperrte Urlaubstage fallen weg
   function pickDays() {
@@ -3736,6 +3803,7 @@ function newSlotForm(opts = {}) {
       : mode === "assign" ? (student ? (how.offer() ? `📨 ${student.first_name || fullName(student)} anbieten` : `Für ${fullName(student)} fest eintragen`) : "Schüler wählen …") : "Termine freigeben";
     btn.className = "btn" + (mode === "assign" ? " ok" : mode === "exam" ? " exam-btn" : "");
     dayBtns.forEach((b, i) => b.classList.toggle("active", days.has(i)));
+    paintUsual();
     timeChips.replaceChildren(...(pinned.length ? pinned.map((t) => {
       const on = times.includes(t);
       return el("span", { class: "time-chip" + (on ? " on" : "") },
@@ -3908,6 +3976,7 @@ function newSlotForm(opts = {}) {
     if (mode === "assign" && !student) { assignBox.scrollIntoView({ behavior: "smooth", block: "start" }); search.focus(); throw new Error("Bitte oben eine/n Schüler/in antippen"); }
     list = await avoidOverlap(list);
     if (!list) return;
+    if (times.length) savePick("times", times);
     await meetSlot.commit();
     const res = await insertSlots(list);
     showDate(new Date(list[0].starts_at));
@@ -3963,6 +4032,7 @@ function newSlotForm(opts = {}) {
   slotBox.append(
     el("label", {}, `Dauer pro Termin (Standard: ${state.settings.default_duration} Min.)`), dur.node,
     el("label", {}, "Uhrzeiten – antippen zum Auswählen"),
+    usualRow,
     timeChips,
     el("div", { class: "done-row" }, el("span", { style: "width:130px" }, extra), addTime),
     el("details", { class: "fold" },
@@ -3972,7 +4042,9 @@ function newSlotForm(opts = {}) {
         el("div", {}, el("label", {}, "Termine hintereinander"), count),
         el("div", {}, el("label", {}, "Pause dazwischen (Min.)"), pause)),
       el("div", { class: "actions" }, makeRow)),
-    meetSlot.node, slotNoteBox,
+    el("details", { class: "fold more-fields" },
+      el("summary", {}, "➕ Weitere Angaben: Treffpunkt, Hinweis zum Termin (optional)"),
+      meetSlot.node, slotNoteBox),
   );
   dayPick.append(
     el("label", { class: "check repeat-toggle" }, multi, el("span", {}, el("b", {}, "📅 Mehrere Tage wählen"), " – einzelne Tage im Kalender antippen, die Uhrzeiten gelten für alle")),
@@ -4004,7 +4076,7 @@ function newSlotForm(opts = {}) {
     setMode("exam").then(() => { student = (students || []).find((x) => x.id === opts.exam.student.id) || opts.exam.student; refresh(); });
   } else if (opts.own) { setMode("own"); ownName.value = opts.own; }
   else if (opts.mode) setMode(opts.mode);
-  else setMode("free");
+  else { const lm = lastPick("mode", "free"); if (lm === "assign") lessonMode = "assign"; setMode(lm); }
   if (!opts.exam) setExamKind("praxis");
   return { node, setDate: (d) => { date.value = dateInput(d); setDays([weekdayIndex(d)]); refresh(); } };
 }
@@ -4151,59 +4223,59 @@ async function askShiftSlots({ slotId, name, oldStart, oldDur, newStart, newDur,
   if (nextId) await sb.from("slots").update({ earlier_from: iso(newMs + newDur * 60000) }).eq("id", nextId);
   return answer;
 }
-// Fahrlehrer: Schüler/in hat „abgesagt“ gedrückt, war aber krank → als krank eintragen (keine Fehlstunde)
-function sickButton(b, after) {
-  if (!["cancelled_student", "no_show"].includes(b.status)) return null;
-  const btn = el("button", { class: "btn small" }, "🤒 War krank – als krank eintragen");
-  btn.onclick = (e) => {
-    e && e.stopPropagation();
-    const why = el("input", { maxlength: 300, value: b.cancel_reason && !/^krank$/i.test(b.cancel_reason) ? `Krank (${b.cancel_reason})` : "Krank", placeholder: "z. B. Krank, Attest liegt vor" });
-    const free = el("input", { type: "checkbox", checked: true });
-    const ok = el("button", { class: "btn ok" }, "🤒 Als krank speichern");
-    ok.onclick = () => busy(ok, async () => {
-      const patch = { status: "sick", cancel_reason: why.value.trim() || "Krank", late_cancel: !free.checked, sick_paid: free.checked && sickPayOn() };
-      let { error } = await sb.from("bookings").update({ ...patch, answer_seen: true }).eq("id", b.id);
-      if (error && /answer_seen/.test(error.message || "")) ({ error } = await sb.from("bookings").update(patch).eq("id", b.id));
-      if (error) throw error;
-      closeModal(); toast("Als krank abgesagt gespeichert" + (free.checked ? " – keine Fehlstunde." : ".")); after && after();
-    });
-    openModal("🤒 Als krank eintragen",
-      el("p", {}, `${fullName(b.profiles || {})} · ${b.slots ? `${fmtDate(b.slots.starts_at)}, ${fmtTime(b.slots.starts_at)} Uhr` : ""}`),
-      el("p", { class: "muted small" }, "Für Schüler/innen, die aus Versehen „Absagen“ statt „Ich bin krank“ gedrückt haben. In der Liste steht danach „Krank gemeldet“."),
-      el("label", {}, "Grund / Info (optional)"), why,
-      el("label", { class: "check" }, free, el("span", {}, "📄 Attest liegt vor – keine Fehlstunde" + (sickPayOn() ? " (zählt als bezahlte Sondertätigkeit)" : ""))),
-      el("div", { class: "actions" }, ok, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
-  };
-  return btn;
+// ===== Ausfall einheitlich ändern: Grund → Attest (bei krank) → Fehlstunde ja/nein =====
+// Eine Stelle für alles, was früher verteilt war („War krank“, „Attest liegt vor“, „Kulanz“, „Doch Fehlstunde“ …)
+const OUTCOME_WHY = [["sick", "🤒 Krank"], ["cancelled_student", "🙋 Abgesagt"], ["no_show", "🚷 Nicht erschienen"], ["cancelled_teacher", "🚫 Von mir abgesagt"]];
+function outcomeSummary(b) {
+  if (!NOT_HELD_ICON[b.status]) return "";
+  const parts = [`${NOT_HELD_ICON[b.status]} ${STATUS_TEXT[b.status]}`];
+  if (b.status === "sick") parts.push(b.late_cancel ? "Attest fehlt" : "Attest liegt vor");
+  if (b.status !== "cancelled_teacher") parts.push(b.late_cancel ? "Fehlstunde – kostenpflichtig" : "keine Fehlstunde");
+  if (isSickPaid(b)) parts.push("bezahlte Sondertätigkeit");
+  return parts.join(" · ");
 }
-// Fahrlehrer: Kurzfristig krank abgesagt und Attest liegt vor → Fehlstunde wird gestrichen
-// Fehlstunde jederzeit korrigieren: als krank, keine Fehlstunde – oder doch Fehlstunde
-function lateFix(b, after) {
-  if (!NOT_HELD_ICON[b.status] || b.status === "cancelled_teacher") return null;
-  const set = (patch, msg, ask) => async (e) => {
-    e.stopPropagation();
-    if (ask && !confirm(ask)) return;
-    const { error } = await sb.from("bookings").update(patch).eq("id", b.id);
-    if (error) return fail(error);
-    toast(msg); after && after();
-  };
-  const sickish = isSickish(b);
-  const no = b.late_cancel ? el("button", { class: "btn small ok", onclick: set(attestPatch(b),
-    "Keine Fehlstunde mehr.", sickish ? "Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen." : "Fehlstunde streichen (nicht kostenpflichtig)?") }, sickish ? "📄 Attest liegt vor – keine Fehlstunde" : "✓ Keine Fehlstunde") : null;
-  const yes = !b.late_cancel ? el("button", { class: "btn small ghost danger-text", onclick: set({ late_cancel: true, sick_paid: false }, "Als Fehlstunde gespeichert.", "Doch als Fehlstunde (kostenpflichtig) werten?") }, "⚠️ Doch Fehlstunde") : null;
-  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, sickButton(b, after), no, yes);
-}
-function attestButton(b, onDone) {
-  if (!b.late_cancel || !/^krank/i.test(b.cancel_reason || "")) return null;
-  const btn = el("button", { class: "btn small ok" }, "📄 Attest liegt vor – Fehlstunde streichen");
-  btn.onclick = (e) => { e.stopPropagation(); return busy(btn, async () => {
-    if (!confirm("Ärztliches Attest liegt vor? Die Fehlstunde wird gestrichen.")) return;
-    const { error } = await sb.from("bookings").update(attestPatch(b)).eq("id", b.id);
+function openOutcome(b, after) {
+  let why = b.status, late = !!b.late_cancel, attest = b.status === "sick" && !b.late_cancel;
+  const rowWhy = el("div", { class: "tabs type-tabs", style: "flex-wrap:wrap" });
+  const rowAttest = el("div", { class: "tabs type-tabs" });
+  const rowLate = el("div", { class: "tabs type-tabs" });
+  const secAttest = el("div", {}, el("label", {}, "2. Ärztliches Attest?"), rowAttest);
+  const secLate = el("div", {}, el("label", {}, "3. Fehlstunde (kostenpflichtig für den/die Schüler/in)?"), rowLate);
+  const result = el("div", { class: "notice", style: "margin:10px 0 0" });
+  const tabs = (row, list, cur, set) => row.replaceChildren(...list.map(([v, t]) => el("button", { type: "button", class: "tab" + (cur === v ? " active" : ""), onclick: () => { set(v); paint(); } }, t)));
+  function paint() {
+    if (why === "sick" && attest) late = false;
+    if (why === "cancelled_teacher") late = false;
+    tabs(rowWhy, OUTCOME_WHY, why, (v) => { why = v; if (v === "no_show") late = true; });
+    secAttest.hidden = why !== "sick";
+    tabs(rowAttest, [[true, "📄 Liegt vor"], [false, "Fehlt (noch)"]], attest, (v) => { attest = v; if (!v) late = true; });
+    secLate.hidden = why === "cancelled_teacher" || (why === "sick" && attest);
+    tabs(rowLate, [[true, "Ja – Fehlstunde"], [false, "Nein – keine Fehlstunde"]], late, (v) => { late = v; });
+    result.replaceChildren(el("b", {}, "Ergebnis: "), outcomeSummary({ ...b, status: why, late_cancel: late, sick_paid: why === "sick" && attest && sickPayOn() }) || "–");
+  }
+  paint();
+  const save = el("button", { class: "btn ok" }, "💾 Speichern");
+  save.onclick = () => busy(save, async () => {
+    const reason = (b.cancel_reason || "").trim();
+    const patch = { status: why, late_cancel: why === "cancelled_teacher" ? false : late, sick_paid: why === "sick" && attest && sickPayOn(),
+      cancel_reason: why === "sick" ? (/^krank/i.test(reason) ? reason : reason ? `Krank (${reason})` : "Krank") : reason || null };
+    let { error } = await sb.from("bookings").update({ ...patch, answer_seen: true }).eq("id", b.id);
+    if (error && /answer_seen/.test(error.message || "")) ({ error } = await sb.from("bookings").update(patch).eq("id", b.id));
     if (error) throw error;
-    toast("Fehlstunde gestrichen.");
-    onDone();
-  }); };
-  return btn;
+    closeModal(); toast("Gespeichert: " + outcomeSummary({ ...b, ...patch })); after && after();
+  });
+  openModal("✏️ Ausfall ändern",
+    el("p", {}, `${fullName(b.profiles || {})}${b.slots ? ` · ${fmtDate(b.slots.starts_at)}, ${fmtTime(b.slots.starts_at)} Uhr` : ""}`),
+    b.cancel_reason ? el("div", { class: "note" }, "Grund laut Eintrag: ", b.cancel_reason) : null,
+    el("label", {}, "1. Warum ist die Fahrstunde ausgefallen?"), rowWhy, secAttest, secLate, result,
+    el("p", { class: "small muted" }, "Der/die Schüler/in bekommt dabei keine Mitteilung."),
+    el("div", { class: "actions" }, save, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
+}
+// Kurzer Stand + ein Knopf „✏️ Ausfall ändern“ (Liste der Fahrstunden, Termin-Fenster, Zu erledigen)
+function lateFix(b, after) {
+  if (!NOT_HELD_ICON[b.status]) return null;
+  const btn = el("button", { class: "btn small", onclick: (e) => { e && e.stopPropagation(); openOutcome(b, after); } }, "✏️ Ausfall ändern");
+  return el("span", { class: "done-row late-fix", style: "margin:6px 0 0;flex-wrap:wrap" }, btn);
 }
 // Schüler wünscht eine andere Zeit, Fahrlehrer schlägt seinerseits eine Uhrzeit vor – der Schüler muss zusagen
 function openCounterOffer(b, slot, preset = null) {
@@ -5212,11 +5284,10 @@ async function adminRequests(opts = {}) {
           el("span", { class: "badge " + (b.late_cancel ? "late" : "rejected") }, b.late_cancel ? "🙋 Kurzfristig abgesagt" : "🙋 Rechtzeitig abgesagt"),
           el("span", { class: "small muted" }, "Termin ist wieder frei")),
         b.cancel_reason ? el("div", { class: "note" }, "Grund: ", b.cancel_reason) : null,
-        !sick ? el("div", { class: "actions", style: "margin-top:8px" }, sickButton(b, () => render())) : null,
-        b.late_cancel ? el("div", { class: "actions", style: "margin-top:8px" },
-          sick ? btn("ok", "📄 Attest liegt vor – keine Fehlstunde", attestPatch(b), "Gespeichert: keine Fehlstunde.") : btn("ok", "Keine Fehlstunde (Kulanz)", { late_cancel: false }, "Gespeichert: keine Fehlstunde."),
-          btn("danger", sick ? "⚠️ Kein Attest – Fehlstunde" : "⚠️ Fehlstunde bestätigen", {}, "Fehlstunde gespeichert."))
-          : el("div", { class: "actions", style: "margin-top:8px" }, btn("", "✓ Zur Kenntnis genommen", {})),
+        el("div", { class: "small", style: "margin:6px 0 0" }, el("b", {}, "Stand: "), outcomeSummary(b)),
+        el("div", { class: "actions", style: "margin-top:8px" },
+          btn("ok", "✓ So lassen", {}, b.late_cancel ? "Fehlstunde gespeichert." : "Zur Kenntnis genommen."),
+          el("button", { class: "btn small", onclick: () => openOutcome(b, () => render()) }, sick ? "✏️ Attest / Fehlstunde ändern" : "✏️ Ändern (z. B. war krank, Kulanz)")),
       ]);
     }
     const [cls, text] = ANSWER[b.answer] || ["", "Antwort"];
