@@ -3,7 +3,7 @@
    Strategie: immer zuerst aus dem Netz laden (damit Updates sofort ankommen),
    nur wenn das Netz fehlt, die zuletzt geladene Version aus dem Speicher nehmen.
    Daten (Supabase) werden hier NIE zwischengespeichert – das macht offline.js (nur wenn der Offline-Modus an ist). */
-const CACHE = "fsp-v129";
+const CACHE = "fsp-v130";
 const SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "legal.js", "offline.js", "logo.svg", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 

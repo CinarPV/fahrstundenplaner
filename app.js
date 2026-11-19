@@ -5069,13 +5069,33 @@ function adminMore() {
 async function adminRequests(opts = {}) {
   const weekAgo = addDays(new Date(), -7).toISOString();
   const [req, open, cancels, offers] = await Promise.all([
-    sb.from("bookings").select("id,student_note,created_at,meeting_point,over_limit,wish_start,wish_meeting,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
+    sb.from("bookings").select("id,student_id,student_note,created_at,meeting_point,over_limit,wish_start,wish_meeting,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min,meeting_point)").eq("status", "requested").order("created_at"),
     sb.from("bookings").select("id,student_id,lesson_type,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)").eq("status", "confirmed").is("actual_minutes", null),
     sb.from("bookings").select("id,status,cancel_reason,late_cancel,decided_at,profiles(first_name,last_name,license_class,needs_glasses,is_conversion),slots(id,starts_at,duration_min)")
       .in("status", ["cancelled_student", "declined"]).gte("decided_at", weekAgo).order("decided_at", { ascending: false }),
-    sb.from("bookings").select("id,admin_reply,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
+    sb.from("bookings").select("id,student_id,admin_reply,counter_from,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
       .eq("status", "offered"),
   ]);
+  // Vorgeschlagene Änderungen an bestätigten Fahrstunden (Schüler/in muss zusagen)
+  const changes = await sb.from("bookings").select("id,student_id,change_start,change_dur,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
+    .eq("status", "confirmed").not("change_start", "is", null);
+  // ⏳ Alles, was schon an Schüler/innen raus ist und auf Antwort wartet – damit nichts doppelt angeboten wird
+  const waiting = [
+    ...(offers.data || []).filter((b) => b.slots).map((b) => ({ b, kind: b.counter_from ? "⏱ Gegenangebot" : "📨 Angebot", at: b.slots.starts_at })),
+    ...(changes.error ? [] : changes.data || []).filter((b) => b.slots && b.change_start).map((b) => ({ b, kind: "🔄 Änderung", at: b.change_start })),
+  ].sort((x, y) => x.at.localeCompare(y.at));
+  const waitingOf = (sid) => waiting.filter((w) => w.b.student_id === sid);
+  const waitText = (w) => `${w.kind} gesendet: ${fmtDay(w.at)} ${fmtTime(w.at)} Uhr – wartet auf Antwort`;
+  const waitNote = (b) => {
+    const list = waitingOf(b.student_id || (b.profiles && b.profiles.id));
+    if (!list.length) return null;
+    return el("div", { class: "notice wait-note", style: "margin:8px 0 0" },
+      el("b", {}, `⏳ An ${(b.profiles && b.profiles.first_name) || "diese/n Schüler/in"} ist schon etwas raus:`),
+      list.map((w) => el("div", { class: "small" }, waitText(w))),
+      el("div", { class: "small muted" }, "Bitte nicht noch einmal anbieten – erst die Antwort abwarten."));
+  };
+  const waitRow = (w) => el("button", { type: "button", class: "todo-row wait-row", onclick: () => openAdminSlot(w.b.slots.id) },
+    el("span", {}, el("b", {}, fullName(w.b.profiles)), " · ", waitText(w)), el("span", { class: "todo-go" }, "Öffnen ›"));
   // Antworten der Schüler/innen, die der Fahrlehrer noch nicht abgehakt hat (fehlt die Spalte noch: einfach leer)
   const answers = await sb.from("bookings").select("id,status,answer,answer_at,cancel_reason,late_cancel,student_note,profiles(first_name,last_name,license_class,needs_glasses,is_conversion,phone),slots(id,starts_at,duration_min)")
     .eq("answer_seen", false).order("answer_at", { ascending: false });
@@ -5204,7 +5224,9 @@ async function adminRequests(opts = {}) {
     const n = unseen.length + reqs.length + missing.length + nPend + (transfers ? transfers[1].length : 0);
     const small = (b, text) => el("button", { type: "button", class: "todo-row", onclick: () => openAdminSlot(b.slots.id) },
       el("span", {}, el("b", {}, fullName(b.profiles)), " · ", `${fmtDay(b.slots.starts_at)} ${fmtTime(b.slots.starts_at)}`), el("span", { class: "todo-go" }, text + " ›"));
-    if (!n) return el("div", { class: "todo-box done" }, "✓ Alles erledigt – keine offenen Anfragen, nichts abzuhaken.");
+    const waitSec = waiting.length ? el("details", { class: "todo-wait", open: waiting.length <= 4 },
+      el("summary", { class: "todo-sec" }, `⏳ Warten auf Antwort (${waiting.length})`), waiting.map(waitRow)) : null;
+    if (!n) return el("div", { class: "todo-box done" }, "✓ Alles erledigt – keine offenen Anfragen, nichts abzuhaken.", waitSec);
     return el("details", { class: "todo-box", open: true },
       el("summary", {}, el("b", {}, `📋 Zu erledigen (${n})`)),
       nPend ? el("button", { type: "button", class: "todo-row", onclick: () => goTab("students") },
@@ -5214,7 +5236,8 @@ async function adminRequests(opts = {}) {
       reqs.length ? [el("div", { class: "todo-sec" }, "Neue Anfragen"), reqs.map((b) => item(b, [
         b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
         b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
-        b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))] : null,
+        b.student_note ? el("div", { class: "note" }, b.student_note) : null, waitNote(b), decideButtons(b)]))] : null,
+      waitSec,
       missing.length ? [el("div", { class: "todo-sec" }, "Noch abzuhaken"), missing.map((b) => {
         if (askSchalt(b)) return small(b, "Abhaken");
         const tick = el("button", { type: "button", class: "btn small ok todo-tick", title: "Mit geplanter Dauer abhaken" }, `✓ ${b.slots.duration_min} Min.`);
@@ -5235,7 +5258,7 @@ async function adminRequests(opts = {}) {
     req.data.length ? req.data.filter((b) => b.slots).map((b) => item(b, [
       b.over_limit ? el("div", { class: "notice", style: "margin:8px 0 0" }, el("b", {}, "⚠️ Ausnahme gewünscht – Wochen-Höchstzahl erreicht")) : null,
       b.wish_start ? wishNote(b.wish_start, b.slots.starts_at) : null,
-      b.student_note ? el("div", { class: "note" }, b.student_note) : null, decideButtons(b)]))
+      b.student_note ? el("div", { class: "note" }, b.student_note) : null, waitNote(b), decideButtons(b)]))
       : el("p", { class: "muted" }, "Keine offenen Anfragen. 👍"),
     cancels.data.filter((b) => b.slots && !unseenIds.has(b.id)).length ? [
       el("h2", { style: "margin-top:24px" }, "Absagen & abgelehnte Angebote (letzte 7 Tage)"),
@@ -5247,9 +5270,10 @@ async function adminRequests(opts = {}) {
       ])),
     ] : null,
     offers.data.length ? [
-      el("h2", { style: "margin-top:24px" }, "Angebote – warten auf Zusage"),
+      el("h2", { style: "margin-top:24px" }, "⏳ Angebote und Gegenangebote – warten auf Zusage"),
       offers.data.filter((b) => b.slots).sort((a, b) => a.slots.starts_at.localeCompare(b.slots.starts_at)).map((b) =>
-        item(b, waButton(b.profiles && b.profiles.phone, waTextForStudent("offered", b.profiles, b.slots, b.admin_reply), "💬 Erinnern"))),
+        item(b, [el("div", { style: "margin:6px 0 0" }, el("span", { class: "badge offered" }, b.counter_from ? `⏱ Gegenangebot gesendet (Wunsch war ${fmtTime(b.counter_from)} Uhr) – wartet` : "📨 Angebot gesendet – wartet")),
+          waButton(b.profiles && b.profiles.phone, waTextForStudent("offered", b.profiles, b.slots, b.admin_reply), "💬 Erinnern")])),
     ] : null,
     el("h2", { style: "margin-top:24px" }, "Noch abzuhaken"),
     el("p", { class: "muted small" }, "Vergangene Fahrstunden: Minuten prüfen und abhaken – oder als krank abgesagt markieren."),

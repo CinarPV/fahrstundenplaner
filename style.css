@@ -1053,3 +1053,7 @@ html.dark .hex-icon { color: #cbd5e1; }
 .queue-row.first { border-top: 0; }
 .queue-row .btn { flex-shrink: 0; }
 .queue-num { font-size: 20px; line-height: 1.1; min-width: 24px; text-align: center; }
+/* ⏳ Angebot/Gegenangebot gesendet – wartet auf Antwort */
+.wait-note { background: #fff8e1; border-color: #e0b100; }
+.todo-wait > summary { cursor: pointer; }
+.wait-row { background: #fff8e1; }
