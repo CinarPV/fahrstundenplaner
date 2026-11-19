@@ -7019,9 +7019,9 @@ async function adminControl() {
       icon: "📚", text: "Theorie" + (t.note ? ` · ${t.note}` : ""), dur: t.duration_min, res: new Date(t.held_at).getTime() > nowMs0 ? "geplant" : t.done ? "✓ abgehakt" : "" })),
   ];
   const extras = openOnly ? [] : allExtras;
-  const extraLine = (x) => el("div", { class: "cl-row extra" + (x.ghost ? " ghost tap-row" : ""), onclick: x.open ? rowTap(x.open) : null },
-    el("span", { class: "cl-time" }, fmtTime(x.at)), el("span", { class: "cl-name" }, `${x.icon} ${x.text}`),
-    el("b", { class: "cl-min" }, x.ghost ? "zählt dort" : `${x.dur} Min.${x.res ? ` · ${x.res}` : ""}`), el("span", {}));
+  const extraLine = (x) => el("div", { class: "cl-row extra" + (x.ghost ? " ghost tap-row" : "") + (x.empty ? " empty-day" : x.whole ? " off-day" : ""), onclick: x.open ? rowTap(x.open) : null },
+    el("span", { class: "cl-time" }, x.whole ? "–" : fmtTime(x.at)), el("span", { class: "cl-name" }, x.whole ? x.text : `${x.icon} ${x.text}`),
+    el("b", { class: "cl-min" }, x.empty ? "" : x.whole ? "ganzer Tag" : x.ghost ? "zählt dort" : `${x.dur} Min.${x.res ? ` · ${x.res}` : ""}`), el("span", {}));
   const days = [];
   const dayOf = (key) => { let d = days.find((x) => x.key === key); if (!d) days.push((d = { key, list: [], extra: [] })); return d; };
   for (const b of shown) dayOf(effDay(b)).list.push(b);
@@ -7029,6 +7029,20 @@ async function adminControl() {
   for (const b of allRows.filter(isMoved).concat(movedAway)) if (inMonth(dateInput(b.slots.starts_at)))
     dayOf(dateInput(b.slots.starts_at)).extra.push({ at: b.slots.starts_at, min: 0, icon: "→", text: `${fullName(b.profiles)} – im System eingetragen am ${fmtDayStr(b.booked_on)}`, dur: b.slots.duration_min, res: "", ghost: true, open: () => (b._own ? openPlanned("own", b._src) : openAdminSlot(b.slots.id)) });
   for (const x of extras) dayOf(dateInput(x.at)).extra.push(x);
+  // Nicht gearbeitet: Urlaub, Krank, Fortbildung, Feiertag, frei – jeder Tag (Mo–Sa) einzeln, damit der Monat lückenlos ist
+  await loadTimeOff();
+  if (!openOnly) for (const t of state.timeOff || []) {
+    const a = t.from_day > dateInput(from) ? t.from_day : dateInput(from), z = t.to_day < dateInput(addDays(to, -1)) ? t.to_day : dateInput(addDays(to, -1));
+    for (let d = fromInputs(a, "12:00"); dateInput(d) <= z; d = addDays(d, 1)) if (isWorkday(d))
+      dayOf(dateInput(d)).extra.push({ at: fromInputs(dateInput(d), "00:00").toISOString(), min: 0, whole: true, text: offDayLabel(t.note) });
+  }
+  // Lückenlos bis heute: Arbeitstage ganz ohne Eintrag als „– kein Eintrag“
+  if (!openOnly) {
+    const lastKey = dateInput(new Date()) < dateInput(addDays(to, -1)) ? dateInput(new Date()) : dateInput(addDays(to, -1));
+    for (let d = fromInputs(dateInput(from), "12:00"); dateInput(d) <= lastKey; d = addDays(d, 1))
+      if (isWorkday(d) && !days.some((x) => x.key === dateInput(d)))
+        dayOf(dateInput(d)).extra.push({ at: fromInputs(dateInput(d), "00:00").toISOString(), min: 0, whole: true, empty: true, text: "kein Eintrag" });
+  }
   days.sort((a, b) => a.key.localeCompare(b.key));
   const sickRows = rows.filter((b) => isSickPaid(b) && !b.no_pay);
   const driven = rows.filter((b) => b.status === "confirmed" && !b.no_pay), totalMin = dayMin(rows), late = rows.filter((b) => b.status !== "confirmed" && !b.no_pay && !isSickPaid(b)).length;
@@ -7088,6 +7102,8 @@ async function adminControl() {
     const offList = (re) => (state.timeOff || []).filter((t) => re.test(t.note || "") && t.to_day >= dateInput(from) && t.from_day <= dateInput(addDays(to, -1)))
       .map((t) => `${fmtDayStr(t.from_day < dateInput(from) ? dateInput(from) : t.from_day)}${t.from_day === t.to_day ? "" : " – " + fmtDayStr(t.to_day > dateInput(addDays(to, -1)) ? dateInput(addDays(to, -1)) : t.to_day)}`);
     const vac = offList(/urlaub/i), sick = offList(/krank/i);
+    const otherOff = (state.timeOff || []).filter((t) => !/urlaub|krank/i.test(t.note || "") && t.to_day >= dateInput(from) && t.from_day <= dateInput(addDays(to, -1)))
+      .map((t) => [offDayLabel(t.note), `${fmtDayStr(t.from_day < dateInput(from) ? dateInput(from) : t.from_day)}${t.from_day === t.to_day ? "" : " – " + fmtDayStr(t.to_day > dateInput(addDays(to, -1)) ? dateInput(addDays(to, -1)) : t.to_day)}`]);
     const sickMonth = countVacation(state.timeOff, dateInput(from), dateInput(addDays(to, -1)), /krank/i);
     const box = tag("div", undefined, "box");
     [[`${driven.length}`, "Fahrstunden"], [`${totalMin} Min.`, "Fahr- und Fehlstunden"], [String(late), "Fehlstunden"], ...(sickRows.length ? [[String(sickRows.length), "Sondertätigkeit (Schüler/in krank)"]] : []), [String(examsDone.length), "Prüfungen"],
@@ -7097,10 +7113,11 @@ async function adminControl() {
     const oh = tag("tr"); ["", "Datum"].forEach((h) => oh.append(tag("th", h))); offTable.append(oh);
     vac.forEach((x) => offTable.append(tr([["🏖️ Urlaub"], [x]])));
     sick.forEach((x) => offTable.append(tr([["🤒 Krank"], [x]])));
-    if (!vac.length && !sick.length) offTable.append(tr([["–"], ["Keine Urlaubs- oder Krankheitstage"]]));
+    otherOff.forEach(([k, x]) => offTable.append(tr([[k], [x]])));
+    if (!vac.length && !sick.length && !otherOff.length) offTable.append(tr([["–"], ["Keine freien Tage"]]));
     d.body.append(tag("h1", `Monatsabschluss – ${monthName(m)}`),
       tag("div", `${state.settings.display_name || fullName(state.profile)} · erstellt am ${new Date().toLocaleDateString("de-DE")}`, "muted"),
-      box, tag("h2", "Urlaub und Krankheitstage"), offTable, tag("h2", "Fahrstunden, Fehlstunden, Prüfungen und Theorie nach Tagen"), table,
+      box, tag("h2", "Nicht gearbeitet: Urlaub, Krank, Fortbildung, frei"), offTable, tag("h2", "Fahrstunden, Fehlstunden, Prüfungen und Theorie nach Tagen"), table,
       tag("p", "Unbezahlte Fahrstunden sind nicht enthalten. Fehlstunden und Sondertätigkeiten (Schüler/in krank mit Attest) zählen mit ihrer geplanten Dauer.", "muted"));
     setTimeout(() => w.print(), 300);
   }
@@ -7145,6 +7162,10 @@ const euro = (v) => (+v || 0).toLocaleString("de-DE", { style: "currency", curre
 // Unverbindliche Brutto-Schätzung: Sätze je 45 Minuten, Prüfungszuschlag je Prüfung; Fehlstunden zählen nicht mit
 // Urlaubstage (Eintrag mit „Urlaub“) zwischen zwei Tagen zählen – Sonntage zählen nicht
 const VACATION_MIN = 480;   // 1 Urlaubstag = 480 Min. Fahrstunde
+// Art eines freien Tages aus dem Grund: Krank, Urlaub, Fortbildung, Feiertag oder sonst frei
+const offKind = (note) => (/krank/i.test(note || "") ? ["🤒", "Krank"] : /urlaub/i.test(note || "") ? ["🏖️", "Urlaub"]
+  : /fortbild|schulung|seminar|weiterbild/i.test(note || "") ? ["📚", "Fortbildung"] : /feiertag/i.test(note || "") ? ["🎉", "Feiertag"] : ["⛔", "Frei"]);
+const offDayLabel = (note) => { const [ic, k] = offKind(note); const n = (note || "").trim(); return !n ? `${ic} ${k}` : n.toLowerCase().includes(k.toLowerCase()) ? `${ic} ${n}` : `${ic} ${k} · ${n}`; };
 function countVacation(list, fromKey, toKey, re = /urlaub/i) {
   let n = 0;
   for (const t of list || []) {

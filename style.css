@@ -1073,3 +1073,7 @@ html.dark .note-sec .muted, html.dark .pay-note .muted, html.dark .hist-card .mu
 html.dark .wait-note .muted, html.dark .note-sec label, html.dark .pay-note label, html.dark .move-sec label { color: #4f5862; }
 html.dark .note-sec textarea, html.dark .note-sec input, html.dark .pay-note textarea, html.dark .pay-note input:not([type=checkbox]),
 html.dark .move-sec input { background: #fff; color: #1f2328; }
+/* Kontrolle: freie Tage (Urlaub, Krank, Fortbildung …) */
+.cl-row.off-day .cl-name { font-weight: 600; }
+.cl-row.off-day .cl-min { font-weight: 500; opacity: .8; }
+.cl-row.empty-day { opacity: .55; font-style: italic; }
