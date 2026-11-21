@@ -2988,13 +2988,15 @@ function weekGrid(slots, renderSlot, onAddDay, extras = [], overview = false) {
 /* ---------------- Admin: Heute – der Fahrtag auf einen Blick, mit Abhaken per Tipp ---------------- */
 
 async function adminToday() {
-  // Die nächsten 6 Tage ohne Sonntag untereinander (Start: heute) – wischen oder ‹ › blättert tageweise
+  // Die nächsten Arbeitstage untereinander (Start: heute) – wischen oder ‹ › blättert tageweise.
+  // Freie Tage (Sonntag, Samstag wenn ausgeschaltet) erscheinen nur, wenn dort etwas eingetragen ist.
   const DAYS = 14;
   const noSunday = (d, dir = 1) => { while (!isWorkday(d)) d = addDays(d, dir); return d; };
-  const first = noSunday(dayStart(state.todayDate || new Date()));
-  const dayList = [];
-  for (let d = first; dayList.length < DAYS; d = addDays(d, 1)) if (isWorkday(d)) dayList.push(d);
-  const from = first, to = addDays(dayList[dayList.length - 1], 1), now = Date.now();
+  const start = dayStart(state.todayDate || new Date());
+  let rangeEnd = start;
+  for (let n = 0; n < DAYS; rangeEnd = addDays(rangeEnd, 1)) if (isWorkday(rangeEnd)) n++;
+  // 2 Tage davor mitladen: damit „‹“ von Montag aus auch ein Wochenende mit Einträgen findet
+  const from = addDays(start, -2), to = rangeEnd, now = Date.now();
   const [{ data: slots, error }, { data: exams }, planned] = await Promise.all([
     sb.from("slots").select("id,starts_at,duration_min,meeting_point,note,bookings(id,status,actual_minutes,late_cancel,lesson_type,meeting_point,student_id,decided_at,teacher_note,booked_on,late_student,late_teacher,late_student_seen,late_teacher_seen,student_feedback,lesson_topics,profiles(first_name,last_name,phone,needs_glasses,license_class,is_conversion))")
       .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString()).order("starts_at"),
@@ -3003,6 +3005,17 @@ async function adminToday() {
     loadPlanned(from, to),
   ]);
   if (error) throw error;
+  // Steht an diesem Tag irgendetwas? (Fahrstunde, freier Termin, Prüfung, eigener Eintrag, privater Termin, Theorie, verlegt)
+  const hasEntry = (d) => (slots || []).some((s) => sameDay(new Date(s.starts_at), d))
+    || (exams || []).some((e) => sameDay(new Date(e.exam_at), d))
+    || (planned.own || []).some((x) => sameDay(new Date(x.starts_at), d))
+    || (planned.blocks || []).some((x) => sameDay(new Date(x.starts_at), d))
+    || (planned.theory || []).some((t) => sameDay(new Date(t.held_at), d))
+    || (planned.moved || []).some((m) => m.day === dateInput(d));
+  const showDay = (d) => isWorkday(d) || hasEntry(d);
+  const dayList = [];
+  for (let d = start; d < rangeEnd; d = addDays(d, 1)) if (showDay(d)) dayList.push(d);
+  const first = dayList[0];
   await loadTimeOff();
   // je Termin: bestätigte Fahrstunde oder (falls ausgefallen) der zuletzt eingetragene Ausfall
   const lessons = (slots || []).map((s) => {
@@ -3029,7 +3042,16 @@ async function adminToday() {
       x && x.late_cancel ? el("div", { class: "tr-foot small muted" }, `${NOT_HELD_ICON[x.status]} ${fullName(x.profiles || {})} – ${STATUS_TEXT[x.status]} · Fehlstunde · wieder frei`) : null);
   };
   const mapsLink = (p) => "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(p);
-  const go = (n) => { state.todayDate = noSunday(addDays(first, n), n); render(); };
+  // Vorwärts: nächster angezeigter Tag; zurück: vorheriger Tag mit Eintrag oder vorheriger Arbeitstag
+  const go = (n) => {
+    if (n > 0) state.todayDate = dayList[1] || noSunday(addDays(first, 1));
+    else {
+      let d = addDays(first, -1);
+      while (!showDay(d) && d >= from) d = addDays(d, -1);
+      state.todayDate = d >= from ? d : noSunday(d, -1);
+    }
+    render();
+  };
 
   const save = async (b, patch, msg) => {
     const { error } = b._own ? await sb.from("own_entries").update({ done: true }).eq("id", b.id) : await sb.from("bookings").update(patch).eq("id", b.id);
@@ -3211,7 +3233,7 @@ async function adminToday() {
       el("div", {}, el("b", {}, `${fmtDay(first)} – ${fmtDay(dayList[dayList.length - 1])}`),
         el("div", { class: "small muted" }, "Wischen ← → wechselt den Tag")),
       el("button", { class: "btn small ghost", onclick: () => go(1), "aria-label": "Einen Tag weiter" }, "›")),
-    !sameDay(first, new Date()) ? el("div", { class: "actions", style: "margin:0 0 10px" }, el("button", { class: "btn small ghost", onclick: () => { state.todayDate = null; render(); } }, "Zurück zu heute")) : null,
+    state.todayDate && !sameDay(first, new Date()) ? el("div", { class: "actions", style: "margin:0 0 10px" }, el("button", { class: "btn small ghost", onclick: () => { state.todayDate = null; render(); } }, "Zurück zu heute")) : null,
     el("div", { class: "ctl-days" }, days));
   // Wischen nach links/rechts = nächster/vorheriger Tag
   let sx = null, sy = null;
