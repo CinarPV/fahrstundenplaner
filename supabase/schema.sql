@@ -2550,3 +2550,69 @@ returns setof uuid language sql stable security definer set search_path = public
     and exists (select 1 from push_subscriptions s where s.user_id = p.id);
 $$;
 grant execute on function public.my_students_with_push() to authenticated;
+
+-- ===== Paket 21.11.2026: Sicherungen gestaffelt aufheben + nächtliche Kopie außerhalb von Supabase =====
+-- Nach Änderungen: höchstens eine Sicherung pro Stunde (innerhalb der Stunde wird sie aktualisiert), 48 Stunden aufgehoben.
+-- Nachts: 14 Tage · Sonntagnacht: 8 Wochen · Nacht zum 1. des Monats: 12 Monate · von Hand: 30 Tage.
+alter table public.cloud_backups add column if not exists first_at timestamptz;
+
+create or replace function public.prune_backups(p_teacher uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  delete from cloud_backups where teacher_id = p_teacher and (
+       (kind = 'change' and created_at < now() - interval '48 hours')
+    or (kind = 'manual' and created_at < now() - interval '30 days')
+    or (kind = 'daily' and created_at < now() - interval '14 days'
+        and not (extract(isodow from created_at at time zone 'Europe/Berlin') = 7 and created_at >= now() - interval '8 weeks')
+        and not (extract(day from created_at at time zone 'Europe/Berlin') = 1 and created_at >= now() - interval '12 months')));
+end $$;
+revoke all on function public.prune_backups(uuid) from public, anon, authenticated;
+
+create or replace function public.store_backup(p_teacher uuid, p_auto boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare d jsonb;
+begin
+  d := build_backup(p_teacher);
+  insert into cloud_backups (teacher_id, auto, counts, data, kind) values (p_teacher, p_auto, d->'counts', d, case when p_auto then 'daily' else 'manual' end);
+  perform prune_backups(p_teacher);
+end $$;
+revoke all on function public.store_backup(uuid, boolean) from public, anon, authenticated;
+
+create or replace function public.backup_after_change()
+returns void language plpgsql security definer set search_path = public as $$
+declare d jsonb; v_id uuid;
+begin
+  if not is_teacher() then raise exception 'Nur für Fahrlehrer'; end if;
+  d := build_backup(auth.uid());
+  -- angefangene Stunde? Dann diese Sicherung aktualisieren, sonst eine neue anlegen
+  select id into v_id from cloud_backups where teacher_id = auth.uid() and kind = 'change'
+    and coalesce(first_at, created_at) > now() - interval '1 hour' order by created_at desc limit 1;
+  if v_id is not null then
+    update cloud_backups set data = d, counts = d->'counts', created_at = now() where id = v_id;
+  else
+    insert into cloud_backups (teacher_id, auto, counts, data, kind, first_at) values (auth.uid(), true, d->'counts', d, 'change', now());
+  end if;
+  perform prune_backups(auth.uid());
+end $$;
+grant execute on function public.backup_after_change() to authenticated;
+
+-- Nächtliche Kopie nach GitHub (privates Repository): nur mit geheimem Schlüssel abrufbar.
+-- Gespeichert wird nur der SHA-256-Fingerabdruck des Schlüssels, nicht der Schlüssel selbst.
+create table if not exists public.backup_export_key (id int primary key default 1 check (id = 1), key_hash text not null);
+alter table public.backup_export_key enable row level security;   -- keine Regeln = niemand liest sie über die App
+revoke all on public.backup_export_key from public, anon, authenticated;
+
+create or replace function public.export_backups(p_key text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare r record; res jsonb := '[]';
+begin
+  if p_key is null or not exists (select 1 from backup_export_key where key_hash = encode(sha256(convert_to(p_key, 'UTF8')), 'hex')) then
+    raise exception 'Kein Zugriff';
+  end if;
+  for r in select id from profiles where role = 'teacher' and status = 'active' loop
+    res := res || jsonb_build_array(build_backup(r.id));
+  end loop;
+  return res;
+end $$;
+revoke all on function public.export_backups(text) from public;
+grant execute on function public.export_backups(text) to anon;

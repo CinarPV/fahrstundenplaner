@@ -6281,7 +6281,7 @@ function openRestoreData(data, label) {
     el("div", { class: "actions" }, btn, el("button", { class: "btn ghost", onclick: closeModal }, "Abbrechen")));
 }
 
-// Automatische Sicherungen in der Cloud (jede Nacht, 14 Tage aufgehoben)
+// Automatische Sicherungen in der Cloud (gestaffelt aufgehoben, siehe Paket 21.11.2026 in schema.sql)
 const cloudLabel = (x) => `${new Date(x.created_at).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}, ${fmtTime(x.created_at)} Uhr${x.kind === "change" ? " (nach Änderung)" : x.auto ? " (nachts)" : " (von Hand)"}`;
 async function loadCloudBackup(x) {
   const { data, error } = await sb.from("cloud_backups").select("data").eq("id", x.id).single();
@@ -6317,7 +6317,7 @@ function cloudBackupCard() {
   fill();
   return el("div", { class: "card" },
     el("h3", {}, "☁️ Automatische Sicherung"),
-    el("p", { class: "muted small" }, "Jede Nacht um 2:30 Uhr werden alle deine Daten automatisch gesichert – ohne dass du etwas tun musst. Die letzten 14 Tage bleiben aufgehoben. Nur du siehst deine Sicherungen. Zusätzlich wird ca. 30 Sekunden nach jeder Änderung (abhaken, bestätigen, eintragen, Einstellungen …) automatisch gesichert – diese eine Sicherung wird jedes Mal überschrieben und ist immer auf dem neuesten Stand."),
+    el("p", { class: "muted small" }, "Alle deine Daten werden automatisch gesichert – ohne dass du etwas tun musst. Nur du siehst deine Sicherungen. Aufgehoben werden: nach Änderungen (abhaken, bestätigen, eintragen …) eine Sicherung pro Stunde für 48 Stunden · jede Nacht für 14 Tage · jede Sonntagnacht für 8 Wochen · die Nacht zum 1. des Monats für 12 Monate · „Jetzt sichern“ für 30 Tage. Zusätzlich wird jede Nacht eine Kopie außerhalb von Supabase in deinem privaten GitHub-Speicher abgelegt."),
     el("div", { class: "actions", style: "margin:0 0 8px" }, now), list);
 }
 
