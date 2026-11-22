@@ -3737,6 +3737,16 @@ function newSlotForm(opts = {}) {
   const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
   const fromMin = (m) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
   const uniq = (list) => [...new Set(list)].sort();
+  // Uhrzeiten auswählen, ohne dass sie sich bei der eingestellten Dauer überschneiden (z. B. 14:00 und 14:30 bei 90 Min.)
+  function addTimes(list) {
+    const skipped = [];
+    for (const t of [...list].sort()) {
+      if (times.includes(t)) continue;
+      const clash = times.find((x) => Math.abs(toMin(x) - toMin(t)) < dur.value);
+      if (clash) skipped.push(`${t} (überschneidet ${clash})`); else times = uniq(times.concat(t));
+    }
+    if (skipped.length) toast(`⚠️ Nicht ausgewählt: ${skipped.join(", ")} – bei ${dur.value} Min. würden sich die Fahrstunden überschneiden.`, true);
+  }
   function pinTimes(list) {
     const next = uniq(pinned.concat(list));
     if (next.join() !== pinned.join()) { pinned = next; saveTimePresets(pinned); }
@@ -3745,11 +3755,11 @@ function newSlotForm(opts = {}) {
     if (!first.value) return;
     const n = Math.max(1, Math.min(10, +count.value || 1)), p = Math.max(0, +pause.value || 0);
     const row = Array.from({ length: n }, (_, i) => fromMin(toMin(first.value) + i * (dur.value + p)));
-    pinTimes(row); times = uniq(times.concat(row)); refresh();
+    pinTimes(row); addTimes(row); refresh();
   } }, "Reihe übernehmen");
   const addTime = el("button", { type: "button", class: "btn small ghost", onclick: () => {
     if (!extra.value) return;
-    pinTimes([extra.value]); times = uniq(times.concat(extra.value)); extra.value = ""; refresh();
+    pinTimes([extra.value]); addTimes([extra.value]); extra.value = ""; refresh();
   } }, "+ Uhrzeit anheften");
 
   // ⭐ Deine üblichen Uhrzeiten (aus den letzten 8 Wochen) und „Wie letztes Mal“ – ein Tipp statt Eintippen
@@ -3760,11 +3770,11 @@ function newSlotForm(opts = {}) {
     const extraUsual = usual.filter((t) => !pinned.includes(t));
     usualRow.replaceChildren(...[
       lastTimes.length ? el("button", { type: "button", class: "btn small ok", title: lastTimes.join(", "),
-        onclick: () => { pinTimes(lastTimes); times = uniq(lastTimes); refresh(); } }, `↺ Wie letztes Mal (${lastTimes.join(", ")})`) : null,
-      pinned.length > 1 ? el("button", { type: "button", class: "btn small ghost", onclick: () => { times = uniq(pinned); refresh(); } }, "Alle meine Zeiten") : null,
+        onclick: () => { pinTimes(lastTimes); times = []; addTimes(lastTimes); refresh(); } }, `↺ Wie letztes Mal (${lastTimes.join(", ")})`) : null,
+      pinned.length > 1 ? el("button", { type: "button", class: "btn small ghost", onclick: () => { times = []; addTimes(pinned); refresh(); } }, "Alle meine Zeiten") : null,
       times.length ? el("button", { type: "button", class: "btn small ghost", onclick: () => { times = []; refresh(); } }, "Keine") : null,
       ...extraUsual.map((t) => el("button", { type: "button", class: "btn small ghost", title: "Häufig bei dir – antippen zum Auswählen und Anheften",
-        onclick: () => { pinTimes([t]); times = uniq(times.concat(t)); refresh(); } }, `⭐ ${t}`)),
+        onclick: () => { pinTimes([t]); addTimes([t]); refresh(); } }, `⭐ ${t}`)),
     ].filter(Boolean));
   };
   sb.from("slots").select("starts_at").eq("teacher_id", state.profile.id).gte("starts_at", addDays(new Date(), -56).toISOString()).then(({ data }) => {
@@ -3837,7 +3847,7 @@ function newSlotForm(opts = {}) {
       const on = times.includes(t);
       return el("span", { class: "time-chip" + (on ? " on" : "") },
         el("button", { type: "button", class: "pick", "aria-pressed": String(on),
-          onclick: () => { times = on ? times.filter((x) => x !== t) : uniq(times.concat(t)); refresh(); } },
+          onclick: () => { if (on) times = times.filter((x) => x !== t); else addTimes([t]); refresh(); } },
           (on ? "✓ " : "") + `${t} – ${fromMin(toMin(t) + dur.value)}`),
         el("button", { type: "button", class: "unpin", "aria-label": `Uhrzeit ${t} entfernen`, title: "Uhrzeit entfernen",
           onclick: () => { pinned = pinned.filter((x) => x !== t); times = times.filter((x) => x !== t); saveTimePresets(pinned); refresh(); } }, "×"));
