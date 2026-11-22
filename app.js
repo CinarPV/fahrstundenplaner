@@ -2773,8 +2773,15 @@ async function avoidOverlap(items, ignoreSlot = null) {
   items.forEach((x, k) => { if (!dupFree.has(ms(x.starts_at))) movable.push({ item: x, k, s0: ms(x.starts_at), dur: x.duration_min, label: "Neu" }); });
   movable.sort((a, b) => a.s0 - b.s0 || (a.item ? 1 : 0) - (b.item ? 1 : 0) || (a.k || 0) - (b.k || 0));
   fixed.sort((a, b) => a.s - b.s);
-  let cursor = -Infinity;
+  // cursor = Ende des zuletzt Eingeplanten; pushed = es stammt von einer NEUEN Fahrstunde (oder wurde ihretwegen verschoben).
+  // Vorhandene freie Termine rücken nur nach, wenn eine neue Fahrstunde sie verdrängt – alte Überschneidungen untereinander bleiben unberührt.
+  let cursor = -Infinity, pushed = false;
   for (const m of movable) {
+    if (!m.item && !(pushed && m.s0 < cursor)) {
+      Object.assign(m, { s: m.s0, d: m.dur, cutBy: null });
+      if (m.s0 + m.dur * 60000 > cursor || !pushed) { cursor = Math.max(cursor, m.s0 + m.dur * 60000); pushed = false; }
+      continue;
+    }
     let s = Math.max(m.s0, cursor), d = m.dur, cutBy = null;
     for (let guard = 0; guard < 50; guard++) {
       const inside = fixed.find((f) => f.s <= s && s < f.e);
@@ -2787,7 +2794,7 @@ async function avoidOverlap(items, ignoreSlot = null) {
       break;
     }
     Object.assign(m, { s, d, cutBy });
-    cursor = s + d * 60000;
+    cursor = s + d * 60000; pushed = true;
   }
   const changed = movable.filter((m) => m.s !== m.s0 || m.d !== m.dur);
   if (!changed.length) return items;
